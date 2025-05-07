@@ -13,7 +13,7 @@
 1. [Why Magix?](#why-magix)
 2. [Features](#features)
 3. [Quick Start](#quick-start)
-4. [How `update_conda_env.sh` Works](#how-update_conda-envsh-works)
+4. [How `update_comfy.sh` Works](#how-update_conda-envsh-works)
 5. [FAQ](#faq)
 6. [Contributing](#contributing)
 7. [License](#license)
@@ -48,7 +48,7 @@ git clone https://github.com/your-handle/magix.git
 cd magix
 
 # 2. Source (or chmod + x) the script
-chmod +x update_comfy.sh
+chmod +x shellmagix/update_comfy.sh
 
 # 3. Run the spell
-./update_comfy.sh
+./shellmagix/update_comfy.sh
