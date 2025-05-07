@@ -27,9 +27,9 @@ HEART="💖"
 echo -e "${BOLD}${MAGENTA}${SPARKLE} Hey there, Rockstar Dev! Let's make this environment shine!${RESET}\n"
 
 ########################################
-# 1️⃣  Install the latest PyTorch (CUDA 12.8) first – non‑negotiable!
+# 1️⃣  Install the latest PyTorch (CUDA 12.8) first – non‑negotiable!
 ########################################
-echo -e "${BOLD}${CYAN}${ROCKET} Step 1/4 – Installing latest PyTorch (cu128)…${RESET}"
+echo -e "${BOLD}${CYAN}${ROCKET} Step 1/4 – Installing latest PyTorch (cu128)…${RESET}"
 PYTORCH_INDEX="https://download.pytorch.org/whl/cu128"
 
 pip install --upgrade torch torchvision torchaudio --index-url "$PYTORCH_INDEX" && \
@@ -41,7 +41,7 @@ echo -e "${HEART} PyTorch is ready to rock!\n"
 ########################################
 # 2️⃣  Update main requirements (if present)
 ########################################
-echo -e "${BOLD}${CYAN}${ROCKET} Step 2/4 – Updating main environment from requirements.txt…${RESET}"
+echo -e "${BOLD}${CYAN}${ROCKET} Step 2/4 – Updating main environment from requirements.txt…${RESET}"
 if [[ -f "requirements.txt" ]]; then
   pip install --upgrade -r requirements.txt && \
     echo -e "${GREEN}${CHECK} Main requirements installed successfully!${RESET}"
@@ -56,7 +56,7 @@ echo
 ########################################
 CUSTOM_DIR="custom_nodes"
 if [[ -d "$CUSTOM_DIR" ]]; then
-  echo -e "${BOLD}${MAGENTA}${SPARKLE} Step 3/4 – Processing custom nodes in '$CUSTOM_DIR'…${RESET}"
+  echo -e "${BOLD}${MAGENTA}${SPARKLE} Step 3/4 – Processing custom nodes in '$CUSTOM_DIR'…${RESET}"
   for NODE in "$CUSTOM_DIR"/*/; do
     [[ -d "$NODE" ]] || continue
     echo -e "\n${BLUE}${ROCKET} Entering ${NODE}${RESET}"
@@ -82,21 +82,28 @@ fi
 echo
 
 ########################################
-# 4️⃣  Install LTXVideo Q8 kernels 🎥
+# 4️⃣  Install LTXVideo Q8 kernels 🎥 (clone ➜ build ➜ cleanup)
 ########################################
-echo -e "${BOLD}${CYAN}${ROCKET} Step 4/4 – Installing LTXVideo Q8 kernels…${RESET}"
-Q8_DIR="LTX-Video-Q8-Kernels"  # Change if your directory name differs
 
-if [[ -d "$Q8_DIR" ]]; then
-  echo -e "${MAGENTA}Preparing build dependencies…${RESET}"
-  pip install --upgrade packaging wheel ninja setuptools && \
-    echo -e "${GREEN}${CHECK} Build dependencies installed!${RESET}"
+echo -e "${BOLD}${CYAN}${ROCKET} Step 4/4 – Installing LTXVideo Q8 kernels…${RESET}"
+TMP_Q8_DIR="$(mktemp -d)"
+REPO_URL="https://github.com/Lightricks/LTX-Video-Q8-Kernels.git"
 
-  echo -e "${MAGENTA}Building & installing Q8 kernels…${RESET}"
-  (cd "$Q8_DIR" && python setup.py install) && \
-    echo -e "${GREEN}${CHECK} LTXVideo Q8 kernels installed successfully!${RESET}"
+# 🛠️  Ensure build deps first (ninja etc.)
+pip install --upgrade packaging wheel ninja setuptools && \
+  echo -e "${GREEN}${CHECK} Build dependencies installed!${RESET}"
+
+echo -e "${MAGENTA}Cloning repo to temporary dir: ${TMP_Q8_DIR}${RESET}"
+if git clone --depth 1 "$REPO_URL" "$TMP_Q8_DIR"; then
+  echo -e "${BLUE}${ROCKET} Building & installing kernels…${RESET}"
+  (cd "$TMP_Q8_DIR" && python setup.py install) && \
+    echo -e "${GREEN}${CHECK} LTXVideo Q8 kernels installed successfully!${RESET}"
+
+  echo -e "${MAGENTA}Cleaning up…${RESET}"
+  rm -rf "$TMP_Q8_DIR" && \
+    echo -e "${GREEN}${CHECK} Temporary directory removed.${RESET}"
 else
-  echo -e "${YELLOW}${WARNING} '${Q8_DIR}' directory not found. Clone the repo and rerun this script to enable FP8‑quantised magic.${RESET}"
+  echo -e "${RED}${WARNING} Failed to clone LTXVideo Q8 repo. Aborting kernel install.${RESET}"
 fi
 
 echo
