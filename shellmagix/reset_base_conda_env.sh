@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# reset_conda_base.sh — Rewind your Conda “base” env to any revision with ✨ Magix ✨
+# reset_conda_env.sh — Rewind any Conda env to a previous revision with ✨ Magix ✨
 # ──────────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./reset_conda_base.sh                # interactively choose a revision
-#   ./reset_conda_base.sh -r 3           # target revision 3, ask for confirmation
-#   ./reset_conda_base.sh -r 5 -f        # target revision 5, no confirmation
-#   ./reset_conda_base.sh -f             # force-reset to revision 0
+#   ./reset_conda_env.sh                        # interactively pick env & revision
+#   ./reset_conda_env.sh -e myenv               # pick env only, choose revision interactively
+#   ./reset_conda_env.sh -e myenv -r 3          # target env & revision, ask confirmation
+#   ./reset_conda_env.sh -e myenv -r 5 -f       # same, no confirmation
+#   ./reset_conda_env.sh -r 2 -f                # base env implicit, force-reset to rev 2
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -29,16 +30,18 @@ ROCKET="🚀"
 
 # ─── CLI flags (getopts) ──────────────────────────────────────────────────────
 FORCE=0
-REVISION=""        # empty → prompt later
+ENV_NAME=""      # empty → prompt later
+REVISION=""     # empty → prompt later
 
 usage() {
-  echo "Usage: $0 [-r revision] [-f]"
+  echo "Usage: $0 [-e env] [-r revision] [-f]"
   exit 1
 }
 
-while getopts ":fr:" opt; do
+while getopts ":fe:r:" opt; do
   case $opt in
     f) FORCE=1 ;;
+    e) ENV_NAME="$OPTARG" ;;
     r) REVISION="$OPTARG" ;;
     *) usage ;;
   esac
@@ -55,14 +58,36 @@ fi
 # shellcheck disable=SC1091
 eval "$(conda shell.bash hook)"
 
+# ─── Discover available environments ─────────────────────────────────────────
+mapfile -t ENVS < <(conda env list | awk '/^#|^\s*$/{next}{print $1}' | sed 's/\*$//')
+
+# Validate provided env, or prompt for one
+if [[ -n "$ENV_NAME" ]]; then
+  if [[ ! " ${ENVS[*]} " =~ " ${ENV_NAME} " ]]; then
+    echo -e "${RED}${WARNING}  Environment ‘${ENV_NAME}’ not found.${RESET}"
+    exit 1
+  fi
+else
+  echo -e "${CYAN}${BOOK}  Available Conda environments:${RESET}"
+  for i in "${!ENVS[@]}"; do
+    printf "  [%d] %s\n" "$i" "${ENVS[$i]}"
+  done
+  echo
+  read -rp "🔎  Which environment would you like to rewind? [0] " idx
+  idx="${idx:-0}"
+  if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 0 || idx >= ${#ENVS[@]} )); then
+    echo -e "${RED}${WARNING}  Invalid selection.${RESET}"
+    exit 1
+  fi
+  ENV_NAME="${ENVS[$idx]}"
+fi
+
 # ─── Welcome banner ───────────────────────────────────────────────────────────
 echo -e "\n${BOLD}${MAGENTA}${SPARKLE}  Magix Time-Turner engaged!${RESET}"
-echo -e "  We’re about to rewind your ${BOLD}base${RESET} env to a previous timeline.\n"
+echo -e "  We’re about to rewind your ${BOLD}${ENV_NAME}${RESET} env to a previous timeline.\n"
 
-# ─── Activate base & show revision ledger ─────────────────────────────────────
-conda activate base
-echo -e "${CYAN}${BOOK}  Revision ledger for ‘base’:${RESET}"
-conda list --revisions
+# ─── Show revision ledger ─────────────────────────────────────────────────────
+conda list -n "$ENV_NAME" --revisions | sed '1i Revision ledger for “'"$ENV_NAME"'”:'
 
 # ─── Ask for revision if not provided ─────────────────────────────────────────
 if [[ -z "$REVISION" ]]; then
@@ -80,7 +105,7 @@ fi
 # ─── Confirmation prompt (unless forced) ──────────────────────────────────────
 if [[ $FORCE -eq 0 ]]; then
   echo
-  read -rp "${YELLOW}${WARNING}  Roll back ‘base’ to revision ${REVISION}?${RESET} [y/N] " yn
+  read -rp "${YELLOW}${WARNING}  Roll back ‘${ENV_NAME}’ to revision ${REVISION}?${RESET} [y/N] " yn
   case "$yn" in [Yy]*) ;; *)
      echo -e "${BLUE}No worries — timeline preserved. Bye!${RESET}"
      exit 0
@@ -88,8 +113,8 @@ if [[ $FORCE -eq 0 ]]; then
 fi
 
 # ─── Rewind action ────────────────────────────────────────────────────────────
-echo -e "\n${MAGENTA}${REWIND}  Reverting ‘base’ to revision ${REVISION}…${RESET}"
-conda install --revision "$REVISION" -y
+echo -e "\n${MAGENTA}${REWIND}  Reverting ‘${ENV_NAME}’ to revision ${REVISION}…${RESET}"
+conda install -n "$ENV_NAME" --revision "$REVISION" -y
 
-echo -e "\n${GREEN}${CHECK}  Done! Your ‘base’ environment now reflects revision ${REVISION}.${RESET}"
+echo -e "\n${GREEN}${CHECK}  Done! Your ‘${ENV_NAME}’ environment now reflects revision ${REVISION}.${RESET}"
 echo -e "${BOLD}${CYAN}${ROCKET}  Blast off to your next adventure!${RESET}\n"
