@@ -137,8 +137,11 @@ def process_video(
             for j in range(steps):
                 c_start = j * chunk
                 c_end = min(dur, (j + 1) * chunk)
-                c_name = scene_path.with_name(f"{scene_path.stem}_{j:02d}{scene_path.suffix}")
-                run_ffmpeg_split(scene_path, c_name, c_start, c_end, dry=dry)
+                # c_name = scene_path.with_name(f"{scene_path.stem}_{j:02d}{scene_path.suffix}")
+
+                chunk_file = out_dir / f"{scene_path.stem}_s{idx:03d}_c{j:02d}.mp4"
+
+                run_ffmpeg_split(scene_path, chunk_file, c_start, c_end, dry=dry)
             # remove original long scene after slicing
             if steps > 1:
                 scene_path.unlink(missing_ok=True)
