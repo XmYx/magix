@@ -23,9 +23,66 @@
       will-change: transform;
       transition: transform 0.2s ease-out;
     }
+
+    /* Sticky header with spacing and thick white line */
+    #introHeader {
+      margin-bottom: 2rem;
+      border-bottom: 10px solid rgba(255,255,255,0.9);
+      position: sticky;
+      top: 0;
+      background-color: inherit;
+      z-index: 40;
+      transition: all 0.3s ease;
+    }
+    /* Collapsed header state */
+    #introHeader.collapsed {
+      margin-bottom: 0;
+      padding-top: 0.75rem;
+      padding-bottom: 0.75rem;
+      backdrop-filter: blur(10px);
+      background-color: rgba(0,0,0,0.0);
+      border-bottom: 10px solid rgba(255,255,255,0.9);
+      transform: translateY(0) !important;
+    }
+    /* Hide only tagline, subtitle, social links */
+    #introHeader.collapsed .tagline,
+    #introHeader.collapsed h2,
+    #introHeader.collapsed .social-links {
+      display: none;
+    }
+    /* Always show name and contacts */
+    #introHeader.collapsed h1,
+    #introHeader.collapsed .header-contacts {
+      display: block;
+    }
+    /* Remove gradient fade under collapsed header */
+    #introHeader.collapsed::after {
+      display: none;
+    }
+
+    /* Ensure contacts remain visible in collapsed state */
+    #introHeader .header-contacts {
+      display: flex;
+      justify-content: center;
+      margin-top: 1rem;
+      transition: margin 0.3s ease;
+    }
+    #introHeader.collapsed .header-contacts {
+      margin-top: 0;
+    }
+
+    /* Grid/List view toggle */
+    body.list-view .grid {
+      display: block !important;
+      grid-template-columns: none !important;
+    }
+    body.list-view .grid > li {
+      display: list-item !important;
+    }
   </style>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed print:bg-white print:text-black">
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed print:bg-white print:text-black grid-view">
+
   <!-- control bar -->
   <div class="fixed top-4 right-4 z-50 flex items-center gap-4 print:hidden">
     <button id="pdfBtn" class="px-3 py-1 text-xs font-semibold border rounded-lg backdrop-blur bg-white/70 dark:bg-gray-700/70 dark:border-gray-600 hover:shadow">Download&nbsp;PDF</button>
@@ -34,20 +91,31 @@
       <div class="w-10 h-5 bg-gray-300 rounded-full dark:bg-gray-600 peer-focus:outline-none peer-checked:bg-indigo-500 transition-colors"></div>
       <div class="absolute left-0.5 top-0.5 h-4 w-4 bg-white rounded-full border transition-transform peer-checked:translate-x-5"></div>
     </label>
+    <!-- Grid/List view switch -->
+    <button id="layoutToggle" class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
+      <!-- Grid icon -->
+      <svg id="gridIcon" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zM14 4h6v6h-6V4zM4 14h6v6H4v-6zM14 14h6v6h-6v-6z" />
+      </svg>
+      <!-- List icon -->
+      <svg id="listIcon" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    </button>
   </div>
 
   <section class="max-w-3xl mx-auto p-6" id="cv-root">
     <!-- Header -->
     <header id="introHeader" class="text-center fade-in parallax">
       <h1 class="text-4xl font-bold tracking-wide">Miklós Nagy</h1>
-      <p class="italic text-sm text-gray-600 dark:text-gray-400">“meeklosh naj”</p>
+      <p class="italic text-sm text-gray-600 dark:text-gray-400 tagline">“meeklosh naj”</p>
       <h2 class="mt-2 text-xl font-semibold">VFX Coordinator • Technical Artist • Software Developer</h2>
-      <div class="flex justify-center space-x-4 mt-4 text-sm">
+      <div class="flex justify-center space-x-4 mt-4 text-sm header-contacts">
         <a href="mailto:miklos.mnagy@gmail.com" class="hover:underline">miklos.mnagy@gmail.com</a>
         <span>|</span>
         <a href="tel:+36309650278" class="hover:underline">+36&nbsp;30&nbsp;965&nbsp;0278</a>
       </div>
-      <div class="flex justify-center flex-wrap gap-x-4 gap-y-1 mt-2 text-sm">
+      <div class="flex justify-center flex-wrap gap-x-4 gap-y-1 mt-2 text-sm social-links">
         <a href="https://www.imdb.com/name/nm8954147/" class="hover:underline">IMDb</a>
         <a href="https://www.linkedin.com/in/mikl%C3%B3s-nagy-35b030bb/?originalSubdomain=hu" class="hover:underline">LinkedIn</a>
         <a href="https://www.instagram.com/humanmagix/" class="hover:underline">IG&nbsp;@humanmagix</a>
@@ -178,48 +246,55 @@
       faders.forEach(el => io.observe(el));
     });
 
-    // parallax header (slower, more prominent)
+    // parallax header
     const header = document.getElementById('introHeader');
     const parallax = () => {
-      const offset = window.scrollY * 0.3; // adjust factor for speed
+      const offset = window.scrollY * 0.3;
       header.style.transform = `translateY(${offset}px)`;
     };
     window.addEventListener('scroll', parallax, { passive: true });
-    parallax(); // initial position
+    parallax();
 
-    // dark / light toggle with system preference fallback
-    const toggle = document.getElementById('themeToggle');
-    const root = document.documentElement;
+      // theme initialization
+      const toggle = document.getElementById('themeToggle');
+      const root = document.documentElement;
+      const initTheme = () => {
+        if (localStorage.theme === 'dark' || (!localStorage.theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          root.classList.add('dark'); toggle.checked = true;
+        } else { root.classList.remove('dark'); toggle.checked = false; }
+      };
+      initTheme();
+      toggle.addEventListener('change', () => {
+        if (toggle.checked) { root.classList.add('dark'); localStorage.theme = 'dark'; }
+        else { root.classList.remove('dark'); localStorage.theme = 'light'; }
+      });
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', initTheme);
 
-    // initial state
-    const setInitialTheme = () => {
-      if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        root.classList.add('dark');
-        toggle.checked = true;
+
+    // PDF download (browser print)
+    document.getElementById('pdfBtn').addEventListener('click', () => window.print());
+
+    // collapse header on scroll
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 100) {
+        header.classList.add('collapsed');
       } else {
-        root.classList.remove('dark');
-        toggle.checked = false;
-      }
-    };
-    setInitialTheme();
-
-    // toggle handler
-    toggle.addEventListener('change', () => {
-      if (toggle.checked) {
-        root.classList.add('dark');
-        localStorage.theme = 'dark';
-      } else {
-        root.classList.remove('dark');
-        localStorage.theme = 'light';
+        header.classList.remove('collapsed');
       }
     });
 
-    // sync with system preference changes
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', setInitialTheme);
-
-    // PDF download (browser print)
-    document.getElementById('pdfBtn').addEventListener('click', () => {
-      window.print();
+    // layout toggle (grid/list)
+    const layoutToggle = document.getElementById('layoutToggle');
+    const gridIcon = document.getElementById('gridIcon');
+    const listIcon = document.getElementById('listIcon');
+    layoutToggle.addEventListener('click', () => {
+      if (document.body.classList.contains('grid-view')) {
+        document.body.classList.replace('grid-view','list-view');
+        gridIcon.classList.add('hidden'); listIcon.classList.remove('hidden');
+      } else {
+        document.body.classList.replace('list-view','grid-view');
+        gridIcon.classList.remove('hidden'); listIcon.classList.add('hidden');
+      }
     });
   </script>
 </body>
