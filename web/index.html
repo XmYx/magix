@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Miklós Nagy — CV</title>
+  <!-- Tailwind v3 with dark-mode class support -->
+  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <style>
+    /* ——— animations & effects ——— */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 1.2s ease-out, transform 1.2s cubic-bezier(.2,.8,.4,1);
+    }
+    .fade-in.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* parallax header */
+    .parallax {
+      will-change: transform;
+      transition: transform 0.2s ease-out;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed print:bg-white print:text-black">
+  <!-- control bar -->
+  <div class="fixed top-4 right-4 z-50 flex items-center gap-4 print:hidden">
+    <button id="pdfBtn" class="px-3 py-1 text-xs font-semibold border rounded-lg backdrop-blur bg-white/70 dark:bg-gray-700/70 dark:border-gray-600 hover:shadow">Download&nbsp;PDF</button>
+    <label class="inline-flex items-center cursor-pointer relative">
+      <input type="checkbox" id="themeToggle" class="sr-only peer">
+      <div class="w-10 h-5 bg-gray-300 rounded-full dark:bg-gray-600 peer-focus:outline-none peer-checked:bg-indigo-500 transition-colors"></div>
+      <div class="absolute left-0.5 top-0.5 h-4 w-4 bg-white rounded-full border transition-transform peer-checked:translate-x-5"></div>
+    </label>
+  </div>
+
+  <section class="max-w-3xl mx-auto p-6" id="cv-root">
+    <!-- Header -->
+    <header id="introHeader" class="text-center fade-in parallax">
+      <h1 class="text-4xl font-bold tracking-wide">Miklós Nagy</h1>
+      <p class="italic text-sm text-gray-600 dark:text-gray-400">“meeklosh naj”</p>
+      <h2 class="mt-2 text-xl font-semibold">VFX Coordinator • Technical Artist • Software Developer</h2>
+      <div class="flex justify-center space-x-4 mt-4 text-sm">
+        <a href="mailto:miklos.mnagy@gmail.com" class="hover:underline">miklos.mnagy@gmail.com</a>
+        <span>|</span>
+        <a href="tel:+36309650278" class="hover:underline">+36&nbsp;30&nbsp;965&nbsp;0278</a>
+      </div>
+      <div class="flex justify-center flex-wrap gap-x-4 gap-y-1 mt-2 text-sm">
+        <a href="https://www.imdb.com/name/nm8954147/" class="hover:underline">IMDb</a>
+        <a href="https://www.linkedin.com/in/mikl%C3%B3s-nagy-35b030bb/?originalSubdomain=hu" class="hover:underline">LinkedIn</a>
+        <a href="https://www.instagram.com/humanmagix/" class="hover:underline">IG&nbsp;@humanmagix</a>
+        <a href="https://www.instagram.com/yomyxy2/" class="hover:underline">IG&nbsp;@yomyxy2</a>
+        <span>| Budapest, HU</span>
+      </div>
+    </header>
+
+    <!-- Profile -->
+    <section class="mt-10 fade-in" id="profile">
+      <h3 class="text-2xl font-semibold mb-2">Profile</h3>
+      <p>
+        I thrive where <strong>imagination meets engineering</strong>. From orchestrating on-set data capture for blockbuster VFX to
+        open-source breakthroughs in generative AI, I help teams turn napkin sketches into <em>final pixels</em>—securely,
+        repeatably and at scale.
+      </p>
+    </section>
+
+    <!-- Experience -->
+    <section class="mt-10 fade-in" id="experience">
+      <h3 class="text-2xl font-semibold mb-4">Experience</h3>
+
+      <article class="mb-6">
+        <h4 class="font-semibold">Technical Artist – Netflix R&amp;D</h4>
+        <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">2023 – Present | Remote / Budapest</div>
+        <ul class="list-disc list-inside space-y-1">
+          <li>Part of a small research &amp; development team supporting innovative tool concepts and thought processes.</li>
+          <li>Provided technical partnership to creatives—bridging concept, code and compliance.</li>
+        </ul>
+      </article>
+
+      <article class="mb-6">
+        <h4 class="font-semibold">Head of Research – Deforum (open source)</h4>
+        <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">2022 – 2024</div>
+        <ul class="list-disc list-inside space-y-1">
+          <li>Created and maintain <strong>deforum-comfy-nodes</strong>, the most-installed animation pack for ComfyUI.</li>
+          <li>Led research while launching <strong>deforum.studio</strong>, a hosted diffusion playground.</li>
+          <li>Optimised pipelines &amp; workflows widely adopted by the community.</li>
+        </ul>
+      </article>
+
+      <article class="mb-6">
+        <h4 class="font-semibold">AI Pipeline Advisor – Segmind</h4>
+        <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">2022 – 2023 | Remote</div>
+        <ul class="list-disc list-inside space-y-1">
+          <li>Implemented scalable image / video diffusion pipelines.</li>
+          <li>Implemented render kernels &amp; caching layers, reducing average inference cost by 18%.</li>
+        </ul>
+      </article>
+
+      <article class="mb-6">
+        <h4 class="font-semibold">VFX Coordinator / Data Wrangler</h4>
+        <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">2016 – 2022 | Feature / Series Productions</div>
+        <p class="italic mb-2">Selected credits</p>
+        <ul class="grid grid-cols-2 gap-x-4 list-disc list-inside text-sm">
+          <li>Hunyadi (2022)</li><li>Dust Bunny (2023)</li>
+          <li>All The Light We Cannot See (2022)</li><li>Moon Knight (2021)</li>
+          <li>Shadow and Bone S1 (2020)</li><li>The Witcher (2018-19)</li>
+          <li>Midsommar (2018)</li><li>The Alienist (2017 &amp; 2019)</li>
+        </ul>
+        <p class="mt-2 text-sm">
+          Responsibilities spanned <strong>lidar scanning, photogrammetry and metadata wrangling</strong> through to multi-vendor
+          shot tracking—fuelled by a curiosity for every department’s craft and the entire story-to-screen pipeline.
+        </p>
+      </article>
+    </section>
+
+    <!-- Skills -->
+    <section class="mt-10 fade-in" id="skills">
+      <h3 class="text-2xl font-semibold mb-2">Core Skills</h3>
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <ul class="list-disc list-inside space-y-1">
+          <li>Generative AI • Diffusion &amp; LLMs</li>
+          <li>VFX Data • Lidar • HDRI • On-set</li>
+          <li>Python • FMS • ActionScript</li>
+          <li>Realtime Engines – UE5, Unity</li>
+          <li>3D &amp; 2D – Houdini, Maya, Nuke</li>
+        </ul>
+        <ul class="list-disc list-inside space-y-1">
+          <li>Pipeline &amp; Tool Development</li>
+          <li>GPU / Cloud Infrastructure</li>
+          <li>Agile Leadership &amp; Mentoring</li>
+          <li>Research Workflows</li>
+          <li>Security &amp; Data Governance</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Interests -->
+    <section class="mt-10 fade-in" id="interests">
+      <h3 class="text-2xl font-semibold mb-2">Art &amp; Interests</h3>
+      <p class="text-sm">Animal rescue · Photography · Cinematography · Classic cars · Environmental &amp; social research · Dancing · Other creative pursuits</p>
+    </section>
+
+    <!-- Education -->
+    <section class="mt-10 fade-in" id="education">
+      <h3 class="text-2xl font-semibold mb-2">Education &amp; Certifications</h3>
+      <ul class="list-disc list-inside space-y-1 text-sm">
+        <li>Állam és Jogtudományi Kar – Pécsi Tudomány Egyetem</li>
+      </ul>
+    </section>
+
+    <!-- Languages -->
+    <section class="mt-10 fade-in" id="languages">
+      <h3 class="text-2xl font-semibold mb-2">Languages</h3>
+      <p>Hungarian (native) · English (fluent) · Dutch (conversational)</p>
+    </section>
+
+    <!-- Footer -->
+    <footer class="mt-16 text-center text-xs text-gray-500 dark:text-gray-400 fade-in">
+      © 2025 Miklós Nagy — Built with <span class="animate-pulse">✨ magix</span>
+    </footer>
+  </section>
+
+  <!-- scripts -->
+  <script>
+    // reveal on scroll
+    document.addEventListener('DOMContentLoaded', () => {
+      const faders = document.querySelectorAll('.fade-in');
+      const io = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          if (e.isIntersecting) {
+            e.target.classList.add('show');
+            io.unobserve(e.target);
+          }
+        });
+      }, { threshold: 0.15 });
+      faders.forEach(el => io.observe(el));
+    });
+
+    // parallax header (slower, more prominent)
+    const header = document.getElementById('introHeader');
+    const parallax = () => {
+      const offset = window.scrollY * 0.3; // adjust factor for speed
+      header.style.transform = `translateY(${offset}px)`;
+    };
+    window.addEventListener('scroll', parallax, { passive: true });
+    parallax(); // initial position
+
+    // dark / light toggle with system preference fallback
+    const toggle = document.getElementById('themeToggle');
+    const root = document.documentElement;
+
+    // initial state
+    const setInitialTheme = () => {
+      if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        root.classList.add('dark');
+        toggle.checked = true;
+      } else {
+        root.classList.remove('dark');
+        toggle.checked = false;
+      }
+    };
+    setInitialTheme();
+
+    // toggle handler
+    toggle.addEventListener('change', () => {
+      if (toggle.checked) {
+        root.classList.add('dark');
+        localStorage.theme = 'dark';
+      } else {
+        root.classList.remove('dark');
+        localStorage.theme = 'light';
+      }
+    });
+
+    // sync with system preference changes
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', setInitialTheme);
+
+    // PDF download (browser print)
+    document.getElementById('pdfBtn').addEventListener('click', () => {
+      window.print();
+    });
+  </script>
+</body>
+</html>
