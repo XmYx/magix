@@ -1,0 +1,30 @@
+/* css/style.css – shared site styles */
+
+/* ── Hamburger button ─────────────────────────────────────────────── */
+.hamburger { @apply fixed top-4 left-4 z-50 flex flex-col justify-between w-8 h-6 focus:outline-none; }
+.hamburger span { @apply block h-1 bg-gray-800 dark:bg-gray-200 rounded transition-transform origin-center; }
+
+/* ── Mobile menu overlay ──────────────────────────────────────────── */
+.mobile-menu {
+  @apply fixed inset-0 flex flex-col items-center justify-center space-y-8 text-2xl font-semibold bg-white/90 dark:bg-gray-900/90 backdrop-blur transition-opacity duration-300 opacity-0 pointer-events-none;
+}
+.mobile-menu.open { @apply opacity-100 pointer-events-auto; }
+.mobile-menu a { @apply hover:underline; }
+
+/* ── Animations & effects (from original page) ───────────────────── */
+.fade-in { opacity:0; transform:translateY(40px); transition:opacity 1.2s ease-out,transform 1.2s cubic-bezier(.2,.8,.4,1); }
+.fade-in.show { opacity:1; transform:translateY(0); }
+.parallax { will-change:transform; transition:transform .2s ease-out; }
+
+/* Sticky header with spacing and thick white line */
+#introHeader { margin-bottom:2rem; border-bottom:10px solid rgba(255,255,255,.9); position:sticky; top:0; background-color:inherit; z-index:40; transition:all .3s ease; }
+#introHeader.collapsed { margin-bottom:0; padding-top:.75rem; padding-bottom:.75rem; backdrop-filter:blur(10px); background-color:rgba(0,0,0,0); border-bottom:10px solid rgba(255,255,255,.9); transform:translateY(0)!important; }
+#introHeader.collapsed .tagline,#introHeader.collapsed h2,#introHeader.collapsed .social-links{display:none;}
+#introHeader.collapsed h1,#introHeader.collapsed .header-contacts{display:block;}
+#introHeader.collapsed::after{display:none;}
+#introHeader .header-contacts{display:flex;justify-content:center;margin-top:1rem;transition:margin .3s ease;}
+#introHeader.collapsed .header-contacts{margin-top:0;}
+
+/* Grid/List view toggle (resume) */
+body.list-view .grid{display:block!important;grid-template-columns:none!important;}
+body.list-view .grid>li{display:list-item!important;}
