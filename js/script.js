@@ -17,7 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const faders = document.querySelectorAll('.fade-in');
   if (faders.length) {
     const io = new IntersectionObserver(entries => {
-      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('show'); io.unobserve(e.target); } });
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('show');
+          io.unobserve(e.target);
+        }
+      });
     }, { threshold: 0.15 });
     faders.forEach(el => io.observe(el));
   }
@@ -59,6 +64,89 @@ document.addEventListener('DOMContentLoaded', () => {
       document.body.classList.toggle('list-view');
       gridIcon.classList.toggle('hidden');
       listIcon.classList.toggle('hidden');
+    });
+  }
+
+  /* ── 🌟 Sparkle‑cursor effect (all pages) ─────────── */
+  const sparkleToggle = $('#sparkleToggle'); // add a <input type="checkbox" id="sparkleToggle"> somewhere in your markup
+  let sparklesEnabled = false;
+  let sparkleLayer;
+
+  // Inject the sparkle CSS only once
+  const ensureSparkleStyles = () => {
+    if (document.getElementById('sparkleStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'sparkleStyles';
+    style.textContent = `
+      .sparkle {
+        position: absolute;
+        width: 6px;
+        height: 6px;
+        background: radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,255,255,0.8) 40%, rgba(255,255,255,0) 80%);
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        animation: sparkle-fade 700ms linear forwards;
+      }
+      @keyframes sparkle-fade {
+        0%   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+        100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
+      }
+    `;
+    document.head.appendChild(style);
+  };
+
+  const addSparkle = e => {
+    if (!sparklesEnabled) return;
+    const s = document.createElement('span');
+    s.className = 'sparkle';
+    s.style.left = `${e.clientX}px`;
+    s.style.top = `${e.clientY}px`;
+    sparkleLayer.appendChild(s);
+    setTimeout(() => s.remove(), 700);
+  };
+
+  const enableSparkles = () => {
+    if (sparklesEnabled) return;
+    sparklesEnabled = true;
+    ensureSparkleStyles();
+    sparkleLayer = document.createElement('div');
+    sparkleLayer.id = 'sparkleLayer';
+    sparkleLayer.style.position = 'fixed';
+    sparkleLayer.style.inset = '0';
+    sparkleLayer.style.pointerEvents = 'none';
+    sparkleLayer.style.zIndex = '9999';
+    document.body.appendChild(sparkleLayer);
+    window.addEventListener('mousemove', addSparkle, { passive: true });
+  };
+
+  const disableSparkles = () => {
+    if (!sparklesEnabled) return;
+    sparklesEnabled = false;
+    window.removeEventListener('mousemove', addSparkle, { passive: true });
+    sparkleLayer?.remove();
+  };
+
+  if (sparkleToggle) {
+    const initSparkles = () => {
+      if (localStorage.sparkles === 'on') {
+        sparkleToggle.checked = true;
+        enableSparkles();
+      } else {
+        sparkleToggle.checked = false;
+        disableSparkles();
+      }
+    };
+    initSparkles();
+
+    sparkleToggle.addEventListener('change', () => {
+      if (sparkleToggle.checked) {
+        enableSparkles();
+        localStorage.sparkles = 'on';
+      } else {
+        disableSparkles();
+        localStorage.sparkles = 'off';
+      }
     });
   }
 
