@@ -1,45 +1,87 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title><!-- gallery.html -->
+<!-- gallery.html - upgraded with masonry layout, lightbox, and ✨ magix -->
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Miklós Nagy — Photo Gallery</title>
+  <title>Miklós Nagy — Photo Gallery</title>
+  <!-- Tailwind & global styles -->
   <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
   <link rel="stylesheet" href="css/style.css">
+
+  <!-- Page-specific visuals -->
+  <style>
+    /* ── Masonry layout ------------------------------------------- */
+    .masonry { column-count: 1; column-gap: 1rem; }
+    @media (min-width: 640px)  { .masonry { column-count: 2; } }
+    @media (min-width: 1024px) { .masonry { column-count: 3; } }
+    .masonry img {
+      break-inside: avoid;
+      transition: transform .3s, box-shadow .3s;
+    }
+    .masonry img:hover {
+      transform: translateY(-4px) scale(1.03);
+      box-shadow: 0 8px 24px rgba(0,0,0,.15);
+    }
+
+    /* ── Lightbox overlay ----------------------------------------- */
+    #lightbox {
+      opacity: 0;          /* hidden by default */
+      pointer-events: none;
+      transition: opacity .25s;
+    }
+    #lightbox.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  </style>
+
   <script defer src="js/script.js"></script>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
-  <!-- Global nav -->
-<!--<label class="inline-flex items-center gap-2 cursor-pointer">-->
-<!--  <input type="checkbox" id="sparkleToggle" class="peer sr-only">-->
-<!--  <span class="relative h-6 w-10 rounded-full bg-gray-300 transition peer-checked:bg-indigo-600">-->
-<!--    <span class="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-4"></span>-->
-<!--  </span>-->
-<!--  <span class="select-none text-sm">Sparkles</span>-->
-<!--</label>-->
-<!--  <button id="menuToggle" class="hamburger md:hidden" aria-label="Open menu">-->
-<!--    <span></span><span></span><span></span>-->
-<!--  </button>-->
-<!--  <nav id="mobileMenu" class="mobile-menu">-->
-<!--    <a href="index.html">Home</a>-->
-<!--    <a href="gallery.html">Photo Gallery</a>-->
-<!--    <a href="resume.html">Resume</a>-->
-<!--  </nav>-->
+<body class="pt-16 md:pt-20 bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
 
-  <header class="text-center pt-24 pb-12 fade-in">
-    <h1 class="text-4xl font-bold mb-2">Photo Gallery</h1>
+  <!-- Header (main nav is injected automatically by script.js) -->
+  <header class="text-center pb-12 fade-in">
+    <h1 class="magix-text text-4xl font-bold mb-2">Photo Gallery</h1>
     <p class="text-gray-600 dark:text-gray-400">Automatically shows everything inside <code>/photos</code>.</p>
   </header>
 
-  <section id="galleryGrid" class="max-w-5xl mx-auto px-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4"></section>
+  <!-- Masonry wrapper populated by loadGallery() -->
+  <section id="galleryGrid" class="gallery-wrapper masonry max-w-6xl mx-auto px-4"></section>
 
   <footer class="text-center text-xs text-gray-500 dark:text-gray-400 py-10 fade-in">
-    © 2025 Miklós Nagy — Built with <span class="animate-pulse">✨ magix</span>
+    © 2025 Miklós Nagy — Built with <span class="animate-pulse">✨ magix</span>
   </footer>
+
+  <!-- ╭───────────────────────────────────────────────╮ -->
+  <!-- │  Simple Lightbox                             │ -->
+  <!-- ╰───────────────────────────────────────────────╯ -->
+  <div id="lightbox" class="fixed inset-0 bg-black/80 backdrop-blur flex items-center justify-center z-50">
+    <button id="closeLightbox" class="absolute top-6 right-6 text-white text-3xl leading-none">×</button>
+    <img id="lightboxImg" class="max-h-[90vh] max-w-[90vw] object-contain" />
+  </div>
+
+  <!-- Lightbox logic (tiny & self-contained) -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const grid   = document.getElementById('galleryGrid');
+      const box    = document.getElementById('lightbox');
+      const img    = document.getElementById('lightboxImg');
+      const close  = () => box.classList.remove('open');
+
+      document.getElementById('closeLightbox').addEventListener('click', close);
+      box.addEventListener('click', e => (e.target === box) && close());
+      window.addEventListener('keydown', e => (e.key === 'Escape') && close());
+
+      // Delegate click to any thumb inside the grid
+      grid.addEventListener('click', e => {
+        const target = e.target;
+        if (target.tagName === 'IMG') {
+          img.src = target.src;
+          box.classList.add('open');
+        }
+      });
+    });
+  </script>
 </body>
 </html>
