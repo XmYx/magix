@@ -1,87 +1,197 @@
-<!-- gallery.html - upgraded with masonry layout, lightbox, and ✨ magix -->
+<!-- gallery.html – now with ✨ magix & MP4 support -->
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Miklós Nagy — Photo Gallery</title>
-  <!-- Tailwind & global styles -->
-  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-  <link rel="stylesheet" href="css/style.css">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Miklós Nagy — Photo & Video Gallery</title>
 
-  <!-- Page-specific visuals -->
-  <style>
-    /* ── Masonry layout ------------------------------------------- */
-    .masonry { column-count: 1; column-gap: 1rem; }
-    @media (min-width: 640px)  { .masonry { column-count: 2; } }
-    @media (min-width: 1024px) { .masonry { column-count: 3; } }
-    .masonry img {
-      break-inside: avoid;
-      transition: transform .3s, box-shadow .3s;
-    }
-    .masonry img:hover {
-      transform: translateY(-4px) scale(1.03);
-      box-shadow: 0 8px 24px rgba(0,0,0,.15);
-    }
+    <!-- Tailwind + global styles -->
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <link rel="stylesheet" href="css/style.css" />
 
-    /* ── Lightbox overlay ----------------------------------------- */
-    #lightbox {
-      opacity: 0;          /* hidden by default */
-      pointer-events: none;
-      transition: opacity .25s;
-    }
-    #lightbox.open {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  </style>
-
-  <script defer src="js/script.js"></script>
-</head>
-<body class="pt-16 md:pt-20 bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
-
-  <!-- Header (main nav is injected automatically by script.js) -->
-  <header class="text-center pb-12 fade-in">
-    <h1 class="magix-text text-4xl font-bold mb-2">Photo Gallery</h1>
-    <p class="text-gray-600 dark:text-gray-400">Automatically shows everything inside <code>/photos</code>.</p>
-  </header>
-
-  <!-- Masonry wrapper populated by loadGallery() -->
-  <section id="galleryGrid" class="gallery-wrapper masonry max-w-6xl mx-auto px-4"></section>
-
-  <footer class="text-center text-xs text-gray-500 dark:text-gray-400 py-10 fade-in">
-    © 2025 Miklós Nagy — Built with a little<span class="animate-pulse">✨ magix</span>
-  </footer>
-
-  <!-- ╭───────────────────────────────────────────────╮ -->
-  <!-- │  Simple Lightbox                             │ -->
-  <!-- ╰───────────────────────────────────────────────╯ -->
-  <div id="lightbox" class="fixed inset-0 bg-black/80 backdrop-blur flex items-center justify-center z-50">
-    <button id="closeLightbox" class="absolute top-6 right-6 text-white text-3xl leading-none">×</button>
-    <img id="lightboxImg" class="max-h-[90vh] max-w-[90vw] object-contain" />
-  </div>
-
-  <!-- Lightbox logic (tiny & self-contained) -->
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const grid   = document.getElementById('galleryGrid');
-      const box    = document.getElementById('lightbox');
-      const img    = document.getElementById('lightboxImg');
-      const close  = () => box.classList.remove('open');
-
-      document.getElementById('closeLightbox').addEventListener('click', close);
-      box.addEventListener('click', e => (e.target === box) && close());
-      window.addEventListener('keydown', e => (e.key === 'Escape') && close());
-
-      // Delegate click to any thumb inside the grid
-      grid.addEventListener('click', e => {
-        const target = e.target;
-        if (target.tagName === 'IMG') {
-          img.src = target.src;
-          box.classList.add('open');
+    <!-- ── Masonry & lightbox tweaks ------------------------------------ -->
+    <style>
+      /* Masonry */
+      .masonry {
+        column-count: 1;
+        column-gap: 1rem;
+      }
+      @media (min-width: 640px) {
+        .masonry {
+          column-count: 2;
         }
+      }
+      @media (min-width: 1024px) {
+        .masonry {
+          column-count: 3;
+        }
+      }
+      .masonry img,
+      .masonry video {
+        break-inside: avoid;
+        width: 100%;
+        display: block;
+        border-radius: 0.5rem; /* Tailwind rounded-lg */
+        transition: transform 0.3s, box-shadow 0.3s;
+        cursor: pointer;
+      }
+      .masonry img:hover,
+      .masonry video:hover {
+        transform: translateY(-4px) scale(1.03);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+      }
+
+      /* Lightbox */
+      #lightbox {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s;
+      }
+      #lightbox.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+    </style>
+
+    <!-- Keep script.js for nav & other goodies (no gallery code left inside) -->
+    <script defer src="js/script.js"></script>
+  </head>
+
+  <body
+    class="pt-16 md:pt-20 bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed"
+  >
+    <!-- Header (main nav is still injected by script.js) -->
+    <header class="text-center pb-12 fade-in">
+      <h1 class="magix-text text-4xl font-bold mb-2">Photo & Video Gallery</h1>
+      <p class="text-gray-600 dark:text-gray-400">
+        Automatically shows everything inside <code>/photos</code> (images) and
+        <code>/videos</code> (mp4).
+      </p>
+    </header>
+
+    <!-- Masonry wrapper populated by loadGallery() below → -->
+    <section
+      id="galleryGrid"
+      class="gallery-wrapper masonry max-w-6xl mx-auto px-4"
+    ></section>
+
+    <footer
+      class="text-center text-xs text-gray-500 dark:text-gray-400 py-10 fade-in"
+    >
+      © 2025 Miklós Nagy — Built with a little<span class="animate-pulse"
+        >✨ magix</span
+      >
+    </footer>
+
+    <!-- ╭───────────────────────────────────────────────╮ -->
+    <!-- │  Lightbox overlay (now handles <img> & <video>)│ -->
+    <!-- ╰───────────────────────────────────────────────╯ -->
+    <div
+      id="lightbox"
+      class="fixed inset-0 bg-black/80 backdrop-blur flex items-center justify-center z-50"
+    >
+      <button
+        id="closeLightbox"
+        class="absolute top-6 right-6 text-white text-3xl leading-none"
+      >
+        ×
+      </button>
+      <!-- The chosen media element is injected here dynamically -->
+      <div id="lightboxInner"></div>
+    </div>
+
+    <!-- ╭───────────────────────────────────────────────╮ -->
+    <!-- │  Gallery logic with MP4 hover‑play goodness   │ -->
+    <!-- ╰───────────────────────────────────────────────╯ -->
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const grid = document.getElementById("galleryGrid");
+        const box = document.getElementById("lightbox");
+        const inner = document.getElementById("lightboxInner");
+        const closeBtn = document.getElementById("closeLightbox");
+
+        /* ── Lightbox helpers ───────────────────────────────────────── */
+        const closeLightbox = () => {
+          box.classList.remove("open");
+          inner.innerHTML = ""; // drop active media element
+        };
+
+        closeBtn.addEventListener("click", closeLightbox);
+        box.addEventListener(
+          "click",
+          (e) => e.target === box && closeLightbox()
+        );
+        window.addEventListener(
+          "keydown",
+          (e) => e.key === "Escape" && closeLightbox()
+        );
+
+        /* ── Masonry click‑through to lightbox ─────────────────────── */
+        grid.addEventListener("click", (e) => {
+          const target = e.target;
+          if (target.tagName === "IMG") {
+            inner.innerHTML = `<img src="${target.src}" class="max-h-[90vh] max-w-[90vw] object-contain" />`;
+            box.classList.add("open");
+          } else if (target.tagName === "VIDEO") {
+            const src = target.currentSrc || target.src;
+            inner.innerHTML = `<video src="${src}" controls autoplay loop class="max-h-[90vh] max-w-[90vw] object-contain"></video>`;
+            box.classList.add("open");
+          }
+        });
+
+        /* ── Gallery builder  (images + mp4) ───────────────────────── */
+        async function loadGallery() {
+          // Helper to add an element to the Masonry column flow
+          const addToGrid = (el) => {
+            el.classList.add("mb-4");
+            grid.appendChild(el);
+          };
+
+          // 1️⃣  Grab the *image* list (assumes /photos/index.json exists)
+          let images = [];
+          try {
+            const res = await fetch("/photos/index.json");
+            if (res.ok) images = await res.json();
+          } catch (_) {/* silent – fallback to nothing */}
+
+          // 2️⃣  Grab the *video* list (assumes /videos/index.json exists)
+          let videos = [];
+          try {
+            const res = await fetch("/videos/index.json");
+            if (res.ok) videos = await res.json();
+          } catch (_) {/* silent – fallback to nothing */}
+
+          // 3️⃣  Build elements
+          images.forEach((file) => {
+            const img = document.createElement("img");
+            img.src = `/photos/${file}`;
+            img.alt = file;
+            img.loading = "lazy";
+            addToGrid(img);
+          });
+
+          videos.forEach((file) => {
+            const video = document.createElement("video");
+            video.src = `/videos/${file}`;
+            video.muted = true; // required for autoplay‑on‑hover
+            video.loop = true;
+            video.preload = "metadata";
+            video.playsInline = true;
+
+            // Hover‑play magic
+            video.addEventListener("mouseenter", () => video.play());
+            video.addEventListener("mouseleave", () => {
+              video.pause();
+              video.currentTime = 0;
+            });
+
+            addToGrid(video);
+          });
+        }
+
+        loadGallery();
       });
-    });
-  </script>
-</body>
+    </script>
+  </body>
 </html>
