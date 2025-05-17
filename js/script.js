@@ -40,27 +40,64 @@ function openMediaModal(src, type = 'img') {
   window.addEventListener('keydown', onKey);
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 
-  let media;
+  let media, nodeToAppend;
   if (type === 'youtube') {
+    // Responsive 16:9 wrapper so the player always fills the largest
+    // possible rectangle inside the viewport while keeping aspect ratio.
     const id = getYoutubeId(src);
     if (!id) return;
+
+    const wrap = Object.assign(document.createElement('div'), { className: 'yt-wrap' });
+    Object.assign(wrap.style, {
+      position: 'relative',
+      borderRadius: '8px',
+      overflow: 'hidden'
+    });
+
+    const fit = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const w = Math.min(vw, vh * 16 / 9);
+      const h = Math.min(vh, vw * 9 / 16);
+      wrap.style.width = `${w}px`;
+      wrap.style.height = `${h}px`;
+    };
+    fit();
+    window.addEventListener('resize', fit, { passive: true });
+
     media = document.createElement('iframe');
-    media.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0`;
-    media.allow = 'autoplay; encrypted-media; picture-in-picture';
-    media.allowFullscreen = true;
-    media.frameBorder = 0;
+    Object.assign(media, {
+      src: `https://www.youtube.com/embed/${id}?autoplay=1&rel=0`,
+      allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen',
+      frameBorder: 0,
+      allowFullscreen: true
+    });
+    Object.assign(media.style, {
+      position: 'absolute',
+      inset: 0,
+      width: '100%',
+      height: '100%'
+    });
+
+    wrap.appendChild(media);
+    nodeToAppend = wrap;
   } else if (type === 'video') {
     media = document.createElement('video');
     Object.assign(media, { src, autoplay: true, controls: true, playsInline: true });
+    Object.assign(media.style, { maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px' });
+    nodeToAppend = media;
   } else {
     media = document.createElement('img');
     media.src = src;
+    Object.assign(media.style, { maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px' });
+    nodeToAppend = media;
   }
-  Object.assign(media.style, { maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px' });
-  overlay.appendChild(media);
+
+  overlay.appendChild(nodeToAppend);
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
 }
+
 
 // ────────────────────────────────────────────────────────────────
 // Global navigation
