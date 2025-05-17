@@ -1,7 +1,8 @@
-/* script.js — shared site logic — v4
+/* script.js — shared site logic — v5
    (c) 2025 Miklós Nagy
    ░░ Global navbar injected so it persists across every page ░░
-   ░░ Added mobile‑friendly media fixes & modal viewer ░░
+   ░░ Added mobile-friendly media fixes & modal viewer ░░
+   ░░ Nav link sparkle rectangle animation ░░
 */
 
 // ────────────────────────────────────────────────────────────────
@@ -14,15 +15,13 @@ const $ = sel => document.querySelector(sel);
 
 // Simple media modal (images & videos)
 function openMediaModal(src, type = 'img') {
-  // Prevent multiple overlays
-  if (document.getElementById('mediaOverlay')) return;
+  if (document.getElementById('mediaOverlay')) return; // prevent duplicates
 
   const overlay = document.createElement('div');
   overlay.id = 'mediaOverlay';
   Object.assign(overlay.style, {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 10000
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000
   });
 
   const close = () => {
@@ -37,19 +36,13 @@ function openMediaModal(src, type = 'img') {
     if (e.target === overlay) close();
   });
 
-  let media;
-  if (type === 'img') {
-    media = document.createElement('img');
-    media.src = src;
-  } else {
-    media = document.createElement('video');
-    media.src = src;
-    media.autoplay = true;
-    media.controls = true;
-    media.style.maxHeight = '90vh';
-    media.style.maxWidth = '90vw';
+  const media = document.createElement(type === 'img' ? 'img' : 'video');
+  media.src = src;
+  if (type === 'video') {
+    media.autoplay = true; media.controls = true; media.playsInline = true;
   }
   Object.assign(media.style, { maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px' });
+
   overlay.appendChild(media);
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
@@ -123,7 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobileMenu.classList.remove('open')));
   }
 
-  /* Reveal‑on‑scroll */
+  /* Reveal-on-scroll */
   const faders = document.querySelectorAll('.fade-in');
   if (faders.length) {
     const io = new IntersectionObserver(entries => {
@@ -157,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', init);
   }
 
-  /* Sparkle cursor */
+  /* Sparkle cursor + nav-link rectangle sparkles */
   const sparkleToggle = $('#sparkleToggle');
   let sparklesEnabled = false;
   let sparkleLayer;
@@ -166,66 +159,87 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.getElementById('sparkleStyles')) return;
     const style = document.createElement('style');
     style.id = 'sparkleStyles';
-    style.textContent = `
-      .sparkle { position:absolute;width:6px;height:6px;background:radial-gradient(circle,rgba(255,255,255,1) 0%,rgba(255,255,255,0.8) 40%,rgba(255,255,255,0) 80%);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;animation:sparkle-fade 700ms linear forwards; }
-      @keyframes sparkle-fade { 0%{opacity:1;transform:translate(-50%,-50%) scale(1);} 100%{opacity:0;transform:translate(-50%,-50%) scale(0);} }
-    `;
+    style.textContent = `.sparkle{position:absolute;width:6px;height:6px;background:radial-gradient(circle,rgba(255,255,255,1) 0%,rgba(255,255,255,0.8) 40%,rgba(255,255,255,0) 80%);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;animation:sparkle-fade 700ms linear forwards}@keyframes sparkle-fade{0%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-50%) scale(0)}}`;
     document.head.appendChild(style);
   };
 
-  const addSparkle = e => {
+  const createLayer = () => {
+    sparkleLayer = document.createElement('div');
+    sparkleLayer.id = 'sparkleLayer';
+    Object.assign(sparkleLayer.style, { position:'fixed', inset:0, pointerEvents:'none', zIndex:9999 });
+    document.body.appendChild(sparkleLayer);
+  };
+
+  const spawnSparkle = (x, y) => {
     if (!sparklesEnabled) return;
+    ensureSparkleStyles();
+    if (!sparkleLayer) createLayer();
     const s = document.createElement('span');
     s.className = 'sparkle';
-    s.style.left = `${e.clientX}px`;
-    s.style.top = `${e.clientY}px`;
+    s.style.left = `${x}px`;
+    s.style.top = `${y}px`;
     sparkleLayer.appendChild(s);
     setTimeout(() => s.remove(), 700);
   };
+
+  const mouseSparkle = e => spawnSparkle(e.clientX, e.clientY);
 
   const enableSparkles = () => {
     if (sparklesEnabled) return;
     sparklesEnabled = true;
     ensureSparkleStyles();
-    sparkleLayer = document.createElement('div');
-    sparkleLayer.id = 'sparkleLayer';
-    sparkleLayer.style.position = 'fixed';
-    sparkleLayer.style.inset = '0';
-    sparkleLayer.style.pointerEvents = 'none';
-    sparkleLayer.style.zIndex = '9999';
-    document.body.appendChild(sparkleLayer);
-    window.addEventListener('mousemove', addSparkle, { passive: true });
+    createLayer();
+    window.addEventListener('mousemove', mouseSparkle, { passive: true });
   };
 
   const disableSparkles = () => {
     if (!sparklesEnabled) return;
     sparklesEnabled = false;
-    window.removeEventListener('mousemove', addSparkle, { passive: true });
+    window.removeEventListener('mousemove', mouseSparkle, { passive: true });
     sparkleLayer?.remove();
+    sparkleLayer = null;
   };
 
   if (sparkleToggle) {
     const initSparkles = () => {
       if (localStorage.sparkles === 'on') {
-        sparkleToggle.checked = true;
-        enableSparkles();
-      } else {
-        sparkleToggle.checked = false;
-        disableSparkles();
-      }
+        sparkleToggle.checked = true; enableSparkles();
+      } else { sparkleToggle.checked = false; disableSparkles(); }
     };
     initSparkles();
-
     sparkleToggle.addEventListener('change', () => {
-      if (sparkleToggle.checked) {
-        enableSparkles();
-        localStorage.sparkles = 'on';
-      } else {
-        disableSparkles();
-        localStorage.sparkles = 'off';
-      }
+      sparkleToggle.checked ? (localStorage.sparkles='on', enableSparkles()) : (localStorage.sparkles='off', disableSparkles());
     });
   }
+
+  /* Nav-link rectangle sparkle animation (desktop) */
+  const addNavSparkles = link => {
+    let rafId = null;
+
+    const stop = () => { if (rafId) cancelAnimationFrame(rafId); rafId = null; };
+
+    const animate = ts => {
+      if (!sparklesEnabled) { rafId = requestAnimationFrame(animate); return; }
+      const rect = link.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      const perimeter = 2 * (w + h);
+      const period = 1800; // ms for full lap
+      const t = (ts % period) / period;
+      let d = t * perimeter;
+      let x, y;
+      if (d < w) { x = rect.left + d; y = rect.top; }
+      else if (d < w + h) { d -= w; x = rect.right; y = rect.top + d; }
+      else if (d < 2*w + h) { d -= (w + h); x = rect.right - d; y = rect.bottom; }
+      else { d -= (2*w + h); x = rect.left; y = rect.bottom - d; }
+      spawnSparkle(x, y);
+      rafId = requestAnimationFrame(animate);
+    };
+
+    link.addEventListener('mouseenter', () => { if (rafId===null) rafId = requestAnimationFrame(animate); });
+    link.addEventListener('mouseleave', stop);
+  };
+
+  document.querySelectorAll('#desktopMenu a').forEach(addNavSparkles);
 
   /* PDF download */
   $('#pdfBtn')?.addEventListener('click', () => window.print());
@@ -247,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* Auto‑populate gallery */
+  /* Auto-populate gallery */
   const galleryGrid = $('#galleryGrid');
   if (galleryGrid) loadGallery(galleryGrid);
 });
@@ -281,12 +295,9 @@ async function loadGallery(container) {
     fetchFiles(paths.videos, VID_EXTS)
   ]);
 
-  // --- DOM builders ------------------------------------------------
   const addImg = ({ download_url, name }) => {
     const img = document.createElement('img');
-    img.src = download_url;
-    img.alt = name;
-    img.loading = 'lazy';
+    img.src = download_url; img.alt = name; img.loading = 'lazy';
     img.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer';
     img.addEventListener('click', () => openMediaModal(img.src, 'img'));
     container.appendChild(img);
@@ -294,35 +305,22 @@ async function loadGallery(container) {
 
   const addVid = ({ download_url, name }) => {
     const vid = document.createElement('video');
-    vid.src = download_url;
-    vid.muted = true;
-    vid.loop = true;
-    vid.playsInline = true;
-    vid.preload = 'metadata';
-    vid.title = name;
-    vid.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer';
-    vid.style.aspectRatio = '16/9'; // helps prevent collapsing height on mobile
+    vid.src = download_url; vid.muted = true; vid.loop = true; vid.playsInline = true; vid.preload = 'metadata';
+    vid.title = name; vid.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer';
+    vid.style.aspectRatio = '16/9';
 
     if (isTouchDevice()) {
-      // Touch devices: show controls + tap to fullscreen modal
       vid.controls = true;
       vid.addEventListener('click', e => {
-        // If not yet playing, let default controls handle
-        if (vid.paused) return;
-        // If already playing, open fullscreen modal for better UX
+        if (vid.paused) return; // let controls handle first play
         e.preventDefault();
         openMediaModal(vid.src, 'video');
       });
     } else {
-      // Desktop: hover play/pause
       vid.addEventListener('mouseenter', () => vid.play());
-      vid.addEventListener('mouseleave', () => {
-        vid.pause();
-        vid.currentTime = 0;
-      });
+      vid.addEventListener('mouseleave', () => { vid.pause(); vid.currentTime = 0; });
       vid.addEventListener('click', () => openMediaModal(vid.src, 'video'));
     }
-
     container.appendChild(vid);
   };
 
