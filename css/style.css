@@ -58,7 +58,7 @@ body {
 /* -----------------------------------------------------------
    Collapsing résumé header (unchanged)
    ----------------------------------------------------------- */
-#introHeader { margin-bottom:2rem; border-bottom:10px solid rgba(255,255,255,.9); position:sticky; top:0; background-color:inherit; z-index:40; transition:all .3s ease; }
+#introHeader { margin-bottom:2rem; border-bottom:10px solid rgba(255,255,255,.9); position:sticky; top: var(--site-header-h, 64px); background-color:inherit; z-index:40; transition:all .3s ease; }
 #introHeader.collapsed { margin-bottom:0; padding-top:.75rem; padding-bottom:.75rem; backdrop-filter:blur(10px); background-color:rgba(0,0,0,0); border-bottom:10px solid rgba(255,255,255,.9); transform:translateY(0)!important; }
 #introHeader.collapsed .tagline,#introHeader.collapsed h2,#introHeader.collapsed .social-links{display:none;}
 #introHeader.collapsed h1,#introHeader.collapsed .header-contacts{display:block;}

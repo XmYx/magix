@@ -1,18 +1,69 @@
-/* script.js — shared site logic — v3
+/* script.js — shared site logic — v4
    (c) 2025 Miklós Nagy
    ░░ Global navbar injected so it persists across every page ░░
-   ░░ Now also pulls videos from /videos and adds hover-auto-play ░░
+   ░░ Added mobile‑friendly media fixes & modal viewer ░░
 */
 
+// ────────────────────────────────────────────────────────────────
+// Utilities
+// ────────────────────────────────────────────────────────────────
+const isTouchDevice = () =>
+  'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
+
+const $ = sel => document.querySelector(sel);
+
+// Simple media modal (images & videos)
+function openMediaModal(src, type = 'img') {
+  // Prevent multiple overlays
+  if (document.getElementById('mediaOverlay')) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'mediaOverlay';
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 10000
+  });
+
+  const close = () => {
+    document.body.style.overflow = '';
+    overlay.remove();
+    window.removeEventListener('keydown', onKey);
+  };
+  const onKey = e => e.key === 'Escape' && close();
+  window.addEventListener('keydown', onKey);
+
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) close();
+  });
+
+  let media;
+  if (type === 'img') {
+    media = document.createElement('img');
+    media.src = src;
+  } else {
+    media = document.createElement('video');
+    media.src = src;
+    media.autoplay = true;
+    media.controls = true;
+    media.style.maxHeight = '90vh';
+    media.style.maxWidth = '90vw';
+  }
+  Object.assign(media.style, { maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px' });
+  overlay.appendChild(media);
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+}
+
+// ────────────────────────────────────────────────────────────────
+// Global navigation
+// ────────────────────────────────────────────────────────────────
 const NAV_LINKS = [
   { href: 'index.html', label: 'Home' },
   { href: 'gallery.html', label: 'Photo Gallery' },
   { href: 'resume.html', label: 'Resume' }
 ];
 
-// ╭─────────────────────────────────────────────────────────╮
-// │  Inject a responsive header with hamburger + sparkles   │
-// ╰─────────────────────────────────────────────────────────╯
 function injectNav() {
   const current = location.pathname.split('/').pop() || 'index.html';
 
@@ -46,14 +97,25 @@ function injectNav() {
   document.body.insertAdjacentHTML('afterbegin', navHTML);
 }
 
-// ░░░ Helper: run only when selector exists ░░░
-const $ = sel => document.querySelector(sel);
-
-// ░░░ DOM ready ░░░
+// ────────────────────────────────────────────────────────────────
+// DOM Ready
+// ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Inject navigation first so subsequent logic can measure it
   injectNav();
 
-  /* ── Mobile menu toggle ───────────────────────────── */
+  /* Sync CSS var for header height so introHeader never overlaps */
+  const setHeaderVar = () => {
+    const siteHeader = document.getElementById('siteHeader');
+    if (!siteHeader) return;
+    document.documentElement.style.setProperty('--site-header-h', siteHeader.offsetHeight + 'px');
+    const introHeader = $('#introHeader');
+    if (introHeader) introHeader.style.top = 'var(--site-header-h)';
+  };
+  setHeaderVar();
+  window.addEventListener('resize', setHeaderVar);
+
+  /* Mobile menu toggle */
   const menuToggle = $('#menuToggle');
   const mobileMenu = $('#mobileMenu');
   if (menuToggle && mobileMenu) {
@@ -61,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobileMenu.classList.remove('open')));
   }
 
-  /* ── Reveal-on-scroll ─────────────────────────────── */
+  /* Reveal‑on‑scroll */
   const faders = document.querySelectorAll('.fade-in');
   if (faders.length) {
     const io = new IntersectionObserver(entries => {
@@ -75,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     faders.forEach(el => io.observe(el));
   }
 
-  /* ── Parallax header (resume) ─────────────────────── */
+  /* Parallax header (resume) */
   const header = $('#introHeader');
   if (header) {
     const parallax = () => { header.style.transform = `translateY(${window.scrollY * 0.3}px)`; };
@@ -83,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
     parallax();
   }
 
-  /* ── Theme toggle (all pages) ─────────────────────── */
+  /* Theme toggle */
   const themeToggle = $('#themeToggle');
   const root = document.documentElement;
   const applyTheme = isDark => { isDark ? root.classList.add('dark') : root.classList.remove('dark'); };
@@ -95,7 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', init);
   }
 
-  /* ── 🌟 Sparkle-cursor effect (all pages) ─────────── */
+  /* Sparkle cursor */
   const sparkleToggle = $('#sparkleToggle');
   let sparklesEnabled = false;
   let sparkleLayer;
@@ -105,20 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
     style.id = 'sparkleStyles';
     style.textContent = `
-      .sparkle {
-        position: absolute;
-        width: 6px;
-        height: 6px;
-        background: radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,255,255,0.8) 40%, rgba(255,255,255,0) 80%);
-        border-radius: 50%;
-        transform: translate(-50%, -50%);
-        pointer-events: none;
-        animation: sparkle-fade 700ms linear forwards;
-      }
-      @keyframes sparkle-fade {
-        0%   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
-        100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
-      }
+      .sparkle { position:absolute;width:6px;height:6px;background:radial-gradient(circle,rgba(255,255,255,1) 0%,rgba(255,255,255,0.8) 40%,rgba(255,255,255,0) 80%);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;animation:sparkle-fade 700ms linear forwards; }
+      @keyframes sparkle-fade { 0%{opacity:1;transform:translate(-50%,-50%) scale(1);} 100%{opacity:0;transform:translate(-50%,-50%) scale(0);} }
     `;
     document.head.appendChild(style);
   };
@@ -177,16 +227,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* ── PDF download (resume) ────────────────────────── */
+  /* PDF download */
   $('#pdfBtn')?.addEventListener('click', () => window.print());
 
-  /* ── Collapsing résumé header on scroll ───────────── */
-  const introHeader = $('#introHeader');
-  if (introHeader) {
-    window.addEventListener('scroll', () => { introHeader.classList.toggle('collapsed', window.scrollY > 100); });
+  /* Collapsing résumé header */
+  if (header) {
+    window.addEventListener('scroll', () => { header.classList.toggle('collapsed', window.scrollY > 100); });
   }
 
-  /* ── Grid/List toggle (resume) ────────────────────── */
+  /* Grid/List toggle (resume) */
   const layoutToggle = $('#layoutToggle');
   if (layoutToggle) {
     const gridIcon = $('#gridIcon');
@@ -198,23 +247,19 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* ── Auto-populate gallery ────────────────────────── */
+  /* Auto‑populate gallery */
   const galleryGrid = $('#galleryGrid');
   if (galleryGrid) loadGallery(galleryGrid);
 });
 
-// ╭─────────────────────────────────────────────────────────╮
-// │  Load images *and* videos from the GitHub REST API      │
-// ╰─────────────────────────────────────────────────────────╯
+// ────────────────────────────────────────────────────────────────
+// Gallery loader (images & videos)
+// ────────────────────────────────────────────────────────────────
 async function loadGallery(container) {
   const owner = 'XmYx';      // ✏️  adjust to your GitHub user/org
   const repo  = 'magix-photos';
-  const paths = {
-    photos: 'photos',
-    videos: 'videos'
-  };
+  const paths = { photos: 'photos', videos: 'videos' };
 
-  // Helper to hit the GitHub API and filter by extension list
   const fetchFiles = async (dir, exts) => {
     const api = `https://api.github.com/repos/${owner}/${repo}/contents/${dir}`;
     try {
@@ -228,23 +273,22 @@ async function loadGallery(container) {
     }
   };
 
-  // Extensions
   const IMG_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
   const VID_EXTS = ['.mp4', '.webm', '.mov'];
 
-  // Fetch in parallel
   const [imageFiles, videoFiles] = await Promise.all([
     fetchFiles(paths.photos, IMG_EXTS),
     fetchFiles(paths.videos, VID_EXTS)
   ]);
 
-  // --- DOM builders --------------------------------------------------
+  // --- DOM builders ------------------------------------------------
   const addImg = ({ download_url, name }) => {
     const img = document.createElement('img');
     img.src = download_url;
     img.alt = name;
     img.loading = 'lazy';
-    img.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow';
+    img.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer';
+    img.addEventListener('click', () => openMediaModal(img.src, 'img'));
     container.appendChild(img);
   };
 
@@ -253,21 +297,35 @@ async function loadGallery(container) {
     vid.src = download_url;
     vid.muted = true;
     vid.loop = true;
-    vid.preload = 'metadata';
     vid.playsInline = true;
-    vid.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow';
+    vid.preload = 'metadata';
+    vid.title = name;
+    vid.className = 'w-full h-auto object-cover rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer';
+    vid.style.aspectRatio = '16/9'; // helps prevent collapsing height on mobile
 
-    // Hover play/pause
-    vid.addEventListener('mouseenter', () => vid.play());
-    vid.addEventListener('mouseleave', () => {
-      vid.pause();
-      vid.currentTime = 0;
-    });
+    if (isTouchDevice()) {
+      // Touch devices: show controls + tap to fullscreen modal
+      vid.controls = true;
+      vid.addEventListener('click', e => {
+        // If not yet playing, let default controls handle
+        if (vid.paused) return;
+        // If already playing, open fullscreen modal for better UX
+        e.preventDefault();
+        openMediaModal(vid.src, 'video');
+      });
+    } else {
+      // Desktop: hover play/pause
+      vid.addEventListener('mouseenter', () => vid.play());
+      vid.addEventListener('mouseleave', () => {
+        vid.pause();
+        vid.currentTime = 0;
+      });
+      vid.addEventListener('click', () => openMediaModal(vid.src, 'video'));
+    }
 
     container.appendChild(vid);
   };
 
-  // Add to masonry container (maintain original order by concat?)
   imageFiles.forEach(addImg);
   videoFiles.forEach(addVid);
 
