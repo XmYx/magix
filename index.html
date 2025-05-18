@@ -4,27 +4,116 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Miklós Nagy — Home</title>
-  <!-- Tailwind v3 CDN with dark‑mode class support -->
+  <title>Miklós Nagy — Home</title>
+
+  <!-- Tailwind v3 CDN -->
   <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
   <link rel="stylesheet" href="css/style.css">
+
+  <!-- Site logic (nav, sparkles, …) -->
   <script defer src="js/main.js" type="module"></script>
+
+  <!-- Pastel “rain-of-tiles” background  ───────────────────────────── -->
+  <style>
+    :root{
+      /* tweakables */
+      --tile-size: 38px;
+      --fall-speed: 60;        /* px per second */
+      --jitter: 4;             /* horizontal wiggle */
+      --pastel-1:#fde2e4; --pastel-2:#e2ece9;
+      --pastel-3:#dfe7fd; --pastel-4:#e0bbec; --pastel-5:#fff1d0;
+    }
+    #bgTiles{
+      position:fixed;inset:0;z-index:-2;pointer-events:none;
+      /* soft fade at bottom so tiles “fold away” */
+      mask-image:linear-gradient(#000 0 70%,#0000 100%);
+    }
+  </style>
 </head>
+
 <body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
+
+  <!-- canvas lives behind everything -->
+  <canvas id="bgTiles"></canvas>
 
   <!-- Hero -->
   <section class="max-w-3xl mx-auto pt-32 pb-20 text-center px-6 fade-in">
-    <h1 class="text-5xl font-extrabold tracking-wide mb-4">Miklós Nagy</h1>
-    <p class="italic text-lg text-gray-600 dark:text-gray-400 mb-6">“meek‑losh naj”</p>
+    <h1 class="text-5xl font-extrabold tracking-wide mb-4">Miklós Nagy</h1>
+    <p class="italic text-lg text-gray-600 dark:text-gray-400 mb-6">“meek-losh naj”</p>
     <p class="text-xl leading-relaxed mb-8">
-      Art&nbsp;·  Development&nbsp;·  Photography&nbsp;·  Film/VFX<br>
+      Art&nbsp;·  Development&nbsp;·  Photography&nbsp;·  Film/VFX<br>
       thriving to help form and shape ideas into being
     </p>
-    <a href="gallery.html" class="px-6 py-3 rounded-lg font-semibold backdrop-blur bg-indigo-600 text-white hover:bg-indigo-700 transition">See my photography →</a>
+    <a href="gallery.html"
+       class="px-6 py-3 rounded-lg font-semibold backdrop-blur bg-indigo-600 text-white hover:bg-indigo-700 transition">
+       See my photography →
+    </a>
   </section>
 
   <footer class="text-center text-xs text-gray-500 dark:text-gray-400 py-10 fade-in">
-    © 2025 Miklós Nagy — Built with a bit of <span class="animate-pulse">✨ magix</span>
+    © 2025 Miklós Nagy — Built with a bit of <span class="animate-pulse">✨ magix</span>
   </footer>
+
+  <!-- background logic -->
+  <script type="module">
+    const cvs = document.getElementById('bgTiles');
+    const ctx = cvs.getContext('2d');
+    const pastels = [
+      getComputedStyle(document.documentElement).getPropertyValue('--pastel-1'),
+      getComputedStyle(document.documentElement).getPropertyValue('--pastel-2'),
+      getComputedStyle(document.documentElement).getPropertyValue('--pastel-3'),
+      getComputedStyle(document.documentElement).getPropertyValue('--pastel-4'),
+      getComputedStyle(document.documentElement).getPropertyValue('--pastel-5')
+    ];
+
+    /* tile objects live in a grid so they feel “aligned” */
+    const size   = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--tile-size'));
+    const speed  = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fall-speed'));
+    const jitter = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--jitter'));
+
+    let W,H,cols,rows,tiles;
+    const resize = () => {
+      W = cvs.width  = innerWidth  * devicePixelRatio;
+      H = cvs.height = innerHeight * devicePixelRatio;
+      ctx.scale(devicePixelRatio,devicePixelRatio);
+
+      cols  = Math.ceil(innerWidth  / size);
+      rows  = Math.ceil(innerHeight / size) + 2;   // extra rows above view
+      tiles = [];
+
+      /* spawn one tile per column for a tidy left-leaning stripe */
+      for(let c=0;c<cols;c++){
+        tiles.push({
+          x: c*size,
+          y: -Math.random()*innerHeight,
+          clr: pastels[Math.random()*pastels.length|0],
+          drift: (Math.random()-.5)*jitter  // gentle tremble
+        });
+      }
+    };
+    resize(); addEventListener('resize', resize);
+
+    let last = 0;
+    function tick(t){
+      const dt = (t-last)/1000; last = t;
+      ctx.clearRect(0,0,innerWidth,innerHeight);
+
+      tiles.forEach(tile=>{
+        tile.y += speed*dt;
+        const drawX = tile.x + Math.sin((tile.y/30))*tile.drift; // trembling path
+        ctx.fillStyle = tile.clr;
+        ctx.fillRect(drawX, tile.y, size, size);
+
+        /* recycle when leaving screen */
+        if(tile.y > innerHeight + size){
+          tile.y = -size * (rows*Math.random());
+          tile.clr = pastels[Math.random()*pastels.length|0];
+        }
+      });
+
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  </script>
 </body>
 </html>
