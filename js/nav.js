@@ -2,7 +2,8 @@
 export const NAV_LINKS = [
   { href: 'index.html',  label: 'Home' },
   { href: 'gallery.html', label: 'Photo Gallery' },
-  { href: 'resume.html',  label: 'Resume' }
+  { href: 'resume.html',  label: 'Resume' },
+  { href: 'about.html',  label: 'About' }
 ];
 
 export function injectNav() {
