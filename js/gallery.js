@@ -1,9 +1,12 @@
-/* gallery.js — GitHub-powered photo / video / embed / link gallery
-   v3.1 — 2025-05-18 — Miklós Nagy
+/* gallery.js — GitHub‑powered photo / video / embed / link gallery
+   v3.2 — 2025‑05‑18 — Miklós Nagy
    ✔ videos autoplay on hover (desktop)
-   ✔ click or second tap opens a full-screen modal
+   ✔ click or second tap opens a full‑screen modal
    ✔ share overlay no longer intercepts pointer events,
      so autoplay & clicks work as expected
+   ✔ NEW: simple iframe embeds via the `iframe:` prefix
+     (optionally followed by an aspect‑ratio, e.g. `iframe:https://example.com 4/3`)
+   ✔ regular http/https links in .txt lists now always fall back to a card preview
 */
 
 import { isTouchDevice, getYoutubeId, ytThumb } from './utils.js';
@@ -20,15 +23,19 @@ const TXT_EXT = ['.txt'];
 
 /* ─────────── helpers ─────────── */
 const classify = str => {
-  const s = str.toLowerCase();
-  if (IMG_EXT.some(e => s.endsWith(e)))         return 'img';
-  if (VID_EXT.some(e => s.endsWith(e)))         return 'video';
-  if (TXT_EXT.some(e => s.endsWith(e)))         return 'txt';
-  if (getYoutubeId(str))                        return 'youtube';
-  if (/vimeo\.com\/\d+/i.test(str))             return 'vimeo';
-  if (/instagram\.com\/(?:p|reel)\//i.test(str))return 'instagram';
-  if (/codepen\.io\/[^/]+\/pen\//i.test(str))   return 'codepen';
-  if (/codesandbox\.io\/s\//i.test(str))        return 'codesandbox';
+  const s = str.trim().toLowerCase();
+  // full <iframe …>…</iframe> embed
+  if (s.startsWith('<iframe'))                    return 'iframe';
+  // “iframe:URL [ratio]” shorthand
+  if (s.startsWith('iframe:'))                    return 'iframe';
+  if (IMG_EXT.some(e => s.endsWith(e)))           return 'img';
+  if (VID_EXT.some(e => s.endsWith(e)))           return 'video';
+  if (TXT_EXT.some(e => s.endsWith(e)))           return 'txt';
+  if (getYoutubeId(str))                          return 'youtube';
+  if (/vimeo\.com\/\d+/i.test(str))               return 'vimeo';
+  if (/instagram\.com\/(?:p|reel)\//i.test(str))   return 'instagram';
+  if (/codepen\.io\/[^/]+\/pen\//i.test(str))      return 'codepen';
+  if (/codesandbox\.io\/s\//i.test(str))           return 'codesandbox';
   return 'link';
 };
 
@@ -39,7 +46,7 @@ const fetchDir = async dir => {
   return res.json();
 };
 
-/* ░░ Share buttons — pointer-events-safe ░░ */
+/* ░░ Share buttons — pointer‑events‑safe ░░ */
 const makeShareOverlay = url => {
   const ov = document.createElement('div');
   ov.className =
@@ -220,18 +227,45 @@ export async function loadGallery(container) {
     try {
       const lines = (await fetch(file.download_url).then(r => r.text()))
                     .split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      for (const link of lines) {
-        switch (classify(link)) {
-          case 'img':        buildImg(link, link, container); break;
-          case 'video':      buildVideo(link, link, container); break;
-          case 'youtube':    buildYouTube(link, container);    break;
+      for (const raw of lines) {
+        const type = classify(raw);
+        switch (type) {
+          case 'img':        buildImg(raw, raw, container);          break;
+          case 'video':      buildVideo(raw, raw, container);        break;
+          case 'youtube':    buildYouTube(raw, container);          break;
           case 'vimeo': {
-            const id = link.match(/vimeo\.com\/(\d+)/i)[1];
+            const id = raw.match(/vimeo\.com\/(\d+)/i)[1];
             buildIframe(`https://player.vimeo.com/video/${id}`, '16/9', container); break; }
-          case 'instagram':  buildIframe(`${link}embed/`, '1/1', container); break;
+          case 'instagram':  buildIframe(`${raw}embed/`, '1/1', container); break;
           case 'codepen':
-          case 'codesandbox':buildIframe(link, '16/9', container); break;
-          default:           await buildLinkCard(link, container); break;
+          case 'codesandbox':buildIframe(raw, '16/9', container);   break;
+
+          case 'iframe': {
+            let src;
+            let ratio = '16/9';
+
+            if (raw.trim().toLowerCase().startsWith('<iframe')) {
+              // extract src, width, height from the full <iframe> tag
+              const mSrc = raw.match(/src=(["'])(.*?)\1/i);
+              const mW   = raw.match(/width=(["'])(\d+)\1/i);
+              const mH   = raw.match(/height=(["'])(\d+)\1/i);
+              if (!mSrc) break;
+              src = mSrc[2];
+              if (mW && mH) {
+                ratio = `${mW[2]}/${mH[2]}`;
+              }
+            } else {
+              // “iframe:URL [ratio]” shorthand
+              const parts = raw.split(/\s+/);
+              src = parts[0].replace(/^iframe:/i, '');
+              const r = parts.find(p => /^\d+\/\d+$/.test(p));
+              if (r) ratio = r;
+            }
+
+            buildIframe(src, ratio, container);
+            break;
+          }
+          default:           await buildLinkCard(raw, container);   break;
         }
       }
     } catch (e) { console.error('txt parse', file.name, e); }
