@@ -91,3 +91,26 @@ body.list-view .grid>li { display:list-item!important; }
     z-index: 50;
   }
 }
+
+.retro-menubar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+
+  background: #eee;
+  font-family: 'Chicago', sans-serif;
+  font-size: 12px;
+  color: #000;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  user-select: none;
+}
+
+.retro-window { position: fixed; top: 50px; left: 50px; background: #ddd; border: 2px solid #999; box-shadow: 4px 4px 0 #999; z-index: 1000; }
+.retro-window .title-bar { cursor: move; background: #000080; color: #fff; padding: 2px 4px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.retro-window .content { padding: 8px; font-size: 12px; overflow: auto; }
+.retro-window .resize-handle { position: absolute; width: 12px; height: 12px; bottom: 0; right: 0; cursor: se-resize; }
