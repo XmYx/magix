@@ -11,9 +11,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Miklós Nagy — About</title>
 
-  <!-- Tailwind for quick styling -->
   <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css" />
+  <script defer src="js/main.js" type="module"></script>
 
   <!-- Shared nav / sparkles / etc. -->
   <script defer src="js/main.js" type="module"></script>
@@ -31,76 +31,5 @@
   <section id="terminal" class="fade-in">
     <!-- content is inserted by JS -->
   </section>
-
-  <script type="module">
-    /* -----------  EDIT THIS WITH YOUR REAL “about me” COPY  ----------- */
-    const fullText = `
-( hit any key or click to skip this typing… )
-Hi, I’m Miklós, a multidisciplinary creative who loves fusing art and code.
-
-Playing and developing LTX Video whenever I can,
-as I feel like the approach is what's closest to the most optimal ai video related model kit
-thus far, and there is a tremendous amount of potential in both the company and community.
-
-Over the past decade I’ve hopped between
-film sets, street photography,
-development and ai art, always learning.
-
-I believe in open knowledge, good coffee, and the power of a well-timed
-somewhat witty but PC joke. When I’m not pushing pixels
-you’ll find me with my friends, shooting with a camera
-that captures moments or creates them,
-engages or disturbs anyone,
-aims to effect in a way,
-playing with my doggos,
-working on a car,
-thinking,
-being.
-
-Thank you,
-
-for your attention,
-
-Last but not least, I'd like to Thank All the people
-that have already helped me along this journey,
-and the ones remain to be met, without you all,
-existence is merely a bad dream to be awaken from,
-while co-existence in peace is a fairy tale coming true.
-
-(base) mix@magix:~/$
-`.trim();
-
-    /* typing effect --------------------------------------------------- */
-    const term   = document.getElementById('terminal');
-    const speed  = 22;               // ms per character
-    let   index  = 0;
-    let   typing = true;
-
-    const printNext = () => {
-      if (!typing) return;
-      index++;
-      term.innerText = fullText.slice(0, index);
-      if (index < fullText.length) {
-        requestAnimationFrame(()=>setTimeout(printNext, speed));
-      } else {
-        term.classList.remove('cursor');
-        typing = false;
-      }
-    };
-
-    /* start with blinking cursor */
-    term.classList.add('cursor');
-    printNext();
-
-    /* skip / reveal on interaction ------------------------------------ */
-    const revealAll = () => {
-      if (!typing) return;
-      typing = false;
-      term.innerText = fullText;
-      term.classList.remove('cursor');
-    };
-    addEventListener('click', revealAll, { once:false, passive:true });
-    addEventListener('keydown', revealAll, { once:false });
-  </script>
 </body>
 </html>

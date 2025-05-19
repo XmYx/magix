@@ -71,3 +71,23 @@ body {
    ----------------------------------------------------------- */
 body.list-view .grid { display:block!important; grid-template-columns:none!important; }
 body.list-view .grid>li { display:list-item!important; }
+
+/* default (mobile): flow-layout under the header */
+.resume-controls {
+  position: static;
+  margin-top: 10rem;     /* only push it down by 4rem */
+  margin-right: 1rem;   /* give a little horizontal padding on the right */
+  margin-left: 1rem;    /* flex-end alignment */
+  z-index: auto;        /* let header always stack above */
+}
+
+/* medium and up: pin it to top-right again */
+@media (min-width: 768px) {
+  .resume-controls {
+    position: fixed !important;
+    top: 1rem;
+    right: 1rem;
+    margin: 0;
+    z-index: 50;
+  }
+}

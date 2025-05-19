@@ -1,11 +1,13 @@
 import { $, isTouchDevice }       from './utils.js';
 import { injectNav }              from './nav.js';
 import { loadGallery }            from './gallery.js';
+import { initTerminal }           from './about.js';
 
 /* -------------------------------------------------- */
 
 document.addEventListener('DOMContentLoaded', () => {
   /* ----- global nav bar ----- */
+  initTerminal();
   injectNav();
 
   /* ----- header height var for CSS ----- */
