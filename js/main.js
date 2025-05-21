@@ -3,14 +3,11 @@ import { injectNav }              from './nav.js';
 import { loadGallery }            from './gallery.js';
 import { initTerminal }           from './about.js';
 
-/* -------------------------------------------------- */
-
 document.addEventListener('DOMContentLoaded', () => {
-  /* ----- global nav bar ----- */
   initTerminal();
   injectNav();
 
-  /* ----- header height var for CSS ----- */
+  /* header height var */
   const setHeaderVar = () => {
     const h = document.getElementById('siteHeader');
     if (h) {
@@ -21,7 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setHeaderVar();
   window.addEventListener('resize', setHeaderVar);
 
-  /* ----- mobile menu ----- */
+  /* mobile menu */
   const menuToggle = $('#menuToggle');
   const mobileMenu = $('#mobileMenu');
   if (menuToggle && mobileMenu) {
@@ -31,14 +28,14 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  /* ----- reveal-on-scroll fades ----- */
+  /* fade-in on scroll */
   const io = new IntersectionObserver(
     es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('show'); io.unobserve(e.target); } }),
     { threshold: 0.15 }
   );
   document.querySelectorAll('.fade-in').forEach(el => io.observe(el));
 
-  /* ----- parallax intro header ----- */
+  /* parallax intro header */
   const introHeader = $('#introHeader');
   if (introHeader) {
     const parallax = () => { introHeader.style.transform = `translateY(${window.scrollY * 0.3}px)`; };
@@ -46,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
     parallax();
   }
 
-  /* ----- theme toggle (light / dark) ----- */
+  /* theme toggle */
   const themeToggle = $('#themeToggle');
   const root = document.documentElement;
   const applyTheme = dark => dark ? root.classList.add('dark') : root.classList.remove('dark');
@@ -64,14 +61,28 @@ document.addEventListener('DOMContentLoaded', () => {
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', initTheme);
   }
 
-  /* ----- sparkle cursor + nav link rectangles ----- */
-  const sparkleToggle = $('#sparkleToggle');
+  /* sparkle cursor effect */
+  const sparkleToggle = $('#sparkleToggleStandard');
   let sparklesEnabled = false, sparkleLayer;
 
   const ensureSparkleStyles = () => {
     if (document.getElementById('sparkleStyles')) return;
-    const css =
-      `.sparkle{position:absolute;width:6px;height:6px;background:radial-gradient(circle,#fff 0%,rgba(255,255,255,.8) 40%,rgba(255,255,255,0) 80%);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;animation:sparkle 700ms linear forwards}@keyframes sparkle{to{opacity:0;transform:translate(-50%,-50%) scale(.2)}}`;
+//    const css =
+//      `.sparkle{position:absolute;width:6px;height:6px;background:radial-gradient(circle,#fff 0%,rgba(255,255,255,.8) 40%,rgba(255,255,255,0) 80%);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;animation:sparkle 700ms linear forwards}@keyframes sparkle{to{opacity:0;transform:translate(-50%,-50%) scale(.2)}}`;
+      const css = `.sparkle{
+        position:absolute;
+        width:4px;height:4px;
+        background:radial-gradient(circle,#fff 0%,rgba(255,255,255,0) 80%);
+        border-radius:50%;
+        pointer-events:none;
+        animation:sparkleFade .6s ease-out forwards
+      }
+      @keyframes sparkleFade{
+        0%   {opacity:1;transform:scale(1) translate(0,0)}
+        100% {opacity:0;transform:scale(2) translate(var(--dx),var(--dy))}
+      }`;
+
+
     Object.assign(document.head.appendChild(document.createElement('style')), {
       id: 'sparkleStyles',
       textContent: css
@@ -86,34 +97,65 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const spawnSparkle = (x, y) => {
+//    if (!sparklesEnabled) return;
+//    ensureSparkleStyles();
+//    ensureLayer();
+//    const s = Object.assign(document.createElement('span'), { className: 'sparkle' });
+//    s.style.left = `${x}px`;
+//    s.style.top  = `${y}px`;
+//    sparkleLayer.appendChild(s);
+//    setTimeout(() => s.remove(), 700);
     if (!sparklesEnabled) return;
     ensureSparkleStyles();
     ensureLayer();
+
     const s = Object.assign(document.createElement('span'), { className: 'sparkle' });
-    s.style.left = `${x}px`; s.style.top = `${y}px`;
+    const size = Math.random() * 4 + 2;        // 2 – 6 px
+    s.style.width  = `${size}px`;
+    s.style.height = `${size}px`;
+    s.style.left   = `${x - size / 2}px`;
+    s.style.top    = `${y - size / 2}px`;
+
+    const angle    = Math.random() * Math.PI * 2;
+    const distance = Math.random() * 30 + 10;  // 10 – 40 px
+    s.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
+    s.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
+
     sparkleLayer.appendChild(s);
-    setTimeout(() => s.remove(), 700);
+    s.addEventListener('animationend', () => s.remove());
   };
 
   const cursorSparkle = e => spawnSparkle(e.clientX, e.clientY);
-  const enableSparkles  = () => { if (sparklesEnabled) return; sparklesEnabled = true;  window.addEventListener('mousemove', cursorSparkle, { passive: true }); };
-  const disableSparkles = () => { if (!sparklesEnabled) return; sparklesEnabled = false; window.removeEventListener('mousemove', cursorSparkle, { passive: true }); sparkleLayer?.remove(); sparkleLayer = null; };
+  const enableSparkles  = () => {
+    if (sparklesEnabled) return;
+    sparklesEnabled = true;
+    window.addEventListener('mousemove', cursorSparkle, { passive: true });
+  };
+  const disableSparkles = () => {
+    if (!sparklesEnabled) return;
+    sparklesEnabled = false;
+    window.removeEventListener('mousemove', cursorSparkle, { passive: true });
+    sparkleLayer?.remove();
+    sparkleLayer = null;
+  };
+
+  const initSparkles = () => {
+    const saved = localStorage.getItem('sparkles') === 'on';
+    if (saved) enableSparkles();
+    else disableSparkles();
+    if (sparkleToggle) sparkleToggle.checked = saved;
+  };
+  initSparkles();
 
   if (sparkleToggle) {
-    const initSparkles = () => {
-      localStorage.sparkles === 'on'
-        ? (sparkleToggle.checked = true, enableSparkles())
-        : disableSparkles();
-    };
-    initSparkles();
-    sparkleToggle.addEventListener('change', () => {
-      sparkleToggle.checked
-        ? (localStorage.sparkles = 'on',  enableSparkles())
-        : (localStorage.sparkles = 'off', disableSparkles());
+    sparkleToggle.addEventListener('change', e => {
+      const on = e.target.checked;
+      localStorage.setItem('sparkles', on ? 'on' : 'off');
+      on ? enableSparkles() : disableSparkles();
     });
   }
 
-  /* ----- nav-link rectangle animation ----- */
+  /* nav-link sparkle rectangle on hover */
   document.querySelectorAll('#desktopMenu a').forEach(link => {
     let raf = null;
     const loop = ts => {
@@ -134,7 +176,6 @@ document.addEventListener('DOMContentLoaded', () => {
     link.addEventListener('mouseleave', stop);
   });
 
-  /* ----- extras ----- */
   $('#pdfBtn')?.addEventListener('click', () => window.print());
 
   if (introHeader) {
@@ -153,7 +194,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* ----- gallery populate ----- */
   const galleryGrid = $('#galleryGrid');
   if (galleryGrid) loadGallery(galleryGrid);
 });
