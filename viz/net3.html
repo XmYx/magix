@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Convergent‑Evolving Mycelial Matrix</title>
+  <style>html,body{margin:0;padding:0;background:#000;overflow:hidden}canvas{display:block}</style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+</head>
+<body>
+<script>
+/**
+ * Convergent‑Evolving Mycelial Matrix
+ * --------------------------------------------------
+ * New logic layers:
+ *   1.  **Moving convergence nodes** act as temporary
+ *       attractors. The whole network instinctively
+ *       heads for the first node, then the next… until
+ *       the final destination (right‑middle).
+ *   2.  **Evolutionary bias** – branches closer to the
+ *       nearest attractor have a higher probability of
+ *       reproducing, mimicking natural selection of the
+ *       “fittest” contender.
+ *   3.  **Random path perturbations** using Perlin noise
+ *       give larger, organic sweeps and unpredictable
+ *       detours while respecting the convergence flow.
+ *   4.  All previous mechanics (finite life, collisions,
+ *       caps, pulsing visuals) still apply.
+ */
+
+// ————————————— CONST ———————————————————————————
+const CYCLE_SECONDS    = 30;     // grow→shrink total time (sec)
+const MAX_DEPTH        = 6;
+const BASE_SPAWN_PROB  = 0.03;   // baseline branching rate
+const GROW_SPEED       = 2.0;
+const SHRINK_SPEED     = 1.0;
+const BG_FADE          = 15;
+const MAX_BRANCHES     = 950;
+const BRANCH_LIFE_FR   = [260, 460];
+const COLLIDE_DIST     = 12;
+const REPRO_RATE       = 0.4;
+const ELITE_BIAS       = 0.9;    // weight 0–1; higher favours elites in spawn chance
+
+// Convergence node behaviour
+const NODE_COUNT       = 4;      // number of moving attractors (excluding endPt)
+const NODE_SPEED       = 0.12;   // px per frame each node drifts toward next
+const NOISE_SCALE      = 0.005;  // scale for Perlin noise steering
+
+// ————————————— VARS ————————————————————————————
+let startPt, endPt;
+let branches = [];
+let attractors = [];  // dynamic convergence points
+let cycleFrames;
+let paused = false;
+let noiseZ = 0;
+
+class Branch {
+  constructor(pos, vel, depth) {
+    this.pos   = pos.copy();
+    this.prev  = pos.copy();
+    this.vel   = vel.copy();
+    this.depth = depth;
+    this.life  = int(random(...BRANCH_LIFE_FR));
+    this.alive = true;
+  }
+
+  update(expanding) {
+    this.prev.set(this.pos);
+    this.life--;
+    if (this.life <= 0) { this.alive = false; return; }
+
+    if (expanding) {
+      // —— Compute steering toward nearest attractor ——
+      const nearest = nearestAttractor(this.pos);
+      const steer   = p5.Vector.sub(nearest, this.pos)
+                              .setMag(0.25); // subtle pull
+
+      // —— Add Perlin‑noise drift ——
+      const nAng = noise(this.pos.x * NOISE_SCALE,
+                         this.pos.y * NOISE_SCALE,
+                         noiseZ) * TWO_PI * 2;
+      const noiseVec = p5.Vector.fromAngle(nAng).setMag(0.4);
+
+      // —— Update velocity ——
+      this.vel.add(steer).add(noiseVec).limit(GROW_SPEED);
+      this.pos.add(this.vel);
+
+      // —— Fitness‑weighted branching ——
+      if (branches.length < MAX_BRANCHES && this.depth < MAX_DEPTH) {
+        const dist = p5.Vector.dist(this.pos, nearest);
+        const fitness = 1.0 - constrain(dist / (width), 0, 1); // 0 (far) → 1 (close)
+        const spawnProb = lerp(BASE_SPAWN_PROB, BASE_SPAWN_PROB * 4, fitness * ELITE_BIAS);
+        if (random() < spawnProb) {
+          const newVel = this.vel.copy()
+                                .rotate(random(-0.6, 0.6))
+                                .mult(random(0.5, 0.9));
+          branches.push(new Branch(this.pos.copy(), newVel, this.depth + 1));
+        }
+      }
+    } else {
+      // —— Contraction phase ——
+      const dir = p5.Vector.sub(endPt, this.pos).setMag(SHRINK_SPEED);
+      this.pos.add(dir);
+      if (p5.Vector.dist(this.pos, endPt) < 2) this.alive = false;
+    }
+
+    // —— Visual pulse ——
+    const pulse = 1.1 + 0.6 * sin(frameCount * 0.04);
+    strokeWeight(pulse);
+    line(this.prev.x, this.prev.y, this.pos.x, this.pos.y);
+  }
+}
+
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  initPoints();
+  cycleFrames = CYCLE_SECONDS * 60;
+  resetNetwork();
+  stroke(255);
+  noFill();
+  frameRate(60);
+}
+
+function draw() {
+  if (paused) return;
+  background(0, BG_FADE);
+
+  const expanding = (frameCount % cycleFrames) < cycleFrames / 2;
+
+  // —— Move convergence nodes toward their successors ——
+  if (expanding) moveAttractors();
+
+  // —— Update and draw branches ——
+  for (const b of branches) b.update(expanding);
+  branches = branches.filter(b => b.alive);
+
+  // —— Collision reproduction ——
+  if (expanding && branches.length < MAX_BRANCHES) {
+    collideAndReproduce();
+  }
+
+  // —— Restart when contraction phase empties ——
+  if (!expanding && branches.length === 0) {
+    initPoints();
+    resetNetwork();
+  }
+
+  noiseZ += 0.003; // animate noise field
+}
+
+// ————————————— Helpers ——————————————————————————
+function initPoints() {
+  startPt = createVector(width * 0.1, height * 0.5);
+  endPt   = createVector(width * 0.9, height * 0.5);
+
+  attractors = [];
+  for (let i = 1; i <= NODE_COUNT; i++) {
+    const lerpAmt = i / (NODE_COUNT + 1);
+    attractors.push(p5.Vector.lerp(startPt, endPt, lerpAmt));
+  }
+}
+
+function nearestAttractor(pt) {
+  let minD = Infinity, closest;
+  for (const a of attractors) {
+    const d = p5.Vector.dist(pt, a);
+    if (d < minD) { minD = d; closest = a; }
+  }
+  return closest || endPt;
+}
+
+function moveAttractors() {
+  for (let i = 0; i < attractors.length; i++) {
+    const target = (i === attractors.length - 1) ? endPt : attractors[i + 1];
+    const step = p5.Vector.sub(target, attractors[i])
+                         .limit(NODE_SPEED);
+    attractors[i].add(step);
+  }
+  // Remove nodes that arrive very close to their target, allows chain to progress
+  attractors = attractors.filter(a => p5.Vector.dist(a, endPt) > 4);
+}
+
+function resetNetwork() {
+  branches = [];
+  const initialVel = createVector(GROW_SPEED, 0);
+  branches.push(new Branch(startPt.copy(), initialVel, 0));
+}
+
+function collideAndReproduce() {
+  for (let i = 0; i < branches.length; i++) {
+    const a = branches[i];
+    for (let j = i + 1; j < branches.length; j++) {
+      const b = branches[j];
+      if (p5.Vector.dist(a.pos, b.pos) < COLLIDE_DIST && random() < REPRO_RATE) {
+        const newDir = p5.Vector.random2D()
+                                .lerp(p5.Vector.sub(endPt, a.pos).normalize(), 0.5)
+                                .setMag(GROW_SPEED);
+        branches.push(new Branch(a.pos.copy(), newDir, min(a.depth, b.depth) + 1));
+        if (branches.length >= MAX_BRANCHES) return;
+      }
+    }
+  }
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  initPoints();
+}
+
+function keyPressed() {
+  if (key === ' ') paused = !paused;
+  if (key === 'S') saveCanvas('frame', 'png');
+}
+</script>
+</body>
+</html>

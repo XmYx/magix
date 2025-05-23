@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mushroom Network Growth</title>
+  <style>
+    html, body { margin:0; padding:0; background:#000; overflow:hidden; }
+    canvas { display:block; }
+  </style>
+  <!-- p5.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+</head>
+<body>
+<script>
+/**
+ * Mushroom‑Network Growth
+ * -----------------------------------------------
+ * A soothing, ever‑morphing visual that grows out
+ * from a single point into a branching mycelium‑
+ * like network, then quietly collapses back to a
+ * point before beginning anew.
+ *
+ * — Controls & Tweaks —
+ *   • Press   [SPACE]  to pause / resume.
+ *   • Press   [S]      to save a frame.
+ *   • Adjust the CONST section for different
+ *     speeds, densities, colours, etc.
+ */
+
+// ——————  CONST  ————————————————————————————
+const CYCLE_SECONDS   = 20;   // total time for grow‑+‑shrink (sec)
+const MAX_DEPTH       = 6;    // branching generations
+const SPAWN_PROB      = 0.035;// chance a tip spawns a child each frame
+const GROW_SPEED      = 2.0;  // px per frame when expanding
+const SHRINK_SPEED    = 0.8;  // px per frame when contracting
+const BG_FADE         = 10;   // 0…255 – higher = longer trails
+
+// ——————  VARS  —————————————————————————————
+let center;
+let branches = [];
+let cycleFrames;
+let paused = false;
+
+class Branch {
+  constructor(pos, vel, depth) {
+    this.pos   = pos.copy();
+    this.prev  = pos.copy();
+    this.vel   = vel.copy();
+    this.depth = depth;
+    this.alive = true;
+  }
+
+  update(expanding) {
+    this.prev.set(this.pos);
+
+    if (expanding) {
+      // outward growth with gentle jitter
+      this.vel.rotate(random(-0.09, 0.09));
+      this.pos.add(this.vel);
+
+      // occasionally spawn a child branch
+      if (random() < SPAWN_PROB && this.depth < MAX_DEPTH) {
+        const newVel = this.vel.copy()
+                              .mult(random(0.6, 0.9))
+                              .rotate(random(-0.5, 0.5));
+        branches.push(new Branch(this.pos.copy(), newVel, this.depth + 1));
+      }
+    } else {
+      // contraction toward the heart
+      const dir = p5.Vector.sub(center, this.pos)
+                           .setMag(SHRINK_SPEED);
+      this.pos.add(dir);
+
+      // cull when close enough to centre
+      if (p5.Vector.dist(this.pos, center) < 2) this.alive = false;
+    }
+
+    // draw the segment with a subtle pulse
+    const pulse = 1.2 + 0.6 * sin(frameCount * 0.05);
+    strokeWeight(pulse);
+    line(this.prev.x, this.prev.y, this.pos.x, this.pos.y);
+  }
+}
+
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  center = createVector(width / 2, height / 2);
+  cycleFrames = CYCLE_SECONDS * 60; // assuming 60 fps
+  resetNetwork();
+  stroke(255);
+  noFill();
+  frameRate(60);
+}
+
+function draw() {
+  if (paused) return;
+
+  // translucent black overlay for trail effect
+  background(0, BG_FADE);
+
+  const expanding = (frameCount % cycleFrames) < cycleFrames / 2;
+
+  // update and draw all branches
+  for (const b of branches) b.update(expanding);
+  branches = branches.filter(b => b.alive);
+
+  // when contraction phase is done, start over
+  if (!expanding && branches.length === 0) resetNetwork();
+}
+
+function resetNetwork() {
+  branches = [];
+  const initialVel = p5.Vector.random2D().mult(GROW_SPEED);
+  branches.push(new Branch(center.copy(), initialVel, 0));
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  center.set(width / 2, height / 2);
+}
+
+function keyPressed() {
+  if (key === ' ') paused = !paused;     // Pause / resume
+  if (key === 'S') saveCanvas('frame', 'png');
+}
+</script>
+</body>
+</html>

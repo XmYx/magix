@@ -1,24 +1,69 @@
 // nav.js — global navigation bar with retro macOS style, mode toggle, blink-on-subitem,
-//           and *sparkle* state dispatcher (the animation itself lives in main.js)
+//           *sparkle* state dispatcher, and now a dynamic Visualisations dropdown
+//           (the animation itself lives in main.js)
 import { AboutFloat } from './aboutfloat.js';
 
 /* -------------------------------------------------------------------------- */
-/*  Primary links for the Pages menu                                          */
+/*  Primary links for the Pages menu (static)                                 */
 /* -------------------------------------------------------------------------- */
 export const NAV_LINKS = [
-  { href: 'index.html',  label: 'Home'          },
-  { href: 'gallery.html', label: 'Photo Gallery'},
-  { href: 'resume.html',  label: 'Resume'       },
-  { href: 'about.html',   label: 'About'        }
+  { href: 'index.html',   label: 'Home'           },
+  { href: 'gallery.html', label: 'Photo Gallery'  },
+  { href: 'resume.html',  label: 'Resume'         },
+  { href: 'about.html',   label: 'About'          }
 ];
+
+/**
+ * Fetch the list of visualisation HTML files found in /viz/.
+ * Works on servers that expose a directory listing; otherwise drops back
+ * to a manifest.json if present. Returns an array of { href, label }.
+ */
+async function fetchVizLinks () {
+  /* 1. Directory listing --------------------------------------------------- */
+  try {
+    const res = await fetch('viz/', { method: 'GET' });
+    if (res.ok) {
+      const txt  = await res.text();
+      const hrefs = [...txt.matchAll(/href="([^"]+\.html?)"/gi)]
+        .map(m => m[1])
+        .filter(h => !h.startsWith('#') && !h.startsWith('?'));
+
+      // ensure unique, prefix folder if missing
+      const seen  = new Set();
+      const files = hrefs
+        .map(h => h.startsWith('viz/') ? h : `viz/${h}`)
+        .filter(h => { if (seen.has(h)) return false; seen.add(h); return true; });
+
+      if (files.length) {
+        return files.map(h => ({
+          href  : h,
+          label : h.split('/').pop()
+                      .replace(/\.html?$/i, '')
+                      .replace(/[_-]/g, ' ')
+                      .replace(/\b\w/g, c => c.toUpperCase())
+        }));
+      }
+    }
+  } catch (_) { /* fall through */ }
+
+  /* 2. Manifest ------------------------------------------------------------ */
+  try {
+    const res = await fetch('viz/manifest.json', { cache: 'no-cache' });
+    if (res.ok) return await res.json();
+  } catch (_) { /* ignore */ }
+
+  return [];
+}
 
 let aboutWindow;
 
 /* -------------------------------------------------------------------------- */
 /*  Inject both navbars and wire up every interaction                         */
 /* -------------------------------------------------------------------------- */
-export function injectNav () {
-  const current = location.pathname.split('/').pop() || 'index.html';
+export async function injectNav () {
+  const current   = location.pathname.split('/').pop() || 'index.html';
+  const vizLinks  = await fetchVizLinks();
+  const hasViz    = vizLinks.length > 0;
 
   /* ---------- build the classic menu link lists ---------- */
   const linksDesktop = NAV_LINKS.map(
@@ -28,6 +73,31 @@ export function injectNav () {
   const linksMobile = NAV_LINKS.map(
     l => `<a href="${l.href}" class="block px-4 py-2 border-b border-gray-100 dark:border-gray-700 ${l.href === current ? 'font-semibold text-indigo-600' : ''}">${l.label}</a>`
   ).join('');
+
+  /* ---------- Visualisation dropdowns (built only if needed) -------------- */
+  const vizDropdownDesktop = hasViz ? `
+    <div class="relative group">
+      <button class="px-3 py-2 rounded-md hover:text-indigo-600 flex items-center gap-1">
+        Visualisations
+        <svg class="w-3 h-3 opacity-70" viewBox="0 0 20 20" fill="currentColor">
+          <path d="M5.23 7.21a.75.75 0 011.06.02L10 11.104l3.71-3.874a.75.75 0 111.08 1.04l-4.25 4.44a.75.75 0 01-1.08 0l-4.25-4.44a.75.75 0 01.02-1.06z" />
+        </svg>
+      </button>
+      <div class="absolute left-0 mt-1 hidden group-hover:block bg-white dark:bg-gray-800 rounded-md shadow-lg overflow-hidden z-50">
+        ${vizLinks.map(v => `<a href="${v.href}" class="block whitespace-nowrap px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700">${v.label}</a>`).join('')}
+      </div>
+    </div>` : '';
+
+  const vizDropdownMobile = hasViz ? `
+    <button id="vizToggleMobile" class="flex w-full items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-700">
+      <span>Visualisations</span>
+      <svg class="w-4 h-4 transition-transform" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M5.23 7.21a.75.75 0 011.06.02L10 11.104l3.71-3.874a.75.75 0 111.08 1.04l-4.25 4.44a.75.75 0 01-1.08 0l-4.25-4.44a.75.75 0 01.02-1.06z" />
+      </svg>
+    </button>
+    <div id="vizLinksMobile" class="hidden">
+      ${vizLinks.map(v => `<a href="${v.href}" class="block px-6 py-2 border-b border-gray-100 dark:border-gray-700">${v.label}</a>`).join('')}
+    </div>` : '';
 
   /* ---------- one tiny <style> for the retro look ---------- */
   const style = document.createElement('style');
@@ -58,7 +128,7 @@ export function injectNav () {
     <header id="originalNav" class="fixed top-0 inset-x-0 z-50 bg-white/70 dark:bg-gray-900/70 backdrop-blur shadow transition">
       <div class="max-w-6xl mx-auto flex items-center justify-between px-4 py-3 md:py-4">
         <a href="index.html" class="text-lg md:text-xl font-extrabold tracking-wide">Miklós Nagy</a>
-        <nav id="desktopMenu" class="hidden md:flex gap-4">${linksDesktop}</nav>
+        <nav id="desktopMenu" class="hidden md:flex gap-4">${linksDesktop}${vizDropdownDesktop}</nav>
         <div class="flex items-center gap-4">
           <!-- Sparkle slide-switch -->
           <label class="inline-flex items-center gap-2 cursor-pointer">
@@ -79,8 +149,10 @@ export function injectNav () {
           </button>
         </div>
       </div>
-      <nav id="mobileMenu" class="mobile-menu md:hidden">${linksMobile}</nav>
+      <nav id="mobileMenu" class="mobile-menu md:hidden">${linksMobile}${vizDropdownMobile}</nav>
     </header>`;
+
+  const vizRetroItems = hasViz ? vizLinks.map(v => `<li><a href="${v.href}">${v.label}</a></li>`).join('') : '';
 
   const retroNavHTML = `
     <header id="retroNav" class="retro-menubar">
@@ -95,6 +167,8 @@ export function injectNav () {
           <span>Pages</span>
           <ul class="dropdown">
             ${NAV_LINKS.map(l => `<li><a href="${l.href}">${l.label}</a></li>`).join('')}
+            ${hasViz ? '<li style="border-top:1px solid #999;margin:2px 4px;"></li>' : ''}
+            ${vizRetroItems}
           </ul>
         </li>
         <li class="menu-item">
@@ -126,6 +200,20 @@ export function injectNav () {
   document.body.insertAdjacentHTML('afterbegin', originalNavHTML + retroNavHTML);
 
   /* ----------------------------------------------------------------------
+   *  Extra mobile accordion for visualisations
+   * -------------------------------------------------------------------- */
+  if (hasViz) {
+    const vizToggleMobile = document.getElementById('vizToggleMobile');
+    const vizLinksMobile  = document.getElementById('vizLinksMobile');
+    if (vizToggleMobile && vizLinksMobile) {
+      vizToggleMobile.addEventListener('click', () => {
+        vizLinksMobile.classList.toggle('hidden');
+        vizToggleMobile.querySelector('svg').classList.toggle('rotate-180');
+      });
+    }
+  }
+
+  /* ----------------------------------------------------------------------
    * 1.  Sparkle checkbox synchronisation — NO infinite loop
    * -------------------------------------------------------------------- */
   const sparkleStd   = document.getElementById('sparkleToggleStandard');
@@ -141,37 +229,31 @@ export function injectNav () {
     sparkleStd.checked   = on;
     sparkleRetro.checked = on;
 
-    if (src !== 'std') {                 // avoid echoing our own event
+    if (src !== 'std') {
       const ev = new Event('change', { bubbles: false });
       ev.synthetic = true;
-      sparkleStd.dispatchEvent(ev);      // main.js picks this up
+      sparkleStd.dispatchEvent(ev);  // main.js picks this up
     }
   };
 
-  // user moved the classic switch
   sparkleStd.addEventListener('change', e => {
-    if (e.synthetic) return;             // ignore synthetic echoes
+    if (e.synthetic) return;
     setSparkles(sparkleStd.checked, 'std');
   });
+  sparkleRetro.addEventListener('change', () => setSparkles(sparkleRetro.checked, 'retro'));
 
-  // user toggled the retro checkbox
-  sparkleRetro.addEventListener('change', () =>
-    setSparkles(sparkleRetro.checked, 'retro')
-  );
-
-  // initial state (no events emitted)
   setSparkles(localStorage.getItem('sparkles') === 'on', 'init');
 
   /* ----------------------------------------------------------------------
    * 2.  Classic ⟷ retro navbar mode
    * -------------------------------------------------------------------- */
-  const stdT   = document.getElementById('standardToggle');
-  const retT   = document.getElementById('retroToggle');
-  const retTS  = document.getElementById('retroToggleStandard');
+  const stdT  = document.getElementById('standardToggle');
+  const retT  = document.getElementById('retroToggle');
+  const retTS = document.getElementById('retroToggleStandard');
 
   const updateNav = mode => {
     document.getElementById('originalNav').style.display = mode === 'standard' ? '' : 'none';
-    document.getElementById('retroNav'   ).style.display = mode === 'retro'    ? '' : 'none';
+    document.getElementById('retroNav').style.display    = mode === 'retro'    ? '' : 'none';
   };
 
   const setNavMode = mode => {
@@ -181,8 +263,8 @@ export function injectNav () {
     updateNav(mode);
   };
 
-  stdT .addEventListener('change', () => setNavMode(stdT.checked  ? 'standard' : 'retro'));
-  retT .addEventListener('change', () => setNavMode(retT.checked  ? 'retro'    : 'standard'));
+  stdT.addEventListener('change', () => setNavMode(stdT.checked  ? 'standard' : 'retro'));
+  retT.addEventListener('change', () => setNavMode(retT.checked  ? 'retro'    : 'standard'));
   retTS.addEventListener('change', () => setNavMode(retTS.checked ? 'retro'    : 'standard'));
 
   setNavMode(localStorage.getItem('navMode') || 'standard');
@@ -205,7 +287,7 @@ export function injectNav () {
     });
   });
 
-  // links inside the retro “Pages” dropdown
+  // links inside the retro “Pages” dropdown (this now includes viz links)
   document.querySelectorAll('#retroNav .dropdown li a').forEach(a => {
     a.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();

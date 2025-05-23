@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Amorph Tree‑of‑Life Network</title>
+  <style>
+    html,body{margin:0;padding:0;background:#000;overflow:hidden}
+    canvas{display:block}
+  </style>
+  <!-- p5.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+</head>
+<body>
+<script>
+/**
+ * Amorph Tree‑of‑Life ⇄ Game‑of‑Life
+ * --------------------------------------------------
+ * • Starts on the LEFT‑MID, journeys as a living
+ *   mycelium through the void, and finally funnels
+ *   itself into the RIGHT‑MID before rebirthing.
+ * • Branches have a finite life; when it expires the
+ *   segment evaporates.
+ * • If two active tips touch, they may fuse and spawn
+ *   a fresh shoot – a soft nod to reproduction.
+ * • Network never overgrows: global caps throttle
+ *   spawning and cull excess when needed.
+ * • All parameters live in CONST for quick tuning.
+ */
+
+// ————————————— CONST ———————————————————————————
+const CYCLE_SECONDS   = 24;     // grow‑→shrink total time (sec)
+const MAX_DEPTH       = 6;      // generations deep allowed
+const SPAWN_PROB      = 0.04;   // chance a tip spawns child each frame
+const GROW_SPEED      = 2.1;    // px per frame expanding
+const SHRINK_SPEED    = 1.0;    // px per frame contracting
+const BG_FADE         = 12;     // 0…255 – trail length
+const MAX_BRANCHES    = 900;    // hard cap → prevents overgrowth
+const BRANCH_LIFE_FR  = [240, 420]; // lifespan range (frames)
+const COLLIDE_DIST    = 12;     // px at which tips can merge
+const REPRO_RATE      = 0.45;   // probability a collision makes a child
+
+// ————————————— VARS ————————————————————————————
+let startPt, endPt;
+let branches = [];
+let cycleFrames;
+let paused = false;
+
+class Branch {
+  constructor(pos, vel, depth) {
+    this.pos   = pos.copy();    // current head
+    this.prev  = pos.copy();    // previous head (for drawing line)
+    this.vel   = vel.copy();    // velocity vector
+    this.depth = depth;         // generation depth
+    this.life  = int(random(...BRANCH_LIFE_FR));
+    this.alive = true;
+  }
+
+  update(expanding) {
+    this.prev.set(this.pos);
+
+    // ——— Ageing ———
+    this.life--;
+    if (this.life <= 0) {
+      this.alive = false;
+      return;
+    }
+
+    if (expanding) {
+      // Gentle wander while propagating
+      this.vel.rotate(random(-0.08, 0.08));
+      this.pos.add(this.vel);
+
+      // Chance to branch if population under cap
+      if (branches.length < MAX_BRANCHES && random() < SPAWN_PROB && this.depth < MAX_DEPTH) {
+        const newVel = this.vel.copy()
+                              .mult(random(0.55, 0.9))
+                              .rotate(random(-0.45, 0.45));
+        branches.push(new Branch(this.pos.copy(), newVel, this.depth + 1));
+      }
+    } else {
+      // Contract toward the final heart on the right
+      const dir = p5.Vector.sub(endPt, this.pos).setMag(SHRINK_SPEED);
+      this.pos.add(dir);
+
+      // Cull when sufficiently close to destination
+      if (p5.Vector.dist(this.pos, endPt) < 2) this.alive = false;
+    }
+
+    // ——— Visuals: pulsing stroke ———
+    const pulse = 1.1 + 0.6 * sin(frameCount * 0.04);
+    strokeWeight(pulse);
+    line(this.prev.x, this.prev.y, this.pos.x, this.pos.y);
+  }
+}
+
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  startPt = createVector(width * 0.1, height * 0.5);
+  endPt   = createVector(width * 0.9, height * 0.5);
+  cycleFrames = CYCLE_SECONDS * 60; // assume 60 fps
+  resetNetwork();
+  stroke(255);
+  noFill();
+  frameRate(60);
+}
+
+function draw() {
+  if (paused) return;
+
+  background(0, BG_FADE);
+
+  const expanding = (frameCount % cycleFrames) < cycleFrames / 2;
+
+  // 1) Update / draw branches ————————————————
+  for (const b of branches) b.update(expanding);
+  branches = branches.filter(b => b.alive);
+
+  // 2) Collisions & reproduction (only while expanding) ———
+  if (expanding && branches.length < MAX_BRANCHES) {
+    for (let i = 0; i < branches.length; i++) {
+      const a = branches[i];
+      for (let j = i + 1; j < branches.length; j++) {
+        const b = branches[j];
+        if (p5.Vector.dist(a.pos, b.pos) < COLLIDE_DIST && random() < REPRO_RATE) {
+          const newDir = p5.Vector.random2D()
+                                  .lerp(createVector(1, 0), 0.4) // slight bias rightwards
+                                  .setMag(GROW_SPEED);
+          branches.push(new Branch(a.pos.copy(), newDir, min(a.depth, b.depth) + 1));
+          if (branches.length >= MAX_BRANCHES) break;
+        }
+      }
+      if (branches.length >= MAX_BRANCHES) break;
+    }
+  }
+
+  // 3) Phase change reset ————————————————
+  if (!expanding && branches.length === 0) resetNetwork();
+}
+
+function resetNetwork() {
+  branches = [];
+  const initialVel = createVector(GROW_SPEED, random(-1, 1));
+  branches.push(new Branch(startPt.copy(), initialVel, 0));
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  startPt.set(width * 0.1, height * 0.5);
+  endPt.set(  width * 0.9, height * 0.5);
+}
+
+function keyPressed() {
+  if (key === ' ') paused = !paused;
+  if (key === 'S') saveCanvas('frame', 'png');
+}
+</script>
+</body>
+</html>
