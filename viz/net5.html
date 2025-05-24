@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Infinite Zoom Geometry - Real Pattern</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1e1e2f; }
+    canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+    .controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 10px;
+      border-radius: 8px;
+      color: white;
+      font-family: sans-serif;
+    }
+    .controls label { display: block; margin-top: 5px; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="controls">
+  <button id="pauseBtn">Pause</button>
+  <label>Zoom Timeline:
+    <input type="range" id="zoomSlider" min="0.1" max="10" step="0.01" value="1">
+  </label>
+  <label>Petal Count:
+    <input type="range" id="petalSlider" min="6" max="48" step="1" value="12">
+  </label>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let w = canvas.width = window.innerWidth;
+let h = canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => {
+  w = canvas.width = window.innerWidth;
+  h = canvas.height = window.innerHeight;
+});
+
+let zoom = 1;
+let zoomFactor = 1.01;
+let paused = false;
+let petals = 12;
+
+const pauseBtn = document.getElementById('pauseBtn');
+const zoomSlider = document.getElementById('zoomSlider');
+const petalSlider = document.getElementById('petalSlider');
+
+pauseBtn.onclick = () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+};
+
+zoomSlider.oninput = () => {
+  zoom = parseFloat(zoomSlider.value);
+};
+
+petalSlider.oninput = () => {
+  petals = parseInt(petalSlider.value);
+};
+
+function drawMandala(cx, cy, scale) {
+  const baseRadius = 30 * scale;
+  const petalLayers = 3;
+
+  ctx.strokeStyle = 'cyan';
+  ctx.lineWidth = 0.4;
+
+  for (let layer = 1; layer <= petalLayers; layer++) {
+    const radius = baseRadius * layer;
+
+    // Circles around
+    for (let i = 0; i < petals; i++) {
+      const angle = (Math.PI * 2 * i) / petals;
+      const x = cx + radius * Math.cos(angle);
+      const y = cy + radius * Math.sin(angle);
+      ctx.beginPath();
+      ctx.arc(x, y, baseRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Connecting lines
+    for (let i = 0; i < petals; i++) {
+      for (let j = i + 1; j < petals; j++) {
+        const angle1 = (Math.PI * 2 * i) / petals;
+        const angle2 = (Math.PI * 2 * j) / petals;
+        const x1 = cx + radius * Math.cos(angle1);
+        const y1 = cy + radius * Math.sin(angle1);
+        const x2 = cx + radius * Math.cos(angle2);
+        const y2 = cy + radius * Math.sin(angle2);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Inner web
+  const innerPoints = 24;
+  for (let i = 0; i < innerPoints; i++) {
+    for (let j = i + 1; j < innerPoints; j++) {
+      const angle1 = (Math.PI * 2 * i) / innerPoints;
+      const angle2 = (Math.PI * 2 * j) / innerPoints;
+      const x1 = cx + baseRadius * Math.cos(angle1);
+      const y1 = cy + baseRadius * Math.sin(angle1);
+      const x2 = cx + baseRadius * Math.cos(angle2);
+      const y2 = cy + baseRadius * Math.sin(angle2);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+}
+
+function animate() {
+  ctx.clearRect(0, 0, w, h);
+  drawMandala(w / 2, h / 2, zoom);
+  if (!paused) zoom *= zoomFactor;
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>
