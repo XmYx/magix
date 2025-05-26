@@ -2,127 +2,172 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Infinite Zoom Geometry - Real Pattern</title>
+  <title>Sacred Hypnotic Geometry</title>
   <style>
-    body { margin: 0; overflow: hidden; background: #1e1e2f; }
-    canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+    html, body { margin: 0; height: 100%; background: black; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
     .controls {
       position: absolute;
       top: 10px;
       left: 10px;
-      z-index: 10;
       background: rgba(0, 0, 0, 0.6);
-      padding: 10px;
-      border-radius: 8px;
       color: white;
+      padding: 10px;
+      border-radius: 10px;
       font-family: sans-serif;
+      z-index: 10;
+      max-width: 270px;
     }
     .controls label { display: block; margin-top: 5px; }
   </style>
+    <!-- Site logic (nav, sparkles, …) -->
+<!--  <script defer src="js/main.js" type="module"></script>-->
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div class="controls">
-  <button id="pauseBtn">Pause</button>
-  <label>Zoom Timeline:
-    <input type="range" id="zoomSlider" min="0.1" max="10" step="0.01" value="1">
+  <label>Pattern:
+    <select id="patternSelect">
+      <option value="sri">Sri Yantra Enhanced</option>
+    </select>
+  </label>
+  <label>Circle Corners:
+    <input type="checkbox" id="cornerCirclesToggle" checked>
+  </label>
+  <label>Pulse Corners:
+    <input type="checkbox" id="pulseToggle" checked>
+  </label>
+  <label>Alternate Spin:
+    <input type="checkbox" id="alternateSpinToggle" checked>
+  </label>
+  <label>Tunnel Mode:
+    <input type="checkbox" id="tunnelToggle">
+  </label>
+  <label>Trail Length:
+    <input type="range" id="trailSlider" min="0" max="1" step="0.01" value="0.08">
   </label>
   <label>Petal Count:
-    <input type="range" id="petalSlider" min="6" max="48" step="1" value="12">
+    <input type="range" id="petalSlider" min="2" max="16" step="1" value="8">
+  </label>
+  <label>Square Count:
+    <input type="range" id="squareSlider" min="1" max="24" step="1" value="6">
+  </label>
+  <label>Zoom:
+    <input type="range" id="zoomSlider" min="0.1" max="10" step="0.01" value="1">
+  </label>
+  <label>Speed:
+    <input type="range" id="speedSlider" min="0.1" max="5" step="0.1" value="1">
+  </label>
+  <label>Color Blending:
+    <input type="checkbox" id="blendToggle" checked>
   </label>
 </div>
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-let w = canvas.width = window.innerWidth;
-let h = canvas.height = window.innerHeight;
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
-window.addEventListener('resize', () => {
-  w = canvas.width = window.innerWidth;
-  h = canvas.height = window.innerHeight;
-});
-
+let time = 0;
 let zoom = 1;
-let zoomFactor = 1.01;
-let paused = false;
-let petals = 12;
+let speed = 1;
+let petalCount = 8;
+let squareCount = 6;
+let showCornerCircles = true;
+let pulseCorners = true;
+let blendColor = true;
+let alternateSpin = true;
+let tunnelMode = false;
+let trailLength = 0.08;
 
-const pauseBtn = document.getElementById('pauseBtn');
 const zoomSlider = document.getElementById('zoomSlider');
+const speedSlider = document.getElementById('speedSlider');
 const petalSlider = document.getElementById('petalSlider');
+const squareSlider = document.getElementById('squareSlider');
+const cornerCirclesToggle = document.getElementById('cornerCirclesToggle');
+const pulseToggle = document.getElementById('pulseToggle');
+const blendToggle = document.getElementById('blendToggle');
+const alternateSpinToggle = document.getElementById('alternateSpinToggle');
+const tunnelToggle = document.getElementById('tunnelToggle');
+const trailSlider = document.getElementById('trailSlider');
 
-pauseBtn.onclick = () => {
-  paused = !paused;
-  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-};
+zoomSlider.oninput = () => zoom = parseFloat(zoomSlider.value);
+speedSlider.oninput = () => speed = parseFloat(speedSlider.value);
+petalSlider.oninput = () => petalCount = parseInt(petalSlider.value);
+squareSlider.oninput = () => squareCount = parseInt(squareSlider.value);
+cornerCirclesToggle.oninput = () => showCornerCircles = cornerCirclesToggle.checked;
+pulseToggle.oninput = () => pulseCorners = pulseToggle.checked;
+blendToggle.oninput = () => blendColor = blendToggle.checked;
+alternateSpinToggle.oninput = () => alternateSpin = alternateSpinToggle.checked;
+tunnelToggle.oninput = () => tunnelMode = tunnelToggle.checked;
+trailSlider.oninput = () => trailLength = parseFloat(trailSlider.value);
 
-zoomSlider.oninput = () => {
-  zoom = parseFloat(zoomSlider.value);
-};
+function drawSriYantra(cx, cy, t) {
+  ctx.lineWidth = 1.2;
+  const maxSquares = tunnelMode ? Math.floor((t * 0.3) / 10) + squareCount : squareCount;
 
-petalSlider.oninput = () => {
-  petals = parseInt(petalSlider.value);
-};
-
-function drawMandala(cx, cy, scale) {
-  const baseRadius = 30 * scale;
-  const petalLayers = 3;
-
-  ctx.strokeStyle = 'cyan';
-  ctx.lineWidth = 0.4;
-
-  for (let layer = 1; layer <= petalLayers; layer++) {
-    const radius = baseRadius * layer;
-
-    // Circles around
-    for (let i = 0; i < petals; i++) {
-      const angle = (Math.PI * 2 * i) / petals;
-      const x = cx + radius * Math.cos(angle);
-      const y = cy + radius * Math.sin(angle);
-      ctx.beginPath();
-      ctx.arc(x, y, baseRadius, 0, Math.PI * 2);
-      ctx.stroke();
+  for (let i = 1; i <= maxSquares; i++) {
+    const r = tunnelMode ? 40 + i * 10 : 40 + i * 25;
+    const spin = alternateSpin && i % 2 === 0 ? -1 : 1;
+    const angleOffset = t * 0.0005 * spin;
+    ctx.beginPath();
+    for (let j = 0; j < 4; j++) {
+      const angle = j * Math.PI / 2 + angleOffset;
+      const x = cx + r * Math.cos(angle);
+      const y = cy + r * Math.sin(angle);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     }
+    ctx.closePath();
+    ctx.strokeStyle = blendColor ? `hsl(${(t + i * 10) % 360}, 100%, 70%)` : 'white';
+    ctx.stroke();
 
-    // Connecting lines
-    for (let i = 0; i < petals; i++) {
-      for (let j = i + 1; j < petals; j++) {
-        const angle1 = (Math.PI * 2 * i) / petals;
-        const angle2 = (Math.PI * 2 * j) / petals;
-        const x1 = cx + radius * Math.cos(angle1);
-        const y1 = cy + radius * Math.sin(angle1);
-        const x2 = cx + radius * Math.cos(angle2);
-        const y2 = cy + radius * Math.sin(angle2);
+    if (showCornerCircles) {
+      for (let j = 0; j < 4; j++) {
+        const angle = j * Math.PI / 2 + angleOffset;
+        const x = cx + r * Math.cos(angle);
+        const y = cy + r * Math.sin(angle);
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        const radius = pulseCorners ? 8 + 4 * Math.sin(t * 0.01 + j) : 10;
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.stroke();
       }
     }
   }
 
-  // Inner web
-  const innerPoints = 24;
-  for (let i = 0; i < innerPoints; i++) {
-    for (let j = i + 1; j < innerPoints; j++) {
-      const angle1 = (Math.PI * 2 * i) / innerPoints;
-      const angle2 = (Math.PI * 2 * j) / innerPoints;
-      const x1 = cx + baseRadius * Math.cos(angle1);
-      const y1 = cy + baseRadius * Math.sin(angle1);
-      const x2 = cx + baseRadius * Math.cos(angle2);
-      const y2 = cy + baseRadius * Math.sin(angle2);
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
+  for (let i = 0; i < petalCount; i++) {
+    const angle = (Math.PI * 2 * i) / petalCount;
+    const innerR = 30;
+    const outerR = 140;
+    const x1 = cx + innerR * Math.cos(angle);
+    const y1 = cy + innerR * Math.sin(angle);
+    const x2 = cx + outerR * Math.cos(angle + Math.PI / petalCount);
+    const y2 = cy + outerR * Math.sin(angle + Math.PI / petalCount);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.strokeStyle = blendColor ? `hsl(${(t * 5 + i * 30) % 360}, 100%, 65%)` : 'white';
+    ctx.stroke();
   }
 }
 
 function animate() {
-  ctx.clearRect(0, 0, w, h);
-  drawMandala(w / 2, h / 2, zoom);
-  if (!paused) zoom *= zoomFactor;
+  ctx.fillStyle = `rgba(0, 0, 0, ${trailLength})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const pulse = zoom * (1 + 0.02 * Math.sin(time * 0.02));
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(pulse, pulse);
+  ctx.translate(-cx, -cy);
+
+  drawSriYantra(cx, cy, time);
+
+  ctx.restore();
+
+  time += speed;
   requestAnimationFrame(animate);
 }
 

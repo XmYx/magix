@@ -9,6 +9,7 @@ import { AboutFloat } from './aboutfloat.js';
 export const NAV_LINKS = [
   { href: 'index.html',   label: 'Home'           },
   { href: 'gallery.html', label: 'Photo Gallery'  },
+  { href: 'docbrowser.html', label: 'Documentations'  },
   { href: 'resume.html',  label: 'Resume'         },
   { href: 'about.html',   label: 'About'          }
 ];

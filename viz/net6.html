@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sacred Hypnotic Geometry</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: black; overflow: hidden; font-family: sans-serif; color: white; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 12px;
+      border-radius: 12px;
+      z-index: 10;
+    }
+    #controls label {
+      display: block;
+      margin: 6px 0 2px;
+    }
+    #controls input[type=range] {
+      width: 180px;
+    }
+  </style>
+    <!-- Site logic (nav, sparkles, …) -->
+<!--  <script defer src="js/main.js" type="module"></script>-->
+</head>
+<body>
+<div id="controls">
+  <label>Radius: <input type="range" id="radius" min="10" max="100" value="40"></label>
+  <label>Rings: <input type="range" id="rings" min="1" max="10" value="5"></label>
+  <label>Trail Opacity: <input type="range" id="trail" min="0" max="0.2" step="0.01" value="0.08"></label>
+  <label>Pulse Strength: <input type="range" id="pulse" min="0" max="0.2" step="0.01" value="0.03"></label>
+  <label>Hue Speed: <input type="range" id="hueSpeed" min="1" max="50" value="10"></label>
+  <label>Bloom: <input type="range" id="bloom" min="0" max="10" step="1" value="3"></label>
+</div>
+
+<canvas id="canvas"></canvas>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+let time = 0;
+
+// Control parameters
+const params = {
+  radius: 40,
+  rings: 5,
+  trail: 0.08,
+  pulse: 0.03,
+  hueSpeed: 10,
+  bloom: 3
+};
+
+// Hook up UI controls
+['radius', 'rings', 'trail', 'pulse', 'hueSpeed', 'bloom'].forEach(id => {
+  document.getElementById(id).addEventListener('input', e => {
+    const val = parseFloat(e.target.value);
+    params[id] = isNaN(val) ? e.target.value : val;
+  });
+});
+
+function drawFlowerOfLife(cx, cy, radius, rings, t) {
+  const hexRadius = radius * Math.sin(Math.PI / 3);
+  const hue = (t * params.hueSpeed) % 360;
+
+  for (let b = 0; b < params.bloom; b++) {
+    ctx.strokeStyle = `hsla(${(hue + b * 20) % 360}, 100%, ${80 - b * 10}%, ${1 / (b + 1)})`;
+    ctx.lineWidth = 1.2 + b * 0.5;
+
+    for (let q = -rings; q <= rings; q++) {
+      for (let r = -rings; r <= rings; r++) {
+        const x = cx + (q * 1.5 * radius);
+        const y = cy + (r * hexRadius * 2 + (q % 2) * hexRadius);
+        if (Math.hypot(x - cx, y - cy) <= rings * radius * 1.5) {
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+}
+
+function animate() {
+  ctx.fillStyle = `rgba(0, 0, 0, ${params.trail})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const pulse = 1 + params.pulse * Math.sin(time * 0.05);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(pulse, pulse);
+  ctx.translate(-cx, -cy);
+  drawFlowerOfLife(cx, cy, params.radius, params.rings, time);
+  ctx.restore();
+
+  time++;
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>
