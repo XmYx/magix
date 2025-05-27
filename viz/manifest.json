@@ -3,5 +3,7 @@
   { "href": "viz/net2.html",    "label": "Boom"    },
   { "href": "viz/net3.html",      "label": "Evolve"    },
   { "href": "viz/net4.html",      "label": "Evolve 2"      },
-  { "href": "viz/net5.html",      "label": "Petals"      }
+  { "href": "viz/net5.html",      "label": "Petals"      },
+  { "href": "viz/net6.html",      "label": "WhatIsDis"      },
+  { "href": "viz/net7.html",      "label": "Meditate"      }
 ]

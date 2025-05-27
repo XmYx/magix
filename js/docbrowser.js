@@ -1,20 +1,15 @@
-/**
+/* ----------------------------------------------------------------------------
  * docbrowser.js — self-populating Documentation explorer
  *
- * It crawls the /docs folder of the **current GitHub repository** and
- * builds a collapsible tree view ( <details>/<summary> ) in the sidebar.
- * Clicking any Markdown file renders it into the main pane via marked.js.
+ * ✨ 2025-05-27  —  Magic-flavoured revision
+ *     • Properly distinguishes between “load a new document” and
+ *       “jump to an in-page anchor”, so #heading links work again.
+ *     • Supports deep-linking to headings in other docs using either
+ *       “#path/to/file.md::anchor”  or  “#path/to/file.md#anchor” syntax.
+ *     • Adds smooth scrolling, robust ID escaping and tiny quality-of-life
+ *       touches sprinkled all around ✨.
  *
- * Customisation:
- *   – If your site is NOT served from GitHub Pages, set OWNER / REPO below.
- *   – Change DEFAULT_BRANCH if you use something other than “main”.
- *   – Call  initDocsBrowser({ owner, repo, branch })  manually if needed.
- *
- * Dependencies (already loaded in docs.html):
- *   – marked  (Markdown → HTML)
- *   – Prism   (code highlighting)
- *   – Tailwind CSS prose classes for typography
- */
+ * ---------------------------------------------------------------------------*/
 
 const DEFAULT_BRANCH = 'main';
 const API_BASE       = 'https://api.github.com';
@@ -46,64 +41,117 @@ export async function initDocsBrowser (opts = {}) {
   /* ------------------------------------------------------------------ */
   /*  3.  Wire-up navigation & deep-linking (#path/to/file.md)          */
   /* ------------------------------------------------------------------ */
-  const sidebar = document.getElementById('docSidebar');
-  const content = document.getElementById('docContent');
+  const sidebar      = document.getElementById('docSidebar');
+  const content      = document.getElementById('docContent');
+  let   currentDoc   = '';
 
-  sidebar.addEventListener('click', e => {
-    const a = e.target.closest('a.doc-link');
-    if (!a) return;
-    e.preventDefault();
-    const path = a.getAttribute('href').slice(1);   // strip leading '#'
-    if (location.hash.slice(1) !== path) location.hash = path;
-    else loadDoc(path);                             // same hash → reload
-  });
+  /* -- Utilities ------------------------------------------------------ */
+  const scrollToAnchor = anchor => {
+    if (!anchor) return;
+    // wait for next tick so Prism/DOM have finished
+    requestAnimationFrame(() => {
+      const el = content.querySelector(`#${CSS.escape(anchor)}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
 
-  window.addEventListener('hashchange', handleHash);
-  handleHash();                                     // initial load
+  /**
+   * Split the raw hash (no leading ‘#’) into { path?, anchor? }.
+   * Supports:
+   *   #onlyHeading               →  { anchor:"onlyHeading" }
+   *   #file.md                   →  { path:"file.md" }
+   *   #folder/file.md#heading    →  { path:"folder/file.md", anchor:"heading" }
+   *   #folder/file.md::heading   →  { path:"folder/file.md", anchor:"heading" }
+   */
+  const parseHash = raw => {
+    if (!raw) return { };
+    const decoded = decodeURIComponent(raw);
+    // new double-colon syntax takes precedence
+    const dbl = decoded.indexOf('::');
+    if (dbl !== -1) return { path: decoded.slice(0, dbl), anchor: decoded.slice(dbl + 2) };
+    // classic file.md#anchor syntax
+    const hash = decoded.indexOf('#');
+    if (hash !== -1 && /\.md/i.test(decoded.slice(0, hash)))
+      return { path: decoded.slice(0, hash), anchor: decoded.slice(hash + 1) };
+    // plain file or plain anchor
+    return /\.md$/i.test(decoded) || decoded.includes('/')
+      ? { path: decoded }
+      : { anchor: decoded };
+  };
 
-  async function handleHash () {
-    const hashPath = decodeURIComponent(location.hash.slice(1));
-    const target   = hashPath || pickDefaultDoc(mdPaths);
-    if (!target) return;
-    await loadDoc(target);
-    highlightActiveLink(target);
-    openParents(target);
-  }
-
-  async function loadDoc (relPath) {
-    content.innerHTML = '<p class="italic text-gray-500">Loading…</p>';
-    try {
-      const url  = `${RAW_BASE}/${owner}/${repo}/${branch}/docs/${relPath}`;
-      const resp = await fetch(url, { cache: 'no-cache' });
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-      const md   = await resp.text();
-      content.innerHTML = marked.parse(md, { mangle:false, headerIds:false });
-      // re-run Prism after injecting HTML
-      if (window.Prism) Prism.highlightAll();
-      // scroll document back to the top
-      content.scrollTo({ top: 0 });
-    } catch (err) {
-      content.innerHTML =
-        `<p class="text-red-600">Error loading <code>${relPath}</code>: ${err.message}</p>`;
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  4.  Small helpers                                                 */
-  /* ------------------------------------------------------------------ */
-  function highlightActiveLink (path) {
+  const highlightActiveLink = path => {
     sidebar.querySelectorAll('a.doc-link')
       .forEach(a => a.classList.toggle('font-semibold', a.hash.slice(1) === path));
-  }
+  };
 
   /* Open <details> ancestors so the active file is visible */
-  function openParents (path) {
+  const openParents = path => {
+    if (!path) return;
     const parts = path.split('/');
     let acc = '';
     for (let i = 0; i < parts.length - 1; i++) {
       acc += (i ? '/' : '') + parts[i];
       const dt = sidebar.querySelector(`details[data-path="${acc}"]`);
       if (dt) dt.open = true;
+    }
+  };
+
+  /* --------------------------------------------------------------- */
+  /*  Event wires                                                    */
+  /* --------------------------------------------------------------- */
+  sidebar.addEventListener('click', e => {
+    const a = e.target.closest('a.doc-link');
+    if (!a) return;
+    e.preventDefault();
+    const path = a.getAttribute('href').slice(1);   // strip leading '#'
+    if (location.hash.slice(1) !== path) location.hash = path; // triggers hashchange
+    else handleHash();                              // same hash → manual handle
+  });
+
+  window.addEventListener('hashchange', handleHash);
+  handleHash(); // initial load ✨
+
+  /* --------------------------------------------------------------- */
+  /*  Core hash-handling logic                                       */
+  /* --------------------------------------------------------------- */
+  async function handleHash () {
+    const { path, anchor } = parseHash(location.hash.slice(1));
+
+    // Scenario 1: anchor-only change inside the *current* doc
+    if (!path && anchor) {
+      scrollToAnchor(anchor);
+      return;
+    }
+
+    // Scenario 2: path change (new doc) — load it, *then* jump to anchor
+    const targetPath = path || pickDefaultDoc(mdPaths);
+    if (!targetPath) return;
+
+    if (targetPath !== currentDoc) {
+      await loadDoc(targetPath);
+    }
+    if (anchor) scrollToAnchor(anchor);
+
+    highlightActiveLink(targetPath);
+    openParents(targetPath);
+  }
+
+  /* --------------------------------------------------------------- */
+  /*  Fetch + render a single Markdown file                          */
+  /* --------------------------------------------------------------- */
+  async function loadDoc (relPath) {
+    currentDoc          = relPath; // remember current doc
+    content.innerHTML   = '<p class="italic text-gray-500">Loading…</p>';
+    try {
+      const url  = `${RAW_BASE}/${owner}/${repo}/${branch}/docs/${relPath}`;
+      const resp = await fetch(url, { cache: 'no-cache' });
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const md   = await resp.text();
+      content.innerHTML = marked.parse(md, { mangle:false, headerIds:false });
+      if (window.Prism) Prism.highlightAll();
+      content.scrollTo({ top: 0 });
+    } catch (err) {
+      content.innerHTML = `<p class="text-red-600">Error loading <code>${relPath}</code>: ${err.message}</p>`;
     }
   }
 }
@@ -136,7 +184,7 @@ async function fetchDocsList (owner, repo, branch) {
       const res  = await fetch('docs/', { method:'GET' });
       if (!res.ok) return [];
       const html = await res.text();
-      return [...html.matchAll(/href="([^"]+\.md)"/gi)].map(m => m[1]);
+      return [...html.matchAll(/href="([^\"]+\.md)"/gi)].map(m => m[1]);
     } catch { return []; }
   }
 }
@@ -193,6 +241,6 @@ function renderTree (node, accPath = '') {
 /*  Pick sensible default (README.md > first file)                        */
 /* ---------------------------------------------------------------------- */
 function pickDefaultDoc (paths) {
-  const readme = paths.find(p => /\/?readme\.md$/i.test(p));
+  const readme = paths.find(p => /\/??readme\.md$/i.test(p));
   return readme || paths[0];
 }
