@@ -2,36 +2,46 @@
 
 // Text blocks: About, Poem, Kindness Generator
 const aboutText = `( hit any key or press any key to skip this typing… )
-Hi, I’m Miklós, a multidisciplinary creative who loves fusing art and code.
+Hi, I’m Miklós—a multidisciplinary creative who sees no borders between code, camera, and consciousness.
 
-Playing and developing LTX Video whenever I can,
-as I feel like the approach is what's closest to the most optimal ai video related model kit
-thus far, and there is a tremendous amount of potential in both the company and community.
+For the past decade I’ve drifted (and sprinted) across film sets, city streets, neural nets, and late‑night coffee counters—always learning, always looking for that spark where technology and soul light each other up.
 
-Over the past decade I’ve hopped between
-film sets, street photography,
-development and ai art, always learning.
+Current orbit
 
-I believe in open knowledge, good coffee, and the power of a well-timed
-somewhat witty but PC joke. When I’m not pushing pixels
-you’ll find me with my friends, shooting with a camera
-that captures moments or creates them,
-engages or disturbs anyone,
-aims to effect in a way,
-playing with my doggos,
-working on a car,
-thinking,
-being.
+LTX Video – an ever‑evolving,
+community‑driven model kit where human intuition and machine intelligence co‑manifest moving images. I tinker, test, and tune because I feel its approach is the closest we’ve come to an optimal AI‑video symbiosis.
 
-Thank you,
+Street & set photography – a camera that captures moments…
+or conjures them,
+that engages,
+disturbs,
+and (I hope) ultimately heals.
 
-for your attention,
+Guiding threads
 
-Last but not least, I'd like to Thank All the people
-that have already helped me along this journey,
-and the ones remain to be met, without you all,
-existence is merely a bad dream to be awaken from,
-while co-existence in peace is a fairy tale coming true.`.trim();
+Oneness & unity – Every pixel is part of the same canvas; every line of code, a lyric in the same song. I create to remember—and remind—that separation is the great illusion.
+Awareness – Art is a tuning fork. What we give our attention to, we amplify.
+Intention shapes perception – perception shapes reality. I aim to code and compose with clarity so reality has something clear to echo back.
+Open knowledge – Ideas want to breathe. I share what I learn because progress accelerates in community—and because good coffee tastes better in company.
+
+When I’m not pushing pixels
+You’ll find me hanging with friends,
+running with my doggos,
+wrench‑deep in a project car,
+or simply being—so
+that the next burst of
+creative energy arrives
+on a welcome breeze.
+
+Gratitude
+
+To everyone who has nudged, questioned, mentored, and laughed with me: you make this dream lucid. To those I’ve yet to meet: can’t wait to co‑create.
+May we keep weaving awareness, tuning reality with kindness, and scripting a universe where coexistence isn’t a fairy tale but the default scene.
+Thank you for your attention—and for sharing the journey.
+
+If you have read this long, allow me to share that there is a set intention for a large, scalable impact driven project, first in Budapest, well outlined, thought out, looking for benefactors/investors to achieve it, in case you are it, or you know him or her, please do contact me at magix@magixworld.com`.trim();
+
+
 
 const poemText = `a void pulses in my skull, a silent signal
 broadcast only to phantom receivers—
