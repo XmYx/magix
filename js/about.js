@@ -39,9 +39,9 @@ To everyone who has nudged, questioned, mentored, and laughed with me: you make 
 May we keep weaving awareness, tuning reality with kindness, and scripting a universe where coexistence isn’t a fairy tale but the default scene.
 Thank you for your attention—and for sharing the journey.
 
-If you have read this long, allow me to share that there is a set intention for a large, scalable impact driven project, first in Budapest, well outlined, thought out, looking for benefactors/investors to achieve it, in case you are it, or you know him or her, please do contact me at magix@magixworld.com`.trim();
+If you have read this long, allow me to share that there is a set intention for a large, scalable impact driven project, first in Budapest, well outlined, thought out, looking for benefactors/investors to achieve it, in case you are it, or you know him or her, please do contact me at magix@magixworld.com
 
-
+ETH: 0x50b2B553a75F82Ea83E4E295d8472fE88B331fF5`.trim();
 
 const poemText = `a void pulses in my skull, a silent signal
 broadcast only to phantom receivers—
