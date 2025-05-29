@@ -1,4 +1,4 @@
-<!-- index.html -->
+<!-- index.html – “Raindrops → morphing-castle blob” background -->
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
@@ -13,27 +13,40 @@
   <!-- Site logic (nav, sparkles, …) -->
   <script defer src="js/main.js" type="module"></script>
 
-  <!-- Pastel “rain-of-tiles” background  ───────────────────────────── -->
+  <!-- Fluid raindrop-to-castle background  ──────────────────── -->
   <style>
     :root{
-      /* tweakables */
-      --tile-size: 38px;
-      --fall-speed: 60;        /* px per second */
-      --jitter: 4;             /* horizontal wiggle */
+      /* ~~~ tweakables ~~~ */
+      --tile-size: 40;               /* virtual pixel size used for castle grid */
+
+      /* Droplet behaviour */
+      --drops-per-second: 10;
+      --drop-min-radius: 2;
+      --drop-max-radius: 12;
+      --drop-min-speed: 20;          /* px / s */
+      --drop-max-speed: 60;
+
+      /* Blob (castle) */
+      --blob-blur: 10px;             /* higher = softer edge */
+      --blob-opacity: 0.65;          /* must be < text opacity */
+      --blob-wobble-px: 3;           /* how far vertices wiggle */
+      --blob-wobble-speed: 0.002;    /* radians per ms */
+
+      /* Colour palette */
+      --random-colours: 1;           /* 1 = pick random pastel, 0 = monochrome */
+      --blob-colour: #fde2e4;        /* used when random-colours = 0 */
+
       --pastel-1:#fde2e4; --pastel-2:#e2ece9;
       --pastel-3:#dfe7fd; --pastel-4:#e0bbec; --pastel-5:#fff1d0;
     }
-    #bgTiles{
+    #bgTiles{ /* we still reuse the id, but now drawing drops & blob */
       position:fixed;inset:0;z-index:-2;pointer-events:none;
-      /* soft fade at bottom so tiles “fold away” */
-      mask-image:linear-gradient(#000 0 70%,#0000 100%);
     }
   </style>
 </head>
 
 <body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
 
-  <!-- canvas lives behind everything -->
   <canvas id="bgTiles"></canvas>
 
   <!-- Hero -->
@@ -54,62 +67,156 @@
     © 2025 Miklós Nagy — Built with a bit of <span class="animate-pulse">✨ magix</span>
   </footer>
 
-  <!-- background logic -->
+  <!-- ▼▼▼  Background animation logic  ▼▼▼ -->
   <script type="module">
+    /*
+      Raindrops fall from random x positions with random radii & speed.
+      When they reach the baseline (visible bottom), they are absorbed
+      into a constantly “wobbling” blob that roughly resembles a two-tower
+      castle silhouette. The blob sticks to the page bottom, stays
+      horizontally centred, is fully visible, and rendered with lower
+      opacity than foreground text.
+    */
     const cvs = document.getElementById('bgTiles');
     const ctx = cvs.getContext('2d');
-    const pastels = [
-      getComputedStyle(document.documentElement).getPropertyValue('--pastel-1'),
-      getComputedStyle(document.documentElement).getPropertyValue('--pastel-2'),
-      getComputedStyle(document.documentElement).getPropertyValue('--pastel-3'),
-      getComputedStyle(document.documentElement).getPropertyValue('--pastel-4'),
-      getComputedStyle(document.documentElement).getPropertyValue('--pastel-5')
+
+    /* ------- CSS → JS helpers -------------------------------- */
+    const css = getComputedStyle(document.documentElement);
+    const PX      = n=>parseFloat(css.getPropertyValue(n));
+    const VAL     = n=>css.getPropertyValue(n);
+
+    const TILE    = PX('--tile-size');
+    const PPS     = PX('--drops-per-second');
+    const R_MIN   = PX('--drop-min-radius');
+    const R_MAX   = PX('--drop-max-radius');
+    const VY_MIN  = PX('--drop-min-speed');
+    const VY_MAX  = PX('--drop-max-speed');
+
+    const BLUR    = VAL('--blob-blur');
+    const B_OPAC  = PX('--blob-opacity');
+    const WOBBLE  = PX('--blob-wobble-px');
+    const W_SPEED = PX('--blob-wobble-speed');
+
+    const RANDCLR = !!PX('--random-colours'); // 0/1 bool from css
+    const BLOB_CLR= VAL('--blob-colour');
+    const PASTELS = [VAL('--pastel-1'),VAL('--pastel-2'),VAL('--pastel-3'),VAL('--pastel-4'),VAL('--pastel-5')];
+
+    /* ------- Castle silhouette definition (grid) -------------- */
+    const ART = [
+      '  ##     ##  ',
+      ' ####   #### ',
+      '#############',
+      '#############',
+      '#############',
+      '#############',
+      '   #######   ',
+      '   #######   '
     ];
+    let verts = []; // will hold vertex data with random phase for wobble
 
-    /* tile objects live in a grid so they feel “aligned” */
-    const size   = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--tile-size'));
-    const speed  = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fall-speed'));
-    const jitter = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--jitter'));
+    /* ------- State arrays ------------------------------------- */
+    const droplets = [];
 
-    let W,H,cols,rows,tiles;
-    const resize = () => {
-      W = cvs.width  = innerWidth  * devicePixelRatio;
-      H = cvs.height = innerHeight * devicePixelRatio;
-      ctx.scale(devicePixelRatio,devicePixelRatio);
+    /* Canvas sizing & castle vertex pre-calc ------------------- */
+    let BASELINE = 0, DPR = 1, viewW = 0, viewH = 0;
+    function resize(){
+      DPR   = devicePixelRatio || 1;
+      viewW = innerWidth;
+      viewH = innerHeight;
+      cvs.width  = viewW * DPR;
+      cvs.height = viewH * DPR;
+      ctx.setTransform(DPR,0,0,DPR,0,0);
 
-      cols  = Math.ceil(innerWidth  / size);
-      rows  = Math.ceil(innerHeight / size) + 2;   // extra rows above view
-      tiles = [];
+      BASELINE = viewH - TILE * 0.5; // half tile above bottom so fully visible
 
-      /* spawn one tile per column for a tidy left-leaning stripe */
-      for(let c=0;c<cols;c++){
-        tiles.push({
-          x: c*size,
-          y: -Math.random()*innerHeight,
-          clr: pastels[Math.random()*pastels.length|0],
-          drift: (Math.random()-.5)*jitter  // gentle tremble
+      // compute castle grid offset (centered)
+      const artW = ART[0].length;
+      const artH = ART.length;
+      const offsetX = (viewW - artW * TILE) / 2;
+      const offsetY = BASELINE - artH * TILE;
+
+      // Build vertex list once, each with unique phase for wobble
+      verts = [];
+      ART.forEach((row, ry)=>{
+        [...row].forEach((ch, cx)=>{
+          if(ch === '#'){
+            const x = offsetX + cx * TILE + TILE/2; // centre of cell
+            const y = offsetY + ry * TILE + TILE/2;
+            verts.push({x, y, phase: Math.random()*Math.PI*2});
+          }
+        });
+      });
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    /* ------- Raindrop spawner --------------------------------- */
+    let lastSpawn = 0;
+    function spawnDrops(now){
+      const interval = 2000 / PPS;
+      while(now - lastSpawn > interval){
+        lastSpawn += interval;
+        droplets.push({
+          x: Math.random()*viewW,
+          y: -20,
+          r: R_MIN + Math.random()*(R_MAX - R_MIN),
+          vy: VY_MIN + Math.random()*(VY_MAX - VY_MIN),
+          clr: RANDCLR ? PASTELS[Math.random()*PASTELS.length|0] : BLOB_CLR
         });
       }
-    };
-    resize(); addEventListener('resize', resize);
+    }
 
-    let last = 0;
-    function tick(t){
-      const dt = (t-last)/1000; last = t;
-      ctx.clearRect(0,0,innerWidth,innerHeight);
+    /* ------- Draw blob (castle) -------------------------------- */
+    function drawBlob(now){
+      ctx.save();
+      ctx.filter = `blur(${BLUR})`;
+      ctx.globalAlpha = B_OPAC;
+      ctx.fillStyle = RANDCLR ? PASTELS[2] : BLOB_CLR; // base fill
 
-      tiles.forEach(tile=>{
-        tile.y += speed*dt;
-        const drawX = tile.x + Math.sin((tile.y/30))*tile.drift; // trembling path
-        ctx.fillStyle = tile.clr;
-        ctx.fillRect(drawX, tile.y, size, size);
-
-        /* recycle when leaving screen */
-        if(tile.y > innerHeight + size){
-          tile.y = -size * (rows*Math.random());
-          tile.clr = pastels[Math.random()*pastels.length|0];
-        }
+      ctx.beginPath();
+      verts.forEach((v,i)=>{
+        const ang = now * W_SPEED + v.phase;
+        const dx = Math.sin(ang) * WOBBLE;
+        const dy = Math.cos(ang) * WOBBLE;
+        if(i===0) ctx.moveTo(v.x+dx, v.y+dy);
+        else      ctx.lineTo(v.x+dx, v.y+dy);
       });
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    /* ------- Main loop ---------------------------------------- */
+    let prevT = 0;
+    function tick(t){
+      const now = t;
+      const dt  = now - prevT; prevT = now;
+
+      spawnDrops(now);
+
+      // physics for droplets
+      droplets.forEach(d => d.y += d.vy * dt/1000);
+      // remove ones past baseline
+      for(let i=droplets.length-1; i>=0; i--){
+        if(droplets[i].y - droplets[i].r > BASELINE){
+          droplets.splice(i,1);
+        }
+      }
+
+      // clear screen
+      ctx.clearRect(0,0,viewW,viewH);
+
+      // draw droplets
+      ctx.globalAlpha = 1;
+      droplets.forEach(d => {
+        ctx.fillStyle = d.clr;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, d.r, 0, Math.PI*2);
+        ctx.fill();
+      });
+
+      // draw blob castle silhouette
+      drawBlob(now);
 
       requestAnimationFrame(tick);
     }

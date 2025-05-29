@@ -1,0 +1,157 @@
+<!-- game.html – “Space Drift” 2.5‑D minigame  ---------------------------------
+A full‑screen canvas star‑field that fakes 3‑D depth by projecting 3‑D blob
+coordinates (x,y,z) onto 2‑D space.  Blobs scale with distance so moving the
+camera using WSAD + Q/E feels like flying through space.  Stars/planets that
+pass the camera are recycled far ahead to create the illusion of an infinite
+universe. --------------------------------------------------------------------- -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Drift – Minigame</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#000;}
+    #hud{
+      position:fixed;
+      top:1rem;left:1rem;
+      font-family:system-ui,sans-serif;
+      font-size:14px;line-height:1.4;
+      color:#fff;
+      background:rgba(0,0,0,.45);
+      padding:.5rem .75rem;
+      border-radius:.5rem;
+      user-select:none;
+    }
+    #hud kbd{font-weight:600;background:#222;padding:0 .25rem;border-radius:3px;}
+  </style>
+</head>
+<body>
+  <canvas id="space"></canvas>
+  <div id="hud">
+    <strong>Flight controls</strong><br>
+    <kbd>W</kbd>/<kbd>S</kbd> – forward/back<br>
+    <kbd>A</kbd>/<kbd>D</kbd> – strafe left/right<br>
+    <kbd>Q</kbd>/<kbd>E</kbd> – descend/ascend
+  </div>
+
+  <script>
+  /* -------------------------------------------------------------
+     Configuration & helpers
+  ------------------------------------------------------------- */
+  const NUM_BLOBS      = 400;   // how many stars/planets in the field
+  const WORLD_SPAN_XY  = 800;   // spawn cube half‑size in X & Y
+  const NEAR           = 1;     // near plane to avoid div by 0
+  const FAR            = 3000;  // far plane for respawn distance
+  const FOV            = 300;   // projection factor – bigger = stronger depth
+
+  const SPEED          = 220;   // forward / strafe speed (units/second)
+  const VERT_SPEED     = 160;   // ascend/descend speed
+
+  // optional random pastel palette used if true; else monochrome white
+  const RANDOM_COLOUR  = true;
+  const PASTELS        = ['#fde2e4','#e2ece9','#dfe7fd','#e0bbec','#fff1d0'];
+
+  /* -------------------------------------------------------------
+     Canvas & resize helpers
+  ------------------------------------------------------------- */
+  const cvs = document.getElementById('space');
+  const ctx = cvs.getContext('2d');
+
+  let DPR, viewW, viewH;
+  function resize(){
+    DPR   = devicePixelRatio || 1;
+    viewW = innerWidth;
+    viewH = innerHeight;
+    cvs.width  = viewW * DPR;
+    cvs.height = viewH * DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  addEventListener('resize', resize, {passive:true});
+  resize();
+
+  /* -------------------------------------------------------------
+     World objects (blobs)
+  ------------------------------------------------------------- */
+  const blobs = [];
+
+  function randColour(){
+    return RANDOM_COLOUR ? PASTELS[Math.random()*PASTELS.length|0] : '#fff';
+  }
+
+  function respawn(blob, ahead=true){
+    blob.x = (Math.random() - .5) * WORLD_SPAN_XY * 2;
+    blob.y = (Math.random() - .5) * WORLD_SPAN_XY * 2;
+    blob.z = (ahead ? 1 : 0) * (1000 + Math.random()*2000);
+    blob.radius = 2 + Math.random()*8;
+    blob.colour = randColour();
+  }
+
+  for(let i=0;i<NUM_BLOBS;i++){
+    const b={};
+    respawn(b,true);
+    b.z = Math.random()*FAR; // sprinkle throughout depth slice
+    blobs.push(b);
+  }
+
+  /* -------------------------------------------------------------
+     Camera & input handling
+  ------------------------------------------------------------- */
+  const cam = {x:0,y:0,z:0};
+  const keys = Object.create(null);
+  addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;});
+  addEventListener('keyup',  e=>{keys[e.key.toLowerCase()]=false;});
+
+  /* -------------------------------------------------------------
+     Main loop
+  ------------------------------------------------------------- */
+  let last = 0;
+  function loop(t){
+    const dt = (t - last)/1000; last = t;
+
+    // camera movement
+    if(keys['w']) cam.z -= SPEED * dt;
+    if(keys['s']) cam.z += SPEED * dt;
+    if(keys['a']) cam.x -= SPEED * dt;
+    if(keys['d']) cam.x += SPEED * dt;
+    if(keys['q']) cam.y -= VERT_SPEED * dt;
+    if(keys['e']) cam.y += VERT_SPEED * dt;
+
+    ctx.clearRect(0,0,viewW,viewH);
+
+    const cx = viewW/2;
+    const cy = viewH/2;
+
+    blobs.forEach(blob=>{
+      // relative coords
+      const relZ = blob.z - cam.z;
+      if(relZ < NEAR){
+        // passed blob → recycle far ahead
+        respawn(blob,true);
+        blob.z = cam.z + FAR * 0.8 + Math.random()*FAR*0.2;
+        return;
+      }
+
+      const scale = FOV / relZ;
+      const x2d   = cx + (blob.x - cam.x) * scale;
+      const y2d   = cy - (blob.y - cam.y) * scale;
+      const r     = blob.radius * scale;
+
+      // skip if minuscule or off‑screen
+      if(r < 0.3 || x2d < -50 || x2d > viewW+50 || y2d < -50 || y2d > viewH+50)
+        return;
+
+      ctx.globalAlpha = Math.min(1, scale*2); // fade distant blips
+      ctx.fillStyle   = blob.colour;
+      ctx.beginPath();
+      ctx.arc(x2d,y2d,r,0,Math.PI*2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
