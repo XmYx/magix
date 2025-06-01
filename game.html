@@ -1,15 +1,9 @@
-<!-- game.html – “Space Drift” 2.5‑D minigame  ---------------------------------
-A full‑screen canvas star‑field that fakes 3‑D depth by projecting 3‑D blob
-coordinates (x,y,z) onto 2‑D space.  Blobs scale with distance so moving the
-camera using WSAD + Q/E feels like flying through space.  Stars/planets that
-pass the camera are recycled far ahead to create the illusion of an infinite
-universe. --------------------------------------------------------------------- -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Space Drift – Minigame</title>
+  <title>Space Drift – Enhanced</title>
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#000;}
     #hud{
@@ -18,54 +12,63 @@ universe. --------------------------------------------------------------------- 
       font-family:system-ui,sans-serif;
       font-size:14px;line-height:1.4;
       color:#fff;
-      background:rgba(0,0,0,.45);
-      padding:.5rem .75rem;
-      border-radius:.5rem;
+      background:rgba(0,0,0,.5);
+      padding:.6rem .9rem;
+      border-radius:.6rem;backdrop-filter:blur(4px);
       user-select:none;
     }
-    #hud kbd{font-weight:600;background:#222;padding:0 .25rem;border-radius:3px;}
+    #hud kbd{font-weight:600;background:#222;padding:0 .3rem;border-radius:3px;}
+    #hud .metric{display:block;margin-top:.4rem;font-weight:600;}
   </style>
 </head>
 <body>
   <canvas id="space"></canvas>
   <div id="hud">
     <strong>Flight controls</strong><br>
-    <kbd>W</kbd>/<kbd>S</kbd> – forward/back<br>
-    <kbd>A</kbd>/<kbd>D</kbd> – strafe left/right<br>
-    <kbd>Q</kbd>/<kbd>E</kbd> – descend/ascend
+    <kbd>W</kbd>/<kbd>S</kbd> – thrust forward/back<br>
+    <kbd>A</kbd>/<kbd>D</kbd> – strafe left/right<br>
+    <kbd>Q</kbd>/<kbd>E</kbd> – descend/ascend<br>
+    <kbd>←</kbd>/<kbd>→</kbd> – yaw left/right<br>
+    <kbd>↑</kbd>/<kbd>↓</kbd> – pitch up/down
+    <span class="metric">Speed: <span id="spd">0</span> u/s</span>
   </div>
 
   <script>
   /* -------------------------------------------------------------
-     Configuration & helpers
+     Configuration
   ------------------------------------------------------------- */
-  const NUM_BLOBS      = 400;   // how many stars/planets in the field
-  const WORLD_SPAN_XY  = 800;   // spawn cube half‑size in X & Y
-  const NEAR           = 1;     // near plane to avoid div by 0
-  const FAR            = 3000;  // far plane for respawn distance
-  const FOV            = 300;   // projection factor – bigger = stronger depth
+  const NUM_BLOBS   = 400;   // stars/planets in the field
+  const WORLD_SPAN  = 800;   // half‑size of spawn cube in X & Y
+  const NEAR        = 0.5;   // near plane in camera space
+  const FAR         = 3000;  // respawn distance ahead of camera (world Z)
+  const FOV         = 380;   // projection factor
 
-  const SPEED          = 220;   // forward / strafe speed (units/second)
-  const VERT_SPEED     = 160;   // ascend/descend speed
+  const ACCEL       = 320;   // linear acceleration (u/s²)
+  const MAX_SPEED   = 900;   // terminal speed (u/s)
+  const DAMPING     = 0.995; // velocity retention per frame
+  const ANG_SPEED   = Math.PI; // angular speed (rad/s)
 
-  // optional random pastel palette used if true; else monochrome white
-  const RANDOM_COLOUR  = true;
-  const PASTELS        = ['#fde2e4','#e2ece9','#dfe7fd','#e0bbec','#fff1d0'];
+  const RANDOM_COLOUR = true;
+  const PASTELS = ['#fde2e4','#e2ece9','#dfe7fd','#e0bbec','#fff1d0'];
 
   /* -------------------------------------------------------------
-     Canvas & resize helpers
+     Canvas helpers (high‑DPI aware)
   ------------------------------------------------------------- */
   const cvs = document.getElementById('space');
   const ctx = cvs.getContext('2d');
-
   let DPR, viewW, viewH;
   function resize(){
-    DPR   = devicePixelRatio || 1;
+    DPR = devicePixelRatio || 1;
     viewW = innerWidth;
     viewH = innerHeight;
+
+    cvs.style.width  = viewW + 'px';
+    cvs.style.height = viewH + 'px';
     cvs.width  = viewW * DPR;
     cvs.height = viewH * DPR;
-    ctx.setTransform(DPR,0,0,DPR,0,0);
+
+    ctx.setTransform(1,0,0,1,0,0); // reset
+    ctx.scale(DPR, DPR);           // CSS‑pixels → device‑pixels
   }
   addEventListener('resize', resize, {passive:true});
   resize();
@@ -74,80 +77,169 @@ universe. --------------------------------------------------------------------- 
      World objects (blobs)
   ------------------------------------------------------------- */
   const blobs = [];
-
   function randColour(){
     return RANDOM_COLOUR ? PASTELS[Math.random()*PASTELS.length|0] : '#fff';
   }
-
-  function respawn(blob, ahead=true){
-    blob.x = (Math.random() - .5) * WORLD_SPAN_XY * 2;
-    blob.y = (Math.random() - .5) * WORLD_SPAN_XY * 2;
-    blob.z = (ahead ? 1 : 0) * (1000 + Math.random()*2000);
+  function respawn(blob){
+    blob.x = (Math.random() - .5) * WORLD_SPAN * 2;
+    blob.y = (Math.random() - .5) * WORLD_SPAN * 2;
+    blob.z = 1000 + Math.random()*2000; // always ahead in world +Z
     blob.radius = 2 + Math.random()*8;
     blob.colour = randColour();
   }
-
-  for(let i=0;i<NUM_BLOBS;i++){
-    const b={};
-    respawn(b,true);
-    b.z = Math.random()*FAR; // sprinkle throughout depth slice
-    blobs.push(b);
-  }
+  for(let i=0;i<NUM_BLOBS;i++){ const b={}; respawn(b); b.z *= Math.random(); blobs.push(b);}  // sprinkle in depth
 
   /* -------------------------------------------------------------
-     Camera & input handling
+     Camera & physics
   ------------------------------------------------------------- */
-  const cam = {x:0,y:0,z:0};
+  const cam = {
+    pos: {x:0, y:0, z:0},
+    vel: {x:0, y:0, z:0},
+    yaw: 0,   // heading (rad)
+    pitch: 0  // look up/down (rad)
+  };
+
+  /* -------------------------------------------------------------
+     Input handling
+  ------------------------------------------------------------- */
   const keys = Object.create(null);
-  addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;});
-  addEventListener('keyup',  e=>{keys[e.key.toLowerCase()]=false;});
+  const ACTIVE_KEYS = [
+    'w','a','s','d','q','e',
+    'arrowup','arrowdown','arrowleft','arrowright'
+  ];
+  addEventListener('keydown', e=>{
+    const k = e.key.toLowerCase();
+    if(ACTIVE_KEYS.includes(k)) e.preventDefault();
+    keys[k] = true;
+  });
+  addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+  /* -------------------------------------------------------------
+     Math helpers
+  ------------------------------------------------------------- */
+  function clampVec3(v, max){
+    const len = Math.hypot(v.x, v.y, v.z);
+    if(len > max){ const s = max/len; v.x*=s; v.y*=s; v.z*=s; }
+  }
 
   /* -------------------------------------------------------------
      Main loop
   ------------------------------------------------------------- */
+  const speedEl = document.getElementById('spd');
   let last = 0;
   function loop(t){
-    const dt = (t - last)/1000; last = t;
+    const dt = (t - last) / 1000; last = t;
 
-    // camera movement
-    if(keys['w']) cam.z -= SPEED * dt;
-    if(keys['s']) cam.z += SPEED * dt;
-    if(keys['a']) cam.x -= SPEED * dt;
-    if(keys['d']) cam.x += SPEED * dt;
-    if(keys['q']) cam.y -= VERT_SPEED * dt;
-    if(keys['e']) cam.y += VERT_SPEED * dt;
+    /* ---- Orientation updates ---- */
+    if(keys['arrowleft'])  cam.yaw  += ANG_SPEED * dt;
+    if(keys['arrowright']) cam.yaw  -= ANG_SPEED * dt;
+    if(keys['arrowup'])    cam.pitch += ANG_SPEED * dt;
+    if(keys['arrowdown'])  cam.pitch -= ANG_SPEED * dt;
 
+    // constrain pitch to avoid gimbal lock
+    cam.pitch = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, cam.pitch));
+
+    /* ---- Direction vectors (from Euler angles) ---- */
+    const cosYaw = Math.cos(cam.yaw),   sinYaw = Math.sin(cam.yaw);
+    const cosPit = Math.cos(cam.pitch), sinPit = Math.sin(cam.pitch);
+
+    const fwd = {
+      x:  sinYaw * cosPit,
+      y: -sinPit,
+      z:  cosYaw * cosPit
+    };
+    const right = { x:  cosYaw, y: 0, z: -sinYaw };
+    const up    = { x:  sinYaw * sinPit, y: cosPit, z: cosYaw * sinPit };
+
+    /* ---- Acceleration handling ---- */
+    if(keys['w']){
+      cam.vel.x += fwd.x * ACCEL * dt;
+      cam.vel.y += fwd.y * ACCEL * dt;
+      cam.vel.z += fwd.z * ACCEL * dt;
+    }
+    if(keys['s']){
+      cam.vel.x -= fwd.x * ACCEL * dt;
+      cam.vel.y -= fwd.y * ACCEL * dt;
+      cam.vel.z -= fwd.z * ACCEL * dt;
+    }
+    if(keys['a']){
+      cam.vel.x -= right.x * ACCEL * dt;
+      cam.vel.y -= right.y * ACCEL * dt;
+      cam.vel.z -= right.z * ACCEL * dt;
+    }
+    if(keys['d']){
+      cam.vel.x += right.x * ACCEL * dt;
+      cam.vel.y += right.y * ACCEL * dt;
+      cam.vel.z += right.z * ACCEL * dt;
+    }
+    if(keys['e']){
+      cam.vel.x += up.x * ACCEL * dt;
+      cam.vel.y += up.y * ACCEL * dt;
+      cam.vel.z += up.z * ACCEL * dt;
+    }
+    if(keys['q']){
+      cam.vel.x -= up.x * ACCEL * dt;
+      cam.vel.y -= up.y * ACCEL * dt;
+      cam.vel.z -= up.z * ACCEL * dt;
+    }
+
+    /* ---- Velocity damping & clamping ---- */
+    cam.vel.x *= DAMPING;
+    cam.vel.y *= DAMPING;
+    cam.vel.z *= DAMPING;
+    clampVec3(cam.vel, MAX_SPEED);
+
+    /* ---- Position update ---- */
+    cam.pos.x += cam.vel.x * dt;
+    cam.pos.y += cam.vel.y * dt;
+    cam.pos.z += cam.vel.z * dt;
+
+    /* ---- Rendering ---- */
     ctx.clearRect(0,0,viewW,viewH);
-
-    const cx = viewW/2;
-    const cy = viewH/2;
+    const cx = viewW / 2;
+    const cy = viewH / 2;
 
     blobs.forEach(blob=>{
-      // relative coords
-      const relZ = blob.z - cam.z;
-      if(relZ < NEAR){
-        // passed blob → recycle far ahead
-        respawn(blob,true);
-        blob.z = cam.z + FAR * 0.8 + Math.random()*FAR*0.2;
-        return;
+      // recycle blobs that passed behind the camera in world Z
+      if(blob.z + cam.pos.z < -NEAR){
+        respawn(blob);
+        blob.z += cam.pos.z + FAR * 0.8 + Math.random()*FAR*0.2;
       }
 
-      const scale = FOV / relZ;
-      const x2d   = cx + (blob.x - cam.x) * scale;
-      const y2d   = cy - (blob.y - cam.y) * scale;
+      // world‑relative vector
+      const dx = blob.x - cam.pos.x;
+      const dy = blob.y - cam.pos.y;
+      const dz = blob.z - cam.pos.z;
+
+      // camera‑space (apply inverse yaw)
+      const x1 =  cosYaw * dx + sinYaw * dz;
+      const z1 = -sinYaw * dx + cosYaw * dz;
+      const y1 = dy;
+
+      // inverse pitch (rotate around X)
+      const y2 =  cosPit * y1 + sinPit * z1;
+      const z2 = -sinPit * y1 + cosPit * z1;
+
+      if(z2 < NEAR) return; // behind camera
+
+      const scale = FOV / z2;
+      const x2d   = cx + x1 * scale;
+      const y2d   = cy - y2 * scale;
       const r     = blob.radius * scale;
 
-      // skip if minuscule or off‑screen
-      if(r < 0.3 || x2d < -50 || x2d > viewW+50 || y2d < -50 || y2d > viewH+50)
-        return;
+      if(r < 0.3 || x2d < -50 || x2d > viewW + 50 || y2d < -50 || y2d > viewH + 50) return;
 
-      ctx.globalAlpha = Math.min(1, scale*2); // fade distant blips
+      ctx.globalAlpha = Math.min(1, scale * 1.8);
       ctx.fillStyle   = blob.colour;
       ctx.beginPath();
-      ctx.arc(x2d,y2d,r,0,Math.PI*2);
+      ctx.arc(x2d, y2d, r, 0, Math.PI*2);
       ctx.fill();
     });
     ctx.globalAlpha = 1;
+
+    /* ---- HUD speed update ---- */
+    const spd = Math.hypot(cam.vel.x, cam.vel.y, cam.vel.z);
+    speedEl.textContent = spd.toFixed(0);
 
     requestAnimationFrame(loop);
   }
