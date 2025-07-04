@@ -28,7 +28,8 @@ export const NAV_LINKS = [
   { href: 'docbrowser.html', label: 'Documentations'  },
   { href: 'resume.html',  label: 'Resume'         },
   { href: 'about.html',   label: 'About'          },
-  { href: 'game.html',    label: 'Game'           }
+  { href: 'game.html',    label: 'Game'           },
+  { href: 'pathmaker.html',    label: 'Paths'           }
 ];
 
 // Convenience partitions — keeps the logic readable

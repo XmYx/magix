@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Retro Path Maker</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: #0f0;
+      font-family: 'Press Start 2P', monospace;
+    }
+    #canvas {
+      display: block;
+      background: #000;
+      border: 4px solid #0f0;
+    }
+    #ui {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+    }
+    #ui label {
+      margin-right: 16px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+    }
+    #ui input, #ui select {
+      font-family: inherit;
+      font-size: 12px;
+      background: #000;
+      color: #0f0;
+      border: 1px solid #0f0;
+      padding: 2px 4px;
+      margin-left: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <label>Actors:<input id="actorCount" type="number" min="1" value="1"></label>
+    <label>Prompt:<input id="promptInput" type="text" placeholder="Enter prompt..."></label>
+    <label><input type="checkbox" id="showGrid">Show Grid</label>
+    <label>Path Mode:<select id="pathMode">
+      <option value="visible">Remain Visible</option>
+      <option value="fade">Fade Trails</option>
+    </select></label>
+  </div>
+  <canvas id="canvas"></canvas>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const actorCountInput = document.getElementById('actorCount');
+    const promptInput = document.getElementById('promptInput');
+    const showGridBox = document.getElementById('showGrid');
+    const pathModeSel = document.getElementById('pathMode');
+    let nodes = [], actors = [], tick = 0;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function computePath(ax, ay) {
+      const toVisit = nodes.slice();
+      const path = [];
+      let cx = ax, cy = ay;
+      while (toVisit.length > 0) {
+        let minDist = Infinity, minIdx = 0;
+        toVisit.forEach((n, i) => {
+          const d = Math.hypot(n.x - cx, n.y - cy);
+          if (d < minDist) {
+            minDist = d;
+            minIdx = i;
+          }
+        });
+        const next = toVisit.splice(minIdx, 1)[0];
+        path.push(next);
+        cx = next.x;
+        cy = next.y;
+      }
+      return path;
+    }
+
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const count = Math.max(1, parseInt(actorCountInput.value) || 1);
+      nodes.push({x, y});
+      for (let i = 0; i < count; i++) {
+        const a = {x, y, path: computePath(x, y), idx: 0};
+        actors.push(a);
+      }
+    });
+
+    canvas.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      nodes = nodes.filter(n => Math.hypot(n.x - x, n.y - y) > 10);
+      actors.forEach(a => {
+        a.path = computePath(a.x, a.y);
+        a.idx = 0;
+      });
+    });
+
+    function drawGrid() {
+      const size = 50;
+      ctx.strokeStyle = '#003300';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += size) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += size) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+    }
+
+    function animate() {
+      tick++;
+      if (pathModeSel.value === 'fade') {
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      if (showGridBox.checked) drawGrid();
+
+      nodes.forEach(n => {
+        ctx.fillStyle = '#0f0';
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 6, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+
+      actors.forEach(a => {
+        if (a.idx >= a.path.length) {
+          a.path = computePath(a.x, a.y);
+          a.idx = 0;
+        }
+        const pts = [{x: a.x, y: a.y}, ...a.path.slice(a.idx)];
+
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        pts.slice(1).forEach((pt, i) => {
+          const prev = pts[i];
+          const dx = pt.x - prev.x, dy = pt.y - prev.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const mx = (prev.x + pt.x) / 2, my = (prev.y + pt.y) / 2;
+          const nx = -dy / len, ny = dx / len;
+          const amp = 20;
+          const phase = tick * 0.1 + i * 0.2;
+          const cx = mx + nx * amp * Math.sin(phase);
+          const cy = my + ny * amp * Math.sin(phase);
+          ctx.strokeStyle = '#00f';
+          ctx.quadraticCurveTo(cx, cy, pt.x, pt.y);
+        });
+        ctx.stroke();
+
+        if (pts[1]) {
+          const p0 = pts[0], p1 = pts[1];
+          const dx = p1.x - p0.x, dy = p1.y - p0.y, l = Math.hypot(dx, dy) || 1;
+          const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+          const nx = -dy / l, ny = dx / l;
+          const amp = 20;
+          const phase = tick * 0.1;
+          const cx = mx + nx * amp * Math.sin(phase);
+          const cy = my + ny * amp * Math.sin(phase);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#f00';
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.quadraticCurveTo(cx, cy, p1.x, p1.y);
+          ctx.stroke();
+
+          const dist = Math.hypot(dx, dy);
+          const sp = 1;
+          if (dist > sp) {
+            a.x += dx / dist * sp;
+            a.y += dy / dist * sp;
+          } else {
+            a.x = p1.x;
+            a.y = p1.y;
+            a.idx++;
+          }
+        }
+
+        ctx.fillStyle = '#ff0';
+        ctx.fillRect(a.x - 4, a.y - 4, 8, 8);
+      });
+
+      if (promptInput.value) {
+        ctx.fillStyle = '#0f0';
+        ctx.font = '12px monospace';
+        ctx.fillText(promptInput.value, 16, canvas.height - 16);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
