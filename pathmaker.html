@@ -2,44 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Retro Path Maker</title>
+  <title>Retro Path Maker with Evolutionary Life</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: #000;
-      color: #0f0;
-      font-family: 'Press Start 2P', monospace;
-    }
-    #canvas {
-      display: block;
-      background: #000;
-      border: 4px solid #0f0;
-    }
-    #ui {
-      position: absolute;
-      top: 16px;
-      left: 16px;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-    }
-    #ui label {
-      margin-right: 16px;
-      font-size: 12px;
-      display: flex;
-      align-items: center;
-    }
-    #ui input, #ui select {
-      font-family: inherit;
-      font-size: 12px;
-      background: #000;
-      color: #0f0;
-      border: 1px solid #0f0;
-      padding: 2px 4px;
-      margin-left: 4px;
-    }
+    body { margin: 0; overflow: hidden; background: #000; color: #0f0; font-family: 'Press Start 2P', monospace; }
+    #canvas { display: block; background: #000; border: 4px solid #0f0; }
+    #ui { position: absolute; top: 16px; left: 16px; z-index: 10; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    #ui label { font-size: 12px; display: flex; align-items: center; }
+    #ui input, #ui select { font-family: inherit; font-size: 12px; background: #000; color: #0f0; border: 1px solid #0f0; padding: 2px 4px; margin-left: 4px; }
   </style>
 </head>
 <body>
@@ -50,7 +20,18 @@
     <label>Path Mode:<select id="pathMode">
       <option value="visible">Remain Visible</option>
       <option value="fade">Fade Trails</option>
+      <option value="trail">Actor Trails</option>
     </select></label>
+    <label><input type="checkbox" id="showLoad">Show Load</label>
+    <label><input type="checkbox" id="enableBirths" checked>Enable Births</label>
+    <label>Birth Prob:<input id="birthProb" type="number" step="0.01" min="0" max="1" value="0.05"></label>
+    <label>Mut Rate:<input id="mutationRate" type="number" step="0.01" min="0" max="1" value="0.1"></label>
+    <label><input type="checkbox" id="enableGroupLogic" checked>Enable Group Logic</label>
+    <label><input type="checkbox" id="enableCollisionBirths" checked>Collision Births</label>
+    <label>Collision Dist:<input id="collisionDist" type="number" step="1" min="5" max="50" value="15"></label>
+    <label>Max Actors:<input id="maxActors" type="number" step="10" min="10" max="1000" value="100"></label>
+    <label>CP Lifespan:<input id="cpLifespan" type="number" step="10" min="30" max="300" value="120"></label>
+    <label>Path Variety:<input id="pathVariety" type="number" step="0.1" min="0" max="1" value="0.3"></label>
   </div>
   <canvas id="canvas"></canvas>
   <script>
@@ -60,7 +41,19 @@
     const promptInput = document.getElementById('promptInput');
     const showGridBox = document.getElementById('showGrid');
     const pathModeSel = document.getElementById('pathMode');
-    let nodes = [], actors = [], tick = 0;
+    const showLoadBox = document.getElementById('showLoad');
+    const enableBirthsBox = document.getElementById('enableBirths');
+    const birthProbInput = document.getElementById('birthProb');
+    const mutationRateInput = document.getElementById('mutationRate');
+    const enableGroupBox = document.getElementById('enableGroupLogic');
+    const enableCollisionBirthsBox = document.getElementById('enableCollisionBirths');
+    const collisionDistInput = document.getElementById('collisionDist');
+    const maxActorsInput = document.getElementById('maxActors');
+    const cpLifespanInput = document.getElementById('cpLifespan');
+    const pathVarietyInput = document.getElementById('pathVariety');
+
+    let nodes = [], actors = [], convergencePoints = [], tick = 0, selectedActor = null;
+    let actorTrails = [], birthAnimations = [];
 
     function resize() {
       canvas.width = window.innerWidth;
@@ -69,36 +62,128 @@
     window.addEventListener('resize', resize);
     resize();
 
-    function computePath(ax, ay) {
+    // Random initial stats
+    function randomStats() {
+      return {
+        speed: Math.random() * 1.5 + 0.5,       // [0.5,2]
+        weight: Math.random() * 1.5 + 0.5,     // [0.5,2]
+        agility: Math.random()               // [0,1]
+      };
+    }
+
+    // Fitness -> life expectancy (ms)
+    function computeExpectancy(stats) {
+      const fRaw = (stats.speed + stats.agility) / stats.weight;
+      return fRaw * 10000 + 5000;
+    }
+
+    // Improved path finding with variety
+    function computePath(ax, ay, agility = 0) {
       const toVisit = nodes.slice();
       const path = [];
       let cx = ax, cy = ay;
+      const variety = parseFloat(pathVarietyInput.value);
+
       while (toVisit.length > 0) {
-        let minDist = Infinity, minIdx = 0;
-        toVisit.forEach((n, i) => {
-          const d = Math.hypot(n.x - cx, n.y - cy);
-          if (d < minDist) {
-            minDist = d;
-            minIdx = i;
+        let idx;
+        if (Math.random() < agility + variety) {
+          // More random/varied path selection
+          if (Math.random() < 0.3) {
+            // Pick a random node
+            idx = Math.floor(Math.random() * toVisit.length);
+          } else {
+            // Pick from 3 nearest nodes randomly
+            const distances = toVisit.map((n, i) => ({
+              index: i,
+              dist: Math.hypot(n.x - cx, n.y - cy)
+            })).sort((a, b) => a.dist - b.dist);
+            const candidates = distances.slice(0, Math.min(3, distances.length));
+            idx = candidates[Math.floor(Math.random() * candidates.length)].index;
           }
-        });
-        const next = toVisit.splice(minIdx, 1)[0];
+        } else {
+          // nearest neighbor
+          let minDist = Infinity;
+          idx = 0;
+          toVisit.forEach((n, i) => {
+            const d = Math.hypot(n.x - cx, n.y - cy);
+            if (d < minDist) { minDist = d; idx = i; }
+          });
+        }
+        const next = toVisit.splice(idx, 1)[0];
         path.push(next);
-        cx = next.x;
-        cy = next.y;
+        cx = next.x; cy = next.y;
       }
       return path;
+    }
+
+    // Create offspring from two parents
+    function createOffspring(parent1, parent2, x, y) {
+      const mRate = parseFloat(mutationRateInput.value);
+      // Blend parent stats with some randomness
+      const newStats = {
+        speed: Math.max(0.1, Math.min(
+          ((parent1.stats.speed + parent2.stats.speed) / 2) * (1 + (Math.random()*2-1)*mRate), 3)),
+        weight: Math.max(0.1, Math.min(
+          ((parent1.stats.weight + parent2.stats.weight) / 2) * (1 + (Math.random()*2-1)*mRate), 3)),
+        agility: Math.max(0, Math.min(
+          ((parent1.stats.agility + parent2.stats.agility) / 2) + (Math.random()*2-1)*mRate, 1))
+      };
+      const lifeExp = computeExpectancy(newStats);
+      const newPath = computePath(x, y, newStats.agility);
+      return {
+        x, y, path: newPath, idx: 0, grouped: false,
+        stats: newStats, birthTime: Date.now(), lifeExpectancy: lifeExp,
+        trail: []
+      };
+    }
+
+    // Get actor color based on age
+    function getActorColor(actor) {
+      const age = Date.now() - actor.birthTime;
+      const ageRatio = Math.min(age / actor.lifeExpectancy, 1);
+
+      if (ageRatio < 0.25) {
+        // Young: bright green
+        return '#00ff00';
+      } else if (ageRatio < 0.5) {
+        // Adult: yellow-green
+        return '#80ff00';
+      } else if (ageRatio < 0.75) {
+        // Middle-aged: yellow
+        return '#ffff00';
+      } else if (ageRatio < 0.9) {
+        // Old: orange
+        return '#ff8000';
+      } else {
+        // Very old: red
+        return '#ff0000';
+      }
     }
 
     canvas.addEventListener('click', e => {
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const count = Math.max(1, parseInt(actorCountInput.value) || 1);
-      nodes.push({x, y});
-      for (let i = 0; i < count; i++) {
-        const a = {x, y, path: computePath(x, y), idx: 0};
-        actors.push(a);
+      if (e.shiftKey) {
+        // Shift-click adds node + actors
+        const count = Math.max(1, parseInt(actorCountInput.value) || 1);
+        const node = { x, y, id: Date.now() + Math.random() };
+        nodes.push(node);
+        for (let i = 0; i < count; i++) {
+          const stats = randomStats();
+          const lifeExp = computeExpectancy(stats);
+          const path = computePath(x, y, stats.agility);
+          actors.push({ x, y, path, idx: 0, grouped: false,
+            stats, birthTime: Date.now(), lifeExpectancy: lifeExp, trail: [] });
+        }
+      } else {
+        // Click to select actor and reveal stats
+        selectedActor = null;
+        const clickDist = 10;
+        actors.forEach(a => {
+          const d = Math.hypot(a.x - x, a.y - y);
+          if (d < clickDist) selectedActor = a;
+        });
       }
     });
 
@@ -107,35 +192,117 @@
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      // remove nearby nodes
       nodes = nodes.filter(n => Math.hypot(n.x - x, n.y - y) > 10);
+      // recompute actor paths
       actors.forEach(a => {
-        a.path = computePath(a.x, a.y);
+        a.path = computePath(a.x, a.y, a.stats.agility);
         a.idx = 0;
       });
     });
 
     function drawGrid() {
       const size = 50;
-      ctx.strokeStyle = '#003300';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#003300'; ctx.lineWidth = 1;
       for (let x = 0; x < canvas.width; x += size) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
       }
       for (let y = 0; y < canvas.height; y += size) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
       }
+    }
+
+    function drawStaticRoads() {
+      // Draw static roads between nodes
+      ctx.strokeStyle = '#004400';
+      ctx.lineWidth = 2;
+      nodes.forEach((node, i) => {
+        nodes.slice(i + 1).forEach(otherNode => {
+          ctx.beginPath();
+          ctx.moveTo(node.x, node.y);
+          ctx.lineTo(otherNode.x, otherNode.y);
+          ctx.stroke();
+        });
+      });
+    }
+
+    function drawActorTrails() {
+      // Fade old trail points
+      actorTrails = actorTrails.filter(trail => {
+        trail.age++;
+        return trail.age < 60;
+      });
+
+      // Draw trails
+      actorTrails.forEach(trail => {
+        const alpha = Math.max(0, 1 - (trail.age / 60));
+        ctx.fillStyle = `rgba(0, 255, 255, ${alpha * 0.6})`;
+        ctx.beginPath();
+        ctx.arc(trail.x, trail.y, 2, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
+
+    function drawBirthAnimations() {
+      // Update and draw birth animations
+      birthAnimations = birthAnimations.filter(birth => {
+        birth.age++;
+        return birth.age < 30;
+      });
+
+      birthAnimations.forEach(birth => {
+        const progress = birth.age / 30;
+        const alpha = Math.max(0, 1 - progress);
+        const radius = 5 + progress * 20;
+
+        // Outer ring
+        ctx.strokeStyle = `rgba(255, 255, 0, ${alpha})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(birth.x, birth.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        // Inner burst
+        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.8})`;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 8; i++) {
+          const angle = (i / 8) * Math.PI * 2;
+          const innerR = radius * 0.3;
+          const outerR = radius * 0.7;
+          ctx.beginPath();
+          ctx.moveTo(birth.x + Math.cos(angle) * innerR, birth.y + Math.sin(angle) * innerR);
+          ctx.lineTo(birth.x + Math.cos(angle) * outerR, birth.y + Math.sin(angle) * outerR);
+          ctx.stroke();
+        }
+      });
     }
 
     function animate() {
       tick++;
+
+      // Population control - remove oldest actors if over limit
+      const maxActors = parseInt(maxActorsInput.value) || 100;
+      if (actors.length > maxActors) {
+        actors.sort((a, b) => a.birthTime - b.birthTime); // oldest first
+        actors = actors.slice(actors.length - maxActors); // keep newest
+      }
+
+      // Remove dead actors
+      actors = actors.filter(a => (Date.now() - a.birthTime) <= a.lifeExpectancy);
+
+      // Age convergence points and remove old ones
+      const cpLifespan = parseInt(cpLifespanInput.value) || 120;
+      convergencePoints = convergencePoints.filter(cp => {
+        cp.age++;
+        return cp.age < cpLifespan;
+      });
+
+      // Handle different path modes
       if (pathModeSel.value === 'fade') {
         ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      } else if (pathModeSel.value === 'trail') {
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       } else {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -143,79 +310,284 @@
 
       if (showGridBox.checked) drawGrid();
 
+      // Draw static roads
+      drawStaticRoads();
+
+      // Draw nodes
       nodes.forEach(n => {
         ctx.fillStyle = '#0f0';
         ctx.beginPath();
         ctx.arc(n.x, n.y, 6, 0, 2 * Math.PI);
         ctx.fill();
-      });
 
-      actors.forEach(a => {
-        if (a.idx >= a.path.length) {
-          a.path = computePath(a.x, a.y);
-          a.idx = 0;
-        }
-        const pts = [{x: a.x, y: a.y}, ...a.path.slice(a.idx)];
-
+        // Node glow
+        ctx.strokeStyle = '#0f0';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        pts.slice(1).forEach((pt, i) => {
-          const prev = pts[i];
-          const dx = pt.x - prev.x, dy = pt.y - prev.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const mx = (prev.x + pt.x) / 2, my = (prev.y + pt.y) / 2;
-          const nx = -dy / len, ny = dx / len;
-          const amp = 20;
-          const phase = tick * 0.1 + i * 0.2;
-          const cx = mx + nx * amp * Math.sin(phase);
-          const cy = my + ny * amp * Math.sin(phase);
-          ctx.strokeStyle = '#00f';
-          ctx.quadraticCurveTo(cx, cy, pt.x, pt.y);
-        });
+        ctx.arc(n.x, n.y, 10, 0, 2 * Math.PI);
+        ctx.stroke();
+      });
+
+      // Draw convergence points with enhanced pulsing effect
+      convergencePoints.forEach(cp => {
+        const alpha = Math.max(0, 1 - cp.age / cpLifespan);
+        const pulse = Math.sin(tick * 0.3 + cp.x * 0.01) * 0.5 + 0.5;
+        const radius = 8 + pulse * 6;
+
+        // Outer ring
+        ctx.strokeStyle = `rgba(255, 0, 255, ${alpha})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, radius, 0, 2 * Math.PI);
         ctx.stroke();
 
+        // Inner glow
+        ctx.fillStyle = `rgba(255, 0, 255, ${alpha * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, radius * 0.6, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Sparkle effect
+        for (let i = 0; i < 4; i++) {
+          const angle = (tick * 0.1 + i * Math.PI / 2) % (Math.PI * 2);
+          const sparkleR = radius + 5;
+          const sparkleX = cp.x + Math.cos(angle) * sparkleR;
+          const sparkleY = cp.y + Math.sin(angle) * sparkleR;
+          ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.8})`;
+          ctx.beginPath();
+          ctx.arc(sparkleX, sparkleY, 2, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      });
+
+      // Track load
+      const loadCounts = {};
+      const segments = [];
+      const occupancy = {};
+
+      // Move actors
+      actors.forEach(a => {
+        if (a.idx >= a.path.length) {
+          a.path = computePath(a.x, a.y, a.stats.agility);
+          a.idx = 0;
+        }
+
+        // For trail mode, record actor position
+        if (pathModeSel.value === 'trail') {
+          actorTrails.push({
+            x: a.x,
+            y: a.y,
+            age: 0
+          });
+        }
+
+        const pts = [{ x: a.x, y: a.y }, ...a.path.slice(a.idx)];
+
+        // Only draw planned path if not in trail mode
+        if (pathModeSel.value !== 'trail') {
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          pts.slice(1).forEach((pt, i) => {
+            const prev = pts[i];
+            const dx = pt.x - prev.x, dy = pt.y - prev.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const mx = (prev.x + pt.x) / 2, my = (prev.y + pt.y) / 2;
+            const nx = -dy / len, ny = dx / len;
+            const amp = 10; // Reduced amplitude for cleaner look
+            const phase = tick * 0.1 + i * 0.2;
+            const cx = mx + nx * amp * Math.sin(phase);
+            const cy = my + ny * amp * Math.sin(phase);
+            ctx.strokeStyle = '#004488'; // Dimmer blue for planned paths
+            ctx.quadraticCurveTo(cx, cy, pt.x, pt.y);
+          });
+          ctx.stroke();
+        }
+
+        // Movement step
         if (pts[1]) {
           const p0 = pts[0], p1 = pts[1];
-          const dx = p1.x - p0.x, dy = p1.y - p0.y, l = Math.hypot(dx, dy) || 1;
-          const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
-          const nx = -dy / l, ny = dx / l;
-          const amp = 20;
-          const phase = tick * 0.1;
-          const cx = mx + nx * amp * Math.sin(phase);
-          const cy = my + ny * amp * Math.sin(phase);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#f00';
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.quadraticCurveTo(cx, cy, p1.x, p1.y);
-          ctx.stroke();
-
-          const dist = Math.hypot(dx, dy);
-          const sp = 1;
-          if (dist > sp) {
-            a.x += dx / dist * sp;
-            a.y += dy / dist * sp;
+          const dx = p1.x - p0.x, dy = p1.y - p0.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          // load count
+          const key = `${Math.floor(p0.x/10)},${Math.floor(p0.y/10)}->${Math.floor(p1.x/10)},${Math.floor(p1.y/10)}`;
+          loadCounts[key] = (loadCounts[key] || 0) + 1;
+          segments.push({ p0, p1, key });
+          // speed factoring
+          let step = (a.stats.speed / a.stats.weight);
+          if (enableGroupBox.checked && a.grouped) step *= 2;
+          if (dist > step) {
+            a.x += dx / dist * step;
+            a.y += dy / dist * step;
           } else {
-            a.x = p1.x;
-            a.y = p1.y;
-            a.idx++;
+            a.x = p1.x; a.y = p1.y; a.idx++;
+            // occupancy
+            if (a.path[a.idx - 1]) {
+              const nid = a.path[a.idx - 1].id;
+              occupancy[nid] = occupancy[nid] || [];
+              occupancy[nid].push(a);
+            }
+          }
+        }
+      });
+
+      // Draw actor trails in trail mode
+      if (pathModeSel.value === 'trail') {
+        drawActorTrails();
+      }
+
+      // Collision detection and birth
+      if (enableCollisionBirthsBox.checked && actors.length < maxActors) {
+        const collisionDist = parseFloat(collisionDistInput.value);
+        const newBorns = [];
+
+        for (let i = 0; i < actors.length; i++) {
+          for (let j = i + 1; j < actors.length; j++) {
+            const a1 = actors[i], a2 = actors[j];
+            const dist = Math.hypot(a1.x - a2.x, a1.y - a2.y);
+
+            if (dist < collisionDist) {
+              // Create convergence point
+              const cx = (a1.x + a2.x) / 2;
+              const cy = (a1.y + a2.y) / 2;
+
+              // Check if there's already a recent convergence point nearby
+              const existingCP = convergencePoints.find(cp =>
+                Math.hypot(cp.x - cx, cp.y - cy) < 20 && cp.age < 30
+              );
+
+              if (!existingCP) {
+                convergencePoints.push({ x: cx, y: cy, age: 0 });
+
+                // Birth probability based on collision and population pressure
+                const populationPressure = Math.max(0.1, 1 - (actors.length / maxActors));
+                const birthChance = Math.min(0.8, parseFloat(birthProbInput.value) * 10 * populationPressure);
+                if (Math.random() < birthChance && actors.length + newBorns.length < maxActors) {
+                  const offspring = createOffspring(a1, a2, cx, cy);
+                  newBorns.push(offspring);
+
+                  // Add birth animation
+                  birthAnimations.push({
+                    x: cx,
+                    y: cy,
+                    age: 0
+                  });
+                }
+              }
+            }
           }
         }
 
-        ctx.fillStyle = '#ff0';
-        ctx.fillRect(a.x - 4, a.y - 4, 8, 8);
+        // Add new offspring
+        actors.push(...newBorns);
+      }
+
+      // Draw load
+      if (showLoadBox.checked) {
+        segments.forEach(({ p0, p1, key }) => {
+          const count = loadCounts[key];
+          ctx.strokeStyle = '#ff0';
+          ctx.lineWidth = Math.min(count * 0.5, 10);
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.stroke();
+        });
+      }
+
+      // Original birth & group logic
+      Object.entries(occupancy).forEach(([_, group]) => {
+        if (enableGroupBox.checked) {
+          if (group.length >= 3) group.forEach(a => a.grouped = true);
+          else group.forEach(a => a.grouped = false);
+        }
+        if (enableBirthsBox.checked && group.length >= 2) {
+          const p = parseFloat(birthProbInput.value);
+          const mRate = parseFloat(mutationRateInput.value);
+          if (Math.random() < p && actors.length < maxActors) {
+            // choose random parent
+            const parent = group[Math.floor(Math.random() * group.length)];
+            if (parent.path[parent.idx - 1]) {
+              const node = parent.path[parent.idx - 1];
+              // inherit and mutate stats
+              const pst = parent.stats;
+              const newStats = {
+                speed: Math.max(0.1, Math.min(pst.speed * (1 + (Math.random()*2-1)*mRate), 3)),
+                weight: Math.max(0.1, Math.min(pst.weight * (1 + (Math.random()*2-1)*mRate), 3)),
+                agility: Math.max(0, Math.min(pst.agility + (Math.random()*2-1)*mRate, 1))
+              };
+              const lifeExp = computeExpectancy(newStats);
+              const newPath = computePath(node.x, node.y, newStats.agility);
+              actors.push({ x: node.x, y: node.y, path: newPath, idx: 0, grouped: false,
+                              stats: newStats, birthTime: Date.now(), lifeExpectancy: lifeExp, trail: [] });
+
+              // Add birth animation
+              birthAnimations.push({
+                x: node.x,
+                y: node.y,
+                age: 0
+              });
+            }
+          }
+        }
       });
 
+      // Draw birth animations on top
+      drawBirthAnimations();
+
+      // Draw actors with age-based coloring
+      actors.forEach(a => {
+        const color = getActorColor(a);
+        ctx.fillStyle = color;
+        ctx.fillRect(a.x - 4, a.y - 4, 8, 8);
+
+        // Add glow effect for grouped actors
+        if (a.grouped) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(a.x - 6, a.y - 6, 12, 12);
+        }
+      });
+
+      // Prompt text
       if (promptInput.value) {
         ctx.fillStyle = '#0f0';
         ctx.font = '12px monospace';
         ctx.fillText(promptInput.value, 16, canvas.height - 16);
       }
 
+      // Selected actor stats display
+      if (selectedActor) {
+        const a = selectedActor;
+        const age = ((Date.now() - a.birthTime) / 1000).toFixed(1);
+        const expectancySec = (a.lifeExpectancy / 1000).toFixed(1);
+        const toDeath = ((a.lifeExpectancy - (Date.now() - a.birthTime)) / 1000).toFixed(1);
+        const ageRatio = (Date.now() - a.birthTime) / a.lifeExpectancy;
+
+        ctx.fillStyle = '#0f0';
+        ctx.font = '12px monospace';
+        const lines = [
+          `Speed: ${a.stats.speed.toFixed(2)}`,
+          `Weight: ${a.stats.weight.toFixed(2)}`,
+          `Agility: ${a.stats.agility.toFixed(2)}`,
+          `Age: ${age}s (${(ageRatio*100).toFixed(1)}%)`,
+          `Expect: ${expectancySec}s`,
+          `To Death: ${toDeath}s`,
+          `Grouped: ${a.grouped ? 'Yes' : 'No'}`
+        ];
+        lines.forEach((txt, i) => ctx.fillText(txt, 16, 32 + i*14));
+      }
+
+      // Stats display
+      ctx.fillStyle = '#0f0';
+      ctx.font = '10px monospace';
+      ctx.fillText(`Actors: ${actors.length}`, canvas.width - 120, 20);
+      ctx.fillText(`Nodes: ${nodes.length}`, canvas.width - 120, 35);
+      ctx.fillText(`Convergence: ${convergencePoints.length}`, canvas.width - 120, 50);
+      ctx.fillText(`Births: ${birthAnimations.length}`, canvas.width - 120, 65);
+
       requestAnimationFrame(animate);
     }
-
     animate();
   </script>
 </body>
