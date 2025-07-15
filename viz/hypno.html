@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sacred Hypnotic Geometry</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: black; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 10px;
+      border-radius: 10px;
+      font-family: sans-serif;
+      z-index: 10;
+    }
+    .controls label { display: block; margin-top: 5px; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="controls">
+  <label>Pattern:
+    <select id="patternSelect">
+      <option value="flower">Flower of Life</option>
+      <option value="metatron">Metatron's Cube</option>
+      <option value="sri">Sri Yantra</option>
+    </select>
+  </label>
+  <label>Sound:
+    <select id="soundSelect">
+      <option value="none">None</option>
+      <option value="root">Root Chakra</option>
+      <option value="sacral">Sacral Chakra</option>
+      <option value="solar">Solar Plexus</option>
+      <option value="heart">Heart Chakra</option>
+      <option value="throat">Throat Chakra</option>
+      <option value="thirdEye">Third Eye</option>
+      <option value="crown">Crown Chakra</option>
+    </select>
+  </label>
+  <label>Zoom:
+    <input type="range" id="zoomSlider" min="0.5" max="2" step="0.01" value="1">
+  </label>
+  <label>Speed:
+    <input type="range" id="speedSlider" min="0.1" max="3" step="0.1" value="1">
+  </label>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+let time = 0;
+let pattern = 'flower';
+let zoom = 1;
+let speed = 1;
+let audioCtx = null;
+let oscillator = null;
+let gainNode = null;
+
+const frequencies = {
+  root: 396,
+  sacral: 417,
+  solar: 528,
+  heart: 639,
+  throat: 741,
+  thirdEye: 852,
+  crown: 963
+};
+
+const patternSelect = document.getElementById('patternSelect');
+const soundSelect = document.getElementById('soundSelect');
+const zoomSlider = document.getElementById('zoomSlider');
+const speedSlider = document.getElementById('speedSlider');
+
+patternSelect.onchange = () => pattern = patternSelect.value;
+soundSelect.onchange = () => setSound(soundSelect.value);
+zoomSlider.oninput = () => zoom = parseFloat(zoomSlider.value);
+speedSlider.oninput = () => speed = parseFloat(speedSlider.value);
+
+function setSound(key) {
+  if (oscillator) {
+    oscillator.stop();
+    oscillator.disconnect();
+  }
+  if (key === 'none') return;
+  const freq = frequencies[key];
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  oscillator = audioCtx.createOscillator();
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = 0.1;
+  oscillator.frequency.value = freq;
+  oscillator.type = 'sine';
+  oscillator.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  oscillator.start();
+}
+
+function drawFlowerOfLife(cx, cy, radius, rings, t) {
+  const hexRadius = radius * Math.sin(Math.PI / 3);
+  ctx.strokeStyle = `hsl(${(t * 10) % 360}, 100%, 80%)`;
+  ctx.lineWidth = 1.5;
+  for (let q = -rings; q <= rings; q++) {
+    for (let r = -rings; r <= rings; r++) {
+      const x = cx + (q * 1.5 * radius);
+      const y = cy + (r * hexRadius * 2 + (q % 2) * hexRadius);
+      if (Math.hypot(x - cx, y - cy) <= rings * radius * 1.5) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawMetatron(cx, cy, t) {
+  const radius = 120 + 10 * Math.sin(t * 0.02);
+  ctx.strokeStyle = `hsl(${(t * 15) % 360}, 80%, 75%)`;
+  ctx.lineWidth = 1.2;
+  const points = [];
+  for (let i = 0; i < 13; i++) {
+    const angle = (Math.PI * 2 * i) / 13 + t * 0.001;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    points.push([x, y]);
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      ctx.beginPath();
+      ctx.moveTo(points[i][0], points[i][1]);
+      ctx.lineTo(points[j][0], points[j][1]);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawSriYantra(cx, cy, t) {
+  const layers = 9;
+  ctx.strokeStyle = `hsl(${(t * 5) % 360}, 100%, 70%)`;
+  ctx.lineWidth = 1.5;
+  for (let i = 1; i <= layers; i++) {
+    const angleOffset = t * 0.001 * (i % 2 === 0 ? 1 : -1);
+    const r = (i * 20) + 80;
+    ctx.beginPath();
+    for (let j = 0; j < 4; j++) {
+      const angle = j * Math.PI / 2 + angleOffset;
+      const x = cx + r * Math.cos(angle);
+      const y = cy + r * Math.sin(angle);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+}
+
+function animate() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const pulse = zoom * (1 + 0.03 * Math.sin(time * 0.05));
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(pulse, pulse);
+  ctx.translate(-cx, -cy);
+
+  if (pattern === 'flower') drawFlowerOfLife(cx, cy, 40, 5, time);
+  else if (pattern === 'metatron') drawMetatron(cx, cy, time);
+  else if (pattern === 'sri') drawSriYantra(cx, cy, time);
+
+  ctx.restore();
+
+  time += speed;
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>

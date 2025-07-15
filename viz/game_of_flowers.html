@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Garden Growth Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #87CEEB;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+            display: block;
+        }
+
+        .controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            max-width: 300px;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .controls.hidden {
+            transform: translateX(calc(100% + 40px));
+            opacity: 0;
+        }
+
+        .toggle-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            border: none;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            z-index: 10;
+        }
+
+        .toggle-controls:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .toggle-controls svg {
+            width: 24px;
+            height: 24px;
+            stroke: #666;
+            stroke-width: 2;
+            fill: none;
+        }
+
+        h3 {
+            margin-bottom: 15px;
+            color: #333;
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: #e0e0e0;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #90C890;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            margin-right: 8px;
+            cursor: pointer;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #90C890, #7CB87C);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(144, 200, 144, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .value-display {
+            float: right;
+            color: #999;
+            font-size: 12px;
+        }
+
+        .weather-info {
+            background: rgba(135, 206, 235, 0.2);
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        /* Scrollbar styling */
+        .controls::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .controls::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .controls::-webkit-scrollbar-thumb {
+            background: #90C890;
+            border-radius: 3px;
+        }
+
+        .controls::-webkit-scrollbar-thumb:hover {
+            background: #7CB87C;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <button class="toggle-controls" onclick="toggleControls()">
+        <svg viewBox="0 0 24 24">
+            <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m-7-10L2 8.5L5 11.5m14-6l3 3l-3 3M12 2v3m0 14v3" />
+        </svg>
+    </button>
+
+    <div class="controls" id="controls">
+        <h3>🌻 Garden Simulator</h3>
+
+        <div class="weather-info" id="weatherInfo">
+            ☀️ Sunny Day
+        </div>
+
+        <div class="control-group">
+            <label>Growth Speed <span class="value-display" id="speedValue">50</span></label>
+            <input type="range" id="growthSpeed" min="1" max="100" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>Rain Frequency <span class="value-display" id="rainValue">30</span></label>
+            <input type="range" id="rainFrequency" min="0" max="100" value="30">
+        </div>
+
+        <div class="control-group">
+            <label>Cloud Speed <span class="value-display" id="cloudValue">50</span></label>
+            <input type="range" id="cloudSpeed" min="1" max="100" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>Auto Population Rate <span class="value-display" id="popValue">20</span></label>
+            <input type="range" id="populationRate" min="0" max="100" value="20">
+        </div>
+
+        <div class="control-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="autoGrow" checked> Click to Plant
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="autoPopulate" checked> Auto Population
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="showWeather" checked> Weather Effects
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="celShading" checked> Cel Shading
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="showGrass" checked> Animated Grass
+            </label>
+        </div>
+
+        <button onclick="clearGarden()">Clear Garden</button>
+        <button onclick="toggleAnimation()">Pause/Resume</button>
+        <button onclick="makeItRain()">Force Rain</button>
+        <button onclick="makeSunshine()">Force Sunshine</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let animationId;
+        let isAnimating = true;
+        let plants = [];
+        let clouds = [];
+        let raindrops = [];
+        let weatherState = 'sunny'; // sunny, cloudy, rainy
+        let weatherTransition = 0;
+        let sunAngle = 0;
+        let time = 0;
+        let grassBlades = [];
+        let lastPopulationTime = 0;
+
+        // Plant types configuration
+        const plantTypes = {
+            rose: {
+                name: 'Rose',
+                petalCount: 8,
+                petalShape: 'rounded',
+                colors: ['#FF6B6B', '#FF8E8E', '#FFAAAA', '#FFC4C4', '#FFE0E0'],
+                stemHeight: [80, 120],
+                leafCount: 4,
+                centerType: 'spiral'
+            },
+            tulip: {
+                name: 'Tulip',
+                petalCount: 6,
+                petalShape: 'pointed',
+                colors: ['#FF9FF3', '#FFA9F9', '#FFBBFF', '#FFCCFF', '#FFE0FF'],
+                stemHeight: [70, 100],
+                leafCount: 2,
+                centerType: 'simple'
+            },
+            sunflower: {
+                name: 'Sunflower',
+                petalCount: 20,
+                petalShape: 'thin',
+                colors: ['#FFD93D', '#FFE066', '#FFE680', '#FFED99', '#FFF3B3'],
+                stemHeight: [120, 180],
+                leafCount: 6,
+                centerType: 'seeds'
+            },
+            daisy: {
+                name: 'Daisy',
+                petalCount: 16,
+                petalShape: 'elliptical',
+                colors: ['#FFFFFF', '#FFF9F9', '#FFF5F5', '#FFFDFD', '#FFFAFA'],
+                stemHeight: [60, 90],
+                leafCount: 3,
+                centerType: 'yellow'
+            },
+            lavender: {
+                name: 'Lavender',
+                petalCount: 0,
+                petalShape: 'cluster',
+                colors: ['#B19CD9', '#C3B1E1', '#D5C6E9', '#E7DBF1', '#F0E6F7'],
+                stemHeight: [70, 110],
+                leafCount: 8,
+                centerType: 'none'
+            }
+        };
+
+        class Plant {
+            constructor(x, y, type = null) {
+                this.x = x;
+                this.y = y;
+                this.plantType = type || this.getRandomType();
+                this.config = plantTypes[this.plantType];
+
+                // Growth stages: seed, sprout, budding, blooming, full
+                this.growthStage = 'seed';
+                this.growth = 0;
+                this.maxGrowth = 1;
+
+                // Plant properties
+                this.stemHeight = this.randomBetween(...this.config.stemHeight);
+                this.currentHeight = 0;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.windPhase = Math.random() * Math.PI * 2;
+                this.swayAmount = 0.02 + Math.random() * 0.03;
+
+                // Visual properties
+                this.size = 30 + Math.random() * 20;
+                this.colors = this.config.colors;
+                this.seedX = x + (Math.random() - 0.5) * 10;
+                this.seedY = y;
+
+                // Growth factors affected by weather
+                this.waterLevel = 0.5;
+                this.healthiness = 1;
+            }
+
+            getRandomType() {
+                const types = Object.keys(plantTypes);
+                return types[Math.floor(Math.random() * types.length)];
+            }
+
+            randomBetween(min, max) {
+                return min + Math.random() * (max - min);
+            }
+
+            update() {
+                const growthRate = parseInt(document.getElementById('growthSpeed').value) * 0.0002;
+
+                // Weather affects growth
+                if (weatherState === 'rainy') {
+                    this.waterLevel = Math.min(1, this.waterLevel + 0.001);
+                } else if (weatherState === 'sunny') {
+                    this.waterLevel = Math.max(0.3, this.waterLevel - 0.0005);
+                }
+
+                // Growth based on water and health
+                const effectiveGrowthRate = growthRate * this.waterLevel * this.healthiness;
+
+                if (this.growth < this.maxGrowth) {
+                    this.growth += effectiveGrowthRate;
+                    if (this.growth > this.maxGrowth) this.growth = this.maxGrowth;
+                }
+
+                // Update growth stage
+                if (this.growth < 0.1) this.growthStage = 'seed';
+                else if (this.growth < 0.3) this.growthStage = 'sprout';
+                else if (this.growth < 0.6) this.growthStage = 'budding';
+                else if (this.growth < 0.9) this.growthStage = 'blooming';
+                else this.growthStage = 'full';
+
+                // Update current height
+                this.currentHeight = this.stemHeight * Math.min(this.growth * 2, 1);
+
+                // Wind effect
+                this.windPhase += this.swayAmount;
+            }
+
+            draw() {
+                ctx.save();
+
+                const windOffset = Math.sin(this.windPhase) * 5 * (this.currentHeight / this.stemHeight);
+
+                // Draw based on growth stage
+                switch(this.growthStage) {
+                    case 'seed':
+                        this.drawSeed();
+                        break;
+                    case 'sprout':
+                        this.drawSprout(windOffset);
+                        break;
+                    case 'budding':
+                        this.drawStem(windOffset);
+                        this.drawBud(windOffset);
+                        break;
+                    case 'blooming':
+                    case 'full':
+                        this.drawStem(windOffset);
+                        this.drawFlower(windOffset);
+                        break;
+                }
+
+                ctx.restore();
+            }
+
+            drawSeed() {
+                ctx.save();
+                ctx.translate(this.seedX, this.seedY);
+
+                // Seed in soil
+                ctx.fillStyle = '#8B4513';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 4, 3, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Soil particles
+                ctx.fillStyle = '#654321';
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i / 5) * Math.PI * 2;
+                    const dist = 3 + Math.random() * 3;
+                    ctx.beginPath();
+                    ctx.arc(Math.cos(angle) * dist, Math.sin(angle) * dist, 1, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+
+            drawSprout(windOffset) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Tiny stem
+                ctx.strokeStyle = '#90EE90';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.quadraticCurveTo(windOffset * 0.3, -this.currentHeight * 0.5, windOffset * 0.5, -this.currentHeight);
+                ctx.stroke();
+
+                // Cotyledon leaves
+                ctx.save();
+                ctx.translate(windOffset * 0.5, -this.currentHeight);
+
+                // Left leaf
+                ctx.fillStyle = '#98FB98';
+                ctx.beginPath();
+                ctx.ellipse(-5, 0, 6, 3, -0.3, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Right leaf
+                ctx.beginPath();
+                ctx.ellipse(5, 0, 6, 3, 0.3, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+                ctx.restore();
+            }
+
+            drawStem(windOffset) {
+                ctx.save();
+                ctx.strokeStyle = '#228B22';
+                ctx.lineWidth = 3 + this.growth * 2;
+                ctx.lineCap = 'round';
+
+                // Main stem
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+
+                const segments = 5;
+                for (let i = 0; i <= segments; i++) {
+                    const t = i / segments;
+                    const heightOffset = this.currentHeight * t;
+                    const wind = windOffset * t * t; // More wind at top
+                    const x = this.x + wind + Math.sin(t * Math.PI) * 10 * t;
+                    const y = this.y - heightOffset;
+
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+
+                ctx.stroke();
+
+                // Draw leaves along stem
+                const leafCount = Math.floor(this.config.leafCount * this.growth);
+                for (let i = 0; i < leafCount; i++) {
+                    const leafT = (i + 1) / (leafCount + 1);
+                    const leafY = this.y - this.currentHeight * leafT;
+                    const leafX = this.x + windOffset * leafT * leafT;
+                    const side = i % 2 === 0 ? -1 : 1;
+
+                    this.drawLeaf(leafX, leafY, side, 0.8 + leafT * 0.2);
+                }
+
+                ctx.restore();
+            }
+
+            drawLeaf(x, y, direction, scale = 1) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.scale(direction * scale, scale);
+                ctx.rotate(-0.3 + Math.sin(this.windPhase * 2) * 0.1);
+
+                const gradient = ctx.createLinearGradient(0, 0, 25, 0);
+                gradient.addColorStop(0, '#228B22');
+                gradient.addColorStop(1, '#90EE90');
+
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.bezierCurveTo(15, -8, 25, -8, 30, 0);
+                ctx.bezierCurveTo(25, 8, 15, 8, 0, 0);
+                ctx.closePath();
+                ctx.fill();
+
+                // Leaf vein
+                ctx.strokeStyle = '#1F5F1F';
+                ctx.lineWidth = 0.5;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(25, 0);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            drawBud(windOffset) {
+                ctx.save();
+                ctx.translate(this.x + windOffset, this.y - this.currentHeight);
+
+                // Green bud
+                const budSize = this.size * 0.3 * (this.growth - 0.3) * 3;
+                ctx.fillStyle = '#90EE90';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, budSize * 0.7, budSize, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Hint of color
+                ctx.fillStyle = this.colors[0] + '40';
+                ctx.beginPath();
+                ctx.ellipse(0, -budSize * 0.3, budSize * 0.5, budSize * 0.7, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+
+            drawFlower(windOffset) {
+                ctx.save();
+                ctx.translate(this.x + windOffset, this.y - this.currentHeight);
+
+                const bloomProgress = (this.growth - 0.6) * 2.5;
+                const scale = this.easeOutElastic(bloomProgress);
+
+                ctx.scale(scale, scale);
+                ctx.rotate(this.rotation + Math.sin(this.windPhase * 0.5) * 0.05);
+
+                // Draw specific flower type
+                switch(this.plantType) {
+                    case 'rose':
+                        this.drawRose();
+                        break;
+                    case 'tulip':
+                        this.drawTulip();
+                        break;
+                    case 'sunflower':
+                        this.drawSunflower();
+                        break;
+                    case 'daisy':
+                        this.drawDaisy();
+                        break;
+                    case 'lavender':
+                        this.drawLavender();
+                        break;
+                }
+
+                ctx.restore();
+            }
+
+            drawRose() {
+                // Layered rose petals
+                const layers = 3;
+                for (let layer = layers - 1; layer >= 0; layer--) {
+                    const layerScale = 1 - layer * 0.2;
+                    const petalCount = this.config.petalCount - layer * 2;
+
+                    ctx.save();
+                    ctx.scale(layerScale, layerScale);
+                    ctx.rotate(layer * 0.5);
+
+                    for (let i = 0; i < petalCount; i++) {
+                        const angle = (i * Math.PI * 2) / petalCount;
+                        ctx.save();
+                        ctx.rotate(angle);
+
+                        this.drawPetal(0, 0, this.size * 0.4, this.size * 0.8,
+                                     this.colors[layer], this.colors[layer + 1]);
+
+                        ctx.restore();
+                    }
+                    ctx.restore();
+                }
+
+                // Center
+                this.drawFlowerCenter('spiral');
+            }
+
+            drawTulip() {
+                // Cup-shaped tulip
+                const petalCount = 6;
+                for (let i = 0; i < petalCount; i++) {
+                    const angle = (i * Math.PI * 2) / petalCount;
+                    ctx.save();
+                    ctx.rotate(angle);
+
+                    // Pointed petals
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.bezierCurveTo(-this.size * 0.3, -this.size * 0.4,
+                                      -this.size * 0.2, -this.size * 0.9,
+                                      0, -this.size);
+                    ctx.bezierCurveTo(this.size * 0.2, -this.size * 0.9,
+                                      this.size * 0.3, -this.size * 0.4,
+                                      0, 0);
+
+                    const gradient = ctx.createRadialGradient(0, -this.size * 0.5, 0,
+                                                             0, -this.size * 0.5, this.size);
+                    gradient.addColorStop(0, this.colors[0]);
+                    gradient.addColorStop(1, this.colors[2]);
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+
+                this.drawFlowerCenter('simple');
+            }
+
+            drawSunflower() {
+                // Many thin petals
+                const petalCount = 20;
+                for (let i = 0; i < petalCount; i++) {
+                    const angle = (i * Math.PI * 2) / petalCount;
+                    ctx.save();
+                    ctx.rotate(angle);
+
+                    // Thin, pointed petals
+                    ctx.beginPath();
+                    ctx.moveTo(0, -this.size * 0.3);
+                    ctx.bezierCurveTo(-this.size * 0.1, -this.size * 0.5,
+                                      -this.size * 0.05, -this.size * 0.9,
+                                      0, -this.size * 1.1);
+                    ctx.bezierCurveTo(this.size * 0.05, -this.size * 0.9,
+                                      this.size * 0.1, -this.size * 0.5,
+                                      0, -this.size * 0.3);
+
+                    ctx.fillStyle = this.colors[0];
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+
+                this.drawFlowerCenter('seeds');
+            }
+
+            drawDaisy() {
+                // White petals
+                const petalCount = 16;
+                for (let i = 0; i < petalCount; i++) {
+                    const angle = (i * Math.PI * 2) / petalCount;
+                    ctx.save();
+                    ctx.rotate(angle);
+
+                    // Elliptical petals
+                    ctx.beginPath();
+                    ctx.ellipse(0, -this.size * 0.6, this.size * 0.15, this.size * 0.4, 0, 0, Math.PI * 2);
+
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fill();
+
+                    if (document.getElementById('celShading').checked) {
+                        ctx.fillStyle = 'rgba(200, 200, 200, 0.3)';
+                        ctx.beginPath();
+                        ctx.ellipse(0, -this.size * 0.7, this.size * 0.1, this.size * 0.2, 0, 0, Math.PI);
+                        ctx.fill();
+                    }
+
+                    ctx.restore();
+                }
+
+                this.drawFlowerCenter('yellow');
+            }
+
+            drawLavender() {
+                // Spike of small flowers
+                const clusterCount = 15;
+                for (let i = 0; i < clusterCount; i++) {
+                    const y = -i * 4;
+                    const x = Math.sin(i * 0.5) * 3;
+                    const size = 4 + Math.sin(i * 0.3) * 2;
+
+                    ctx.fillStyle = this.colors[i % this.colors.length];
+                    ctx.beginPath();
+                    ctx.arc(x - size/2, y, size, 0, Math.PI * 2);
+                    ctx.arc(x + size/2, y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            drawPetal(x, y, width, height, color1, color2) {
+                ctx.save();
+                ctx.translate(x, y);
+
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.bezierCurveTo(width/2, -height/3, width/2, -2*height/3, 0, -height);
+                ctx.bezierCurveTo(-width/2, -2*height/3, -width/2, -height/3, 0, 0);
+                ctx.closePath();
+
+                if (document.getElementById('celShading').checked) {
+                    const gradient = ctx.createRadialGradient(0, -height/2, 0, 0, -height/2, height);
+                    gradient.addColorStop(0, color1);
+                    gradient.addColorStop(0.7, color2);
+                    ctx.fillStyle = gradient;
+                } else {
+                    ctx.fillStyle = color1;
+                }
+
+                ctx.fill();
+                ctx.restore();
+            }
+
+            drawFlowerCenter(type) {
+                const centerSize = this.size * 0.3;
+
+                switch(type) {
+                    case 'spiral':
+                        // Spiral center for roses
+                        ctx.fillStyle = this.colors[this.colors.length - 1];
+                        ctx.beginPath();
+                        ctx.arc(0, 0, centerSize * 0.8, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.strokeStyle = this.colors[this.colors.length - 2];
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        for (let a = 0; a < Math.PI * 4; a += 0.1) {
+                            const r = a * centerSize * 0.1;
+                            const x = Math.cos(a) * r;
+                            const y = Math.sin(a) * r;
+                            if (a === 0) ctx.moveTo(x, y);
+                            else ctx.lineTo(x, y);
+                        }
+                        ctx.stroke();
+                        break;
+
+                    case 'seeds':
+                        // Sunflower seeds pattern
+                        ctx.fillStyle = '#654321';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, centerSize * 1.5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Fibonacci spiral of seeds
+                        ctx.fillStyle = '#8B4513';
+                        const n = 30;
+                        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+                        for (let i = 0; i < n; i++) {
+                            const r = Math.sqrt(i) * centerSize * 0.3;
+                            const theta = i * goldenAngle;
+                            const x = Math.cos(theta) * r;
+                            const y = Math.sin(theta) * r;
+                            ctx.beginPath();
+                            ctx.arc(x, y, 2, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                        break;
+
+                    case 'yellow':
+                        // Simple yellow center for daisies
+                        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, centerSize);
+                        gradient.addColorStop(0, '#FFD700');
+                        gradient.addColorStop(0.7, '#FFA500');
+                        gradient.addColorStop(1, '#FF8C00');
+                        ctx.fillStyle = gradient;
+                        ctx.beginPath();
+                        ctx.arc(0, 0, centerSize, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Texture
+                        ctx.fillStyle = '#FF8C00';
+                        for (let i = 0; i < 20; i++) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const dist = Math.random() * centerSize * 0.8;
+                            const x = Math.cos(angle) * dist;
+                            const y = Math.sin(angle) * dist;
+                            ctx.beginPath();
+                            ctx.arc(x, y, 1, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                        break;
+
+                    case 'simple':
+                        // Simple gradient center
+                        const simpleGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, centerSize);
+                        simpleGradient.addColorStop(0, this.colors[this.colors.length - 1]);
+                        simpleGradient.addColorStop(1, this.colors[this.colors.length - 2]);
+                        ctx.fillStyle = simpleGradient;
+                        ctx.beginPath();
+                        ctx.arc(0, 0, centerSize * 0.5, 0, Math.PI * 2);
+                        ctx.fill();
+                        break;
+                }
+            }
+
+            easeOutElastic(x) {
+                const c4 = (2 * Math.PI) / 3;
+                return x === 0 ? 0 : x === 1 ? 1 :
+                    Math.pow(2, -10 * x) * Math.sin((x * 10 - 0.75) * c4) + 1;
+            }
+        }
+
+        class Cloud {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = 50 + Math.random() * 150;
+                this.size = 30 + Math.random() * 50;
+                this.speed = 0.1 + Math.random() * 0.3;
+                this.opacity = 0.3 + Math.random() * 0.4;
+                this.isDark = Math.random() < 0.3;
+                this.puffs = [];
+
+                // Generate cloud puffs
+                const puffCount = 4 + Math.floor(Math.random() * 4);
+                for (let i = 0; i < puffCount; i++) {
+                    this.puffs.push({
+                        x: (Math.random() - 0.5) * this.size,
+                        y: (Math.random() - 0.5) * this.size * 0.5,
+                        size: this.size * (0.5 + Math.random() * 0.5)
+                    });
+                }
+            }
+
+            update() {
+                const speedMultiplier = parseInt(document.getElementById('cloudSpeed').value) / 50;
+                this.x += this.speed * speedMultiplier;
+
+                if (this.x > canvas.width + this.size * 2) {
+                    this.x = -this.size * 2;
+                    this.y = 50 + Math.random() * 150;
+                    this.isDark = Math.random() < (parseInt(document.getElementById('rainFrequency').value) / 100);
+                }
+
+                // Darken during rain
+                if (weatherState === 'rainy') {
+                    this.isDark = true;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Cloud color based on weather
+                let cloudColor;
+                if (this.isDark) {
+                    cloudColor = `rgba(100, 100, 100, ${this.opacity})`;
+                } else {
+                    cloudColor = `rgba(255, 255, 255, ${this.opacity})`;
+                }
+
+                ctx.fillStyle = cloudColor;
+
+                // Draw cloud puffs
+                this.puffs.forEach(puff => {
+                    ctx.beginPath();
+                    ctx.arc(puff.x, puff.y, puff.size, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                ctx.restore();
+            }
+        }
+
+        class Raindrop {
+            constructor(x, y) {
+                this.x = x || Math.random() * canvas.width;
+                this.y = y || -10;
+                this.speed = 5 + Math.random() * 10;
+                this.size = 1 + Math.random() * 2;
+                this.opacity = 0.3 + Math.random() * 0.4;
+            }
+
+            update() {
+                this.y += this.speed;
+
+                // Reset if off screen
+                if (this.y > canvas.height) {
+                    this.y = -10;
+                    this.x = Math.random() * canvas.width;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.strokeStyle = `rgba(100, 150, 255, ${this.opacity})`;
+                ctx.lineWidth = this.size;
+                ctx.lineCap = 'round';
+
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x, this.y + this.speed);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        function initGrass() {
+            grassBlades = [];
+            const bladeCount = Math.floor(canvas.width / 5);
+            for (let i = 0; i < bladeCount; i++) {
+                grassBlades.push({
+                    x: Math.random() * canvas.width,
+                    height: 20 + Math.random() * 30,
+                    phase: Math.random() * Math.PI * 2,
+                    swayAmount: 0.02 + Math.random() * 0.03
+                });
+            }
+        }
+
+        function drawSky() {
+            // Sky gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.7);
+
+            if (weatherState === 'sunny') {
+                gradient.addColorStop(0, '#87CEEB');
+                gradient.addColorStop(1, '#98D8E8');
+            } else if (weatherState === 'cloudy') {
+                gradient.addColorStop(0, '#B0C4DE');
+                gradient.addColorStop(1, '#C0D6E4');
+            } else if (weatherState === 'rainy') {
+                gradient.addColorStop(0, '#708090');
+                gradient.addColorStop(1, '#8896A6');
+            }
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height * 0.7);
+
+            // Sun
+            if (weatherState === 'sunny' || weatherState === 'cloudy') {
+                drawSun();
+            }
+        }
+
+        function drawSun() {
+            const sunX = canvas.width - 100;
+            const sunY = 100;
+            const sunRadius = 40;
+
+            ctx.save();
+
+            // Sun glow
+            const glowGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius * 2);
+            glowGradient.addColorStop(0, 'rgba(255, 255, 100, 0.3)');
+            glowGradient.addColorStop(1, 'rgba(255, 255, 100, 0)');
+            ctx.fillStyle = glowGradient;
+            ctx.fillRect(sunX - sunRadius * 2, sunY - sunRadius * 2, sunRadius * 4, sunRadius * 4);
+
+            // Sun body
+            const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius);
+            sunGradient.addColorStop(0, '#FFD700');
+            sunGradient.addColorStop(0.8, '#FFA500');
+            sunGradient.addColorStop(1, '#FF8C00');
+
+            ctx.fillStyle = sunGradient;
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Sun rays
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 2;
+            for (let i = 0; i < 12; i++) {
+                const angle = (i / 12) * Math.PI * 2 + sunAngle;
+                const x1 = sunX + Math.cos(angle) * (sunRadius + 10);
+                const y1 = sunY + Math.sin(angle) * (sunRadius + 10);
+                const x2 = sunX + Math.cos(angle) * (sunRadius + 20);
+                const y2 = sunY + Math.sin(angle) * (sunRadius + 20);
+
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+        function drawGround() {
+            // Ground gradient
+            const gradient = ctx.createLinearGradient(0, canvas.height * 0.7, 0, canvas.height);
+            gradient.addColorStop(0, '#90EE90');
+            gradient.addColorStop(0.5, '#7CB87C');
+            gradient.addColorStop(1, '#698B69');
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, canvas.height * 0.7, canvas.width, canvas.height * 0.3);
+
+            // Draw grass
+            if (document.getElementById('showGrass').checked) {
+                drawGrass();
+            }
+        }
+
+        function drawGrass() {
+            ctx.save();
+
+            grassBlades.forEach((blade, index) => {
+                const windStrength = weatherState === 'rainy' ? 0.1 : 0.05;
+                const sway = Math.sin(time * blade.swayAmount + blade.phase) * windStrength;
+
+                ctx.strokeStyle = index % 3 === 0 ? '#228B22' : '#32CD32';
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+
+                ctx.beginPath();
+                ctx.moveTo(blade.x, canvas.height);
+
+                const cp1x = blade.x + sway * blade.height;
+                const cp1y = canvas.height - blade.height * 0.7;
+                const cp2x = blade.x + sway * blade.height * 1.5;
+                const cp2y = canvas.height - blade.height * 0.9;
+                const endX = blade.x + sway * blade.height * 2;
+                const endY = canvas.height - blade.height;
+
+                ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+                ctx.stroke();
+            });
+
+            ctx.restore();
+        }
+
+        function updateWeather() {
+            const rainFrequency = parseInt(document.getElementById('rainFrequency').value);
+
+            // Weather state machine
+            if (weatherState === 'sunny') {
+                if (Math.random() < rainFrequency / 10000) {
+                    weatherState = 'cloudy';
+                }
+            } else if (weatherState === 'cloudy') {
+                if (Math.random() < 0.01) {
+                    weatherState = 'rainy';
+                    // Create raindrops
+                    for (let i = 0; i < 100; i++) {
+                        raindrops.push(new Raindrop());
+                    }
+                } else if (Math.random() < 0.005) {
+                    weatherState = 'sunny';
+                }
+            } else if (weatherState === 'rainy') {
+                if (Math.random() < 0.005) {
+                    weatherState = 'cloudy';
+                    raindrops = [];
+                }
+            }
+
+            // Update weather display
+            const weatherInfo = document.getElementById('weatherInfo');
+            if (weatherState === 'sunny') {
+                weatherInfo.textContent = '☀️ Sunny Day';
+            } else if (weatherState === 'cloudy') {
+                weatherInfo.textContent = '☁️ Cloudy';
+            } else if (weatherState === 'rainy') {
+                weatherInfo.textContent = '🌧️ Rainy';
+            }
+        }
+
+        function autoPopulate() {
+            if (!document.getElementById('autoPopulate').checked) return;
+
+            const populationRate = parseInt(document.getElementById('populationRate').value);
+            const now = Date.now();
+
+            if (now - lastPopulationTime > (5000 / (populationRate / 20))) {
+                if (plants.length < 100) {
+                    const x = Math.random() * canvas.width;
+                    const y = canvas.height * 0.7 + Math.random() * canvas.height * 0.25;
+                    plants.push(new Plant(x, y));
+                    lastPopulationTime = now;
+                }
+            }
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            initGrass();
+        }
+
+        function animate() {
+            if (!isAnimating) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Update time
+            time += 0.016;
+            sunAngle += 0.01;
+
+            // Draw background
+            drawSky();
+            drawGround();
+
+            // Update and draw weather
+            if (document.getElementById('showWeather').checked) {
+                updateWeather();
+
+                // Update and draw clouds
+                clouds.forEach(cloud => {
+                    cloud.update();
+                    cloud.draw();
+                });
+
+                // Update and draw rain
+                raindrops.forEach(drop => {
+                    drop.update();
+                    drop.draw();
+                });
+            }
+
+            // Sort plants by Y position for proper layering
+            plants.sort((a, b) => a.y - b.y);
+
+            // Update and draw plants
+            plants.forEach(plant => {
+                plant.update();
+                plant.draw();
+            });
+
+            // Auto population
+            autoPopulate();
+
+            // Remove very old plants if too many
+            if (plants.length > 150) {
+                plants = plants.slice(-100);
+            }
+
+            animationId = requestAnimationFrame(animate);
+        }
+
+        function clearGarden() {
+            plants = [];
+        }
+
+        function toggleAnimation() {
+            isAnimating = !isAnimating;
+            if (isAnimating) animate();
+        }
+
+        function toggleControls() {
+            document.getElementById('controls').classList.toggle('hidden');
+        }
+
+        function makeItRain() {
+            weatherState = 'rainy';
+            for (let i = 0; i < 100; i++) {
+                raindrops.push(new Raindrop());
+            }
+        }
+
+        function makeSunshine() {
+            weatherState = 'sunny';
+            raindrops = [];
+        }
+
+        // Event listeners
+        canvas.addEventListener('click', (e) => {
+            if (document.getElementById('autoGrow').checked) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                // Only plant in ground area
+                if (y > canvas.height * 0.7) {
+                    plants.push(new Plant(x, y));
+                }
+            }
+        });
+
+        // Update value displays
+        document.getElementById('growthSpeed').addEventListener('input', (e) => {
+            document.getElementById('speedValue').textContent = e.target.value;
+        });
+
+        document.getElementById('rainFrequency').addEventListener('input', (e) => {
+            document.getElementById('rainValue').textContent = e.target.value;
+        });
+
+        document.getElementById('cloudSpeed').addEventListener('input', (e) => {
+            document.getElementById('cloudValue').textContent = e.target.value;
+        });
+
+        document.getElementById('populationRate').addEventListener('input', (e) => {
+            document.getElementById('popValue').textContent = e.target.value;
+        });
+
+        // Initialize
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Create initial clouds
+        for (let i = 0; i < 5; i++) {
+            clouds.push(new Cloud());
+        }
+
+        // Generate a few initial plants
+        for (let i = 0; i < 5; i++) {
+            const x = Math.random() * canvas.width;
+            const y = canvas.height * 0.7 + Math.random() * canvas.height * 0.25;
+            plants.push(new Plant(x, y));
+        }
+
+        animate();
+    </script>
+</body>
+</html>

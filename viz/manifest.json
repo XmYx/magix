@@ -5,5 +5,7 @@
   { "href": "viz/net4.html",      "label": "Evolve 2"      },
   { "href": "viz/net5.html",      "label": "Petals"      },
   { "href": "viz/net6.html",      "label": "WhatIsDis"      },
-  { "href": "viz/net7.html",      "label": "Meditate"      }
+  { "href": "viz/net7.html",      "label": "Meditate"      },
+  { "href": "viz/game_of_flowers.html",      "label": "Flower Game"      },
+  { "href": "viz/hypno.html",      "label": "Hypno Game"      }
 ]
