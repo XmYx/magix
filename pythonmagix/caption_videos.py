@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-# caption_videos.py — Magix "Oracle" (v5 – OOM-resilient with downscaling)
+# caption_videos.py — Magix "Oracle" (v6 – Predictive OOM Prevention)
 # ─────────────────────────────────────────────────────────────────────────────
-# Same power, softer touch, now with OOM protection:
+# Same power, softer touch, now with predictive OOM prevention:
 #   • Videos already captioned are **left where they are** (silently skipped).
 #   • 30-second timeout per video with model reload on timeout
-#   • CUDA OOM handling with progressive video downscaling (90% -> 80% -> ... -> 25%)
+#   • Smart OOM prediction based on previous failures
+#   • Preemptive scaling for videos likely to cause OOM
+#   • Progressive downscaling as fallback (90% -> 80% -> ... -> 25%)
 #   • Aggressive VRAM cleanup between videos for stability
 #   • Fixed processor kwargs handling
-#   • Only files we cannot caption get moved to <skip_dir>/bad_frames/
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -31,10 +32,11 @@ from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info  # type: ignore
 
 VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".m4v"}
-BANNER = "\033[1m\033[35m✨  Magix Oracle: unveiling stories inside pixels… (OOM-protected)\033[0m"
+BANNER = "\033[1m\033[35m✨  Magix Oracle: unveiling stories inside pixels… (Predictive OOM)\033[0m"
 TIMEOUT_SECONDS = 30
 MIN_SCALE = 0.25  # Minimum 25% of original size
 SCALE_STEP = 0.1  # Reduce by 10% each time
+OOM_HISTORY_FILE = "oom_history.json"
 
 
 class TimeoutError(Exception):
@@ -45,9 +47,177 @@ def timeout_handler(signum, frame):
     raise TimeoutError("Video processing timed out")
 
 
+class OOMPredictor:
+    """Predicts OOM likelihood based on video characteristics."""
+
+    def __init__(self, history_file: Path):
+        self.history_file = history_file
+        self.oom_failures = []
+        self.load_history()
+
+    def load_history(self):
+        """Load OOM failure history from file."""
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, 'r') as f:
+                    self.oom_failures = json.load(f)
+                print(f"📊  Loaded {len(self.oom_failures)} OOM failure records")
+            except Exception as e:
+                print(f"⚠️  Could not load OOM history: {e}")
+                self.oom_failures = []
+
+    def save_history(self):
+        """Save OOM failure history to file."""
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(self.oom_failures, f, indent=2)
+        except Exception as e:
+            print(f"⚠️  Could not save OOM history: {e}")
+
+    def record_oom_failure(self, video_info: Dict):
+        """Record a new OOM failure."""
+        self.oom_failures.append({
+            **video_info,
+            'timestamp': time.time()
+        })
+        self.save_history()
+        print(f"📝  Recorded OOM failure for {video_info.get('name', 'unknown')}")
+
+    def get_safe_thresholds(self) -> Dict[str, float]:
+        """Calculate safe thresholds based on OOM history."""
+        if not self.oom_failures:
+            # Conservative defaults if no history
+            return {
+                'file_size_mb': 500,  # 500MB
+                'total_pixels': 1920 * 1080 * 300,  # 1080p * 300 frames
+                'width': 1920,
+                'height': 1080,
+                'frame_count': 300,
+                'duration': 30.0
+            }
+
+        # Find the smallest values that caused OOM (most conservative)
+        thresholds = {}
+        for metric in ['file_size_mb', 'total_pixels', 'width', 'height', 'frame_count', 'duration']:
+            values = [f.get(metric, float('inf')) for f in self.oom_failures if f.get(metric) is not None]
+            if values:
+                # Use 80% of the smallest failing value as threshold
+                thresholds[metric] = min(values) * 0.8
+            else:
+                # Fallback defaults
+                defaults = {
+                    'file_size_mb': 500,
+                    'total_pixels': 1920 * 1080 * 300,
+                    'width': 1920,
+                    'height': 1080,
+                    'frame_count': 300,
+                    'duration': 30.0
+                }
+                thresholds[metric] = defaults[metric]
+
+        return thresholds
+
+    def predict_oom_risk(self, video_info: Dict) -> Tuple[bool, float, str]:
+        """
+        Predict if video is likely to cause OOM.
+        Returns: (is_risky, suggested_scale, reason)
+        """
+        thresholds = self.get_safe_thresholds()
+
+        risks = []
+
+        # Check various risk factors
+        if video_info.get('file_size_mb', 0) > thresholds['file_size_mb']:
+            excess = video_info['file_size_mb'] / thresholds['file_size_mb']
+            risks.append(('file_size', excess))
+
+        if video_info.get('total_pixels', 0) > thresholds['total_pixels']:
+            excess = video_info['total_pixels'] / thresholds['total_pixels']
+            risks.append(('total_pixels', excess))
+
+        if video_info.get('width', 0) > thresholds['width']:
+            excess = video_info['width'] / thresholds['width']
+            risks.append(('width', excess))
+
+        if video_info.get('height', 0) > thresholds['height']:
+            excess = video_info['height'] / thresholds['height']
+            risks.append(('height', excess))
+
+        if video_info.get('frame_count', 0) > thresholds['frame_count']:
+            excess = video_info['frame_count'] / thresholds['frame_count']
+            risks.append(('frame_count', excess))
+
+        if not risks:
+            return False, 1.0, "safe"
+
+        # Find the highest risk factor
+        highest_risk = max(risks, key=lambda x: x[1])
+        risk_type, risk_ratio = highest_risk
+
+        # Suggest scale based on risk ratio
+        if risk_ratio > 2.0:
+            suggested_scale = 0.5  # 50% for very high risk
+        elif risk_ratio > 1.5:
+            suggested_scale = 0.7  # 70% for high risk
+        else:
+            suggested_scale = 0.9  # 90% for moderate risk
+
+        reason = f"{risk_type} {risk_ratio:.1f}x over threshold"
+        return True, suggested_scale, reason
+
+
 # ─── Utilities ──────────────────────────────────────────────────────────────
 def list_videos(root: Path) -> Sequence[Path]:
     return sorted(p for p in root.rglob("*") if p.suffix.lower() in VIDEO_EXT)
+
+
+def get_video_info(video: Path) -> Dict:
+    """Get comprehensive video information."""
+    info = {
+        'name': video.name,
+        'path': str(video),
+        'file_size_mb': video.stat().st_size / (1024 * 1024),
+    }
+
+    try:
+        # Get resolution, frame count, and duration
+        out = subprocess.check_output(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,nb_frames,duration",
+                "-of", "csv=p=0", str(video)
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+        parts = out.strip().split(',')
+        if len(parts) >= 2:
+            info['width'] = int(parts[0])
+            info['height'] = int(parts[1])
+
+            # Try to get frame count (might not always work)
+            if len(parts) >= 3 and parts[2] and parts[2] != 'N/A':
+                info['frame_count'] = int(parts[2])
+            else:
+                # Fallback: count frames manually
+                frame_count = get_num_frames(video)
+                if frame_count:
+                    info['frame_count'] = frame_count
+
+            # Duration
+            if len(parts) >= 4 and parts[3] and parts[3] != 'N/A':
+                info['duration'] = float(parts[3])
+
+            # Calculate total pixels
+            if 'frame_count' in info:
+                info['total_pixels'] = info['width'] * info['height'] * info['frame_count']
+
+    except Exception:
+        pass
+
+    return info
 
 
 def get_num_frames(video: Path) -> int | None:
@@ -64,25 +234,6 @@ def get_num_frames(video: Path) -> int | None:
             text=True,
         )
         return int(out.strip())
-    except Exception:
-        return None
-
-
-def get_video_resolution(video: Path) -> Tuple[int, int] | None:
-    """Get video resolution (width, height)."""
-    try:
-        out = subprocess.check_output(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "csv=p=0", str(video)
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        width, height = map(int, out.strip().split(','))
-        return width, height
     except Exception:
         return None
 
@@ -203,7 +354,7 @@ def safe_processor_call(processor, prompt: str, img_in, vid_in, device: str):
     return inputs.to(device)
 
 
-def process_single_video_with_scaling(
+def process_single_video_with_prediction(
         vid: Path,
         model: Qwen2VLForConditionalGeneration,
         processor: AutoProcessor,
@@ -211,15 +362,32 @@ def process_single_video_with_scaling(
         max_pixels: int | None,
         device: str,
         tmp_dir: Path,
+        oom_predictor: OOMPredictor,
 ) -> Optional[str]:
-    """Process a single video with progressive downscaling on OOM."""
+    """Process a single video with OOM prediction and progressive scaling."""
 
-    current_scale = 1.0
+    # Get video info for prediction
+    video_info = get_video_info(vid)
+
+    # Predict OOM risk
+    is_risky, suggested_scale, reason = oom_predictor.predict_oom_risk(video_info)
+
+    if is_risky:
+        print(f"🔍  {vid.name}: Predicted OOM risk ({reason}) - starting at {suggested_scale:.0%}")
+        current_scale = suggested_scale
+    else:
+        current_scale = 1.0
+
     current_video = vid
     scaled_video_path = None
 
     while current_scale >= MIN_SCALE:
         try:
+            # Create scaled video if needed
+            if current_scale < 1.0 and current_video == vid:
+                scaled_video_path = create_downscaled_video(vid, current_scale, tmp_dir)
+                current_video = scaled_video_path
+
             # Set up timeout
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(TIMEOUT_SECONDS)
@@ -266,6 +434,10 @@ def process_single_video_with_scaling(
         except RuntimeError as e:
             if "CUDA out of memory" in str(e) or "out of memory" in str(e):
                 print(f"\n🔥  CUDA OOM for {vid.name} at {current_scale:.0%} scale")
+
+                # Record this OOM failure if at original scale
+                if current_scale == 1.0:
+                    oom_predictor.record_oom_failure(video_info)
 
                 # Aggressive cleanup after OOM
                 signal.alarm(0)  # Cancel timeout
@@ -321,6 +493,9 @@ def caption(
         device: str,
         skip_dir: Path,
 ):
+    # Initialize OOM predictor
+    oom_predictor = OOMPredictor(skip_dir / OOM_HISTORY_FILE)
+
     # --- gather already captioned -------------------------------------------
     done: set[str] = set()
     if fmt == "txt":
@@ -338,10 +513,8 @@ def caption(
 
     bad_dir = skip_dir / "bad_frames"
     timeout_dir = skip_dir / "timeout_failures"
-    oom_dir = skip_dir / "oom_failures"
     bad_dir.mkdir(parents=True, exist_ok=True)
     timeout_dir.mkdir(parents=True, exist_ok=True)
-    oom_dir.mkdir(parents=True, exist_ok=True)
 
     # Create temp directory for scaled videos
     temp_dir = Path(tempfile.mkdtemp(prefix="scaled_videos_"))
@@ -359,15 +532,14 @@ def caption(
     # --- main loop -----------------------------------------------------------
     processed_count = 0
     timeout_count = 0
-    oom_count = 0
 
     try:
         for i, vid in enumerate(tqdm(videos, desc="Captioning")):
             if str(vid) in done:
                 continue  # already captioned, leave it be 🌱
 
-            caption_result = process_single_video_with_scaling(
-                vid, model, processor, fps, max_pixels, device, temp_dir
+            caption_result = process_single_video_with_prediction(
+                vid, model, processor, fps, max_pixels, device, temp_dir, oom_predictor
             )
 
             if caption_result == "TIMEOUT":
@@ -387,7 +559,6 @@ def caption(
                 continue
 
             elif caption_result is None:
-                # Check if this was an OOM failure by looking at recent output
                 # Regular failure - move to bad_frames
                 shutil.move(str(vid), bad_dir / vid.name)
                 continue
@@ -431,7 +602,7 @@ def caption(
 # ─── CLI ────────────────────────────────────────────────────────────────────
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Caption every video; leave already-captioned untouched, handle OOM with downscaling.",
+        description="Caption every video; predictive OOM prevention with smart scaling.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("input", type=Path)
