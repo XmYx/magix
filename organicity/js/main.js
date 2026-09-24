@@ -12,6 +12,9 @@ import { createRegion, loadRegion, saveRegion, cityKey, partnersOf, summarize, c
 import { technology, START_ERAS } from './eras.js';
 import { loadPacks } from './packs.js';
 import { RegionSim } from './regionsim.js';
+import { TileHost, loadView, storeView } from './tilehost.js';
+import { viewSnapshot, unb64 } from './tileview.js';
+import { newPresident } from './presidents.js';
 import { fastestRoute } from './routes.js';
 import { t, LANGS, getLang, setLang } from './i18n.js';
 
@@ -73,7 +76,7 @@ async function boot(opts) {
   }
   const syncRegion = () => {
     sim.partnerCities = partnersOf(region, region.active);
-    sim.tileNeighbours = Object.fromEntries(tileNeighbours(region, region.active).filter((q) => q.t.kind !== 'wild').map((q) => [q.dir, { name: q.t.name, pop: q.t.kind === 'ai' ? q.t.pop : q.t.summary?.pop || 0, kind: q.t.kind, key: `${q.t.x},${q.t.z}` }]));
+    sim.tileNeighbours = Object.fromEntries(tileNeighbours(region, region.active).filter((q) => q.t.kind !== 'wild').map((q) => [q.dir, { name: q.t.name, pop: q.t.kind === 'ai' ? q.t.pop : q.t.summary?.pop || 0, kind: q.t.kind, gov: q.t.gov || (q.t.kind === 'city' ? 'player' : 'ai'), key: `${q.t.x},${q.t.z}` }]));
     sim.deals = dealsFor(region, region.active);
   };
   syncRegion();
@@ -93,14 +96,15 @@ async function boot(opts) {
       if (r?.segments.length) (sim.dispatches ||= []).push({ kind: 'van', segs: r.segments, t: performance.now() });
     }
   };
-  sim.onMonth = () => { econ.month(sim); regionEvents(); syncRegion(); econ.pack(); saveRegion(region); };
+  sim.onMonth = () => { region.day = (region.day || 0) + 30; econ.month(sim); regionEvents(); syncRegion(); econ.pack(); saveRegion(region); };
   saveRegion(region);
   const rend = new Renderer($('view'), world, sim);
   const store = () => localStorage.setItem(SAVE_KEY, JSON.stringify(makeSave(world, sim)));
   // save the city and file it under its region tile, with fresh numbers for the world map
   const persist = async () => {
     store();
-    const t = region.tiles[region.active]; t.summary = summarize(world, sim, rend);
+    const t = region.tiles[region.active]; t.summary = summarize(world, sim, rend); t.simDay = region.day;
+    storeView(region, region.active, viewSnapshot(world));   // how this city looks from next door
     econ.pack();
     for (const q of Object.values(region.tiles)) if (q.kind === 'ai' && q.exitNode != null && q.home === region.active && sim.region[q.exitNode]) sim.region[q.exitNode].pop = q.pop;   // the world map drives neighbour size
     localStorage.setItem(cityKey(region, region.active), await encodeSave(makeSave(world, sim)));
@@ -126,7 +130,21 @@ async function boot(opts) {
       sim.spend(cost); region.tiles[key].owned = true; saveRegion(region);
       ui.toast('Tile bought. Found a city on it from the world map.', 'good'); ui.renderWorldMap();
     },
-    switchTile(key) { const t = region.tiles[key]; if (t?.kind === 'city' && key !== region.active) leave({ mode: 'tile', tileKey: key }); },
+    switchTile(key) { const t = region.tiles[key]; if (t?.kind === 'city' && t.gov !== 'ai' && key !== region.active) leave({ mode: 'tile', tileKey: key }); },
+    // play another governor's city: it becomes yours (you keep their name and policy)
+    takeOver(key) {
+      const t = region.tiles[key]; if (!t || t.kind !== 'city' || t.gov !== 'ai' || key === region.active) return;
+      if (!localStorage.getItem(cityKey(region, key))) return ui.toast('That city is still being founded. Try again shortly.', 'warn');
+      if (!confirm(`Take over ${t.name} and play it as ${econ.tile(key)?.president.name}? The AI governor steps aside; you can hand it back later.`)) return;
+      Object.assign(t, { gov: 'player', owned: true }); econ.tile(key).president.controller = 'player';
+      leave({ mode: 'tile', tileKey: key });
+    },
+    // let an AI governor run one of your other cities (it keeps building in the background)
+    handOver(key) {
+      const t = region.tiles[key]; if (!t || t.kind !== 'city' || t.gov === 'ai' || key === region.active) return;
+      Object.assign(t, { gov: 'ai', owned: false }); econ.govern(econ.tile(key), t);
+      econ.pack(); saveRegion(region); syncRegion(); ui.renderWorldMap(); ui.toast(`${t.name} is now run by ${econ.tile(key).president.name} (AI).`, 'info');
+    },
     foundTile(key) {
       const t = region.tiles[key]; if (!t?.owned || t.kind !== 'wild') return;
       if (!confirm(`Found a new city on this ${t.preset} tile? ${world.buildings.size ? 'This city is saved and you can switch back any time.' : ''}`)) return;
@@ -150,11 +168,27 @@ async function boot(opts) {
   ui.tools = tools; ui.audio = audio; ui.applySettings();
   ui.toolChanged(); ui.hud();
   window.city = { world, sim, rend, tools, ui, audio, region, econ };
-  rend.setRegion?.(region);
+  // the neighbouring cities, drawn from their latest views; the background host keeps them running
+  const views = () => Object.fromEntries(tileNeighbours(region, region.active).map((q) => `${q.t.x},${q.t.z}`).map((k) => [k, loadView(region, k)]).filter(([, v]) => v));
+  rend.setRegion?.(region, views());
+  const thumb = (v) => { try { const cls = unb64(v.cls), S = v.S, cv = document.createElement('canvas'); cv.width = cv.height = S; const g = cv.getContext('2d'), img = g.createImageData(S, S);
+    const P = [[96, 146, 62], [70, 124, 168], [150, 150, 146], [128, 180, 88], [42, 150, 60], [70, 140, 230], [230, 190, 50], [150, 110, 220], [230, 120, 160], [180, 178, 170]];
+    for (let i = 0; i < S * S; i++) { const c = P[cls[i]] || P[0]; img.data.set([c[0], c[1], c[2], 255], i * 4); } g.putImageData(img, 0, 0); return cv.toDataURL('image/png'); } catch { return null; } };
+  const host = new TileHost(region, econ, sim, {
+    thumb,
+    onTile(k, res, job) {
+      if (tileNeighbours(region, region.active).some((q) => `${q.t.x},${q.t.z}` === k)) rend.setRegion?.(region, views());
+      const t = region.tiles[k], built = new Set(res.built), pres = econ.tile(k)?.president.name;
+      if (job.generated) sim.headline(`${pres} founded the city of ${t.name} next door.`, 'info');
+      else for (const s of ['school', 'clinic', 'fire', 'police', 'landfill']) if (built.has(s)) { sim.headline(`${t.name} (${pres}) opened a new ${s === 'fire' ? 'fire station' : s === 'police' ? 'police station' : s}.`, 'info'); break; }
+      syncRegion(); ui.renderWorldMap();
+    },
+  });
+  window.city.host = host;
   if (sim.sandbox) ui.toast(`Sandbox mode · seed ${world.seed}`, 'info');
   if (sim.scenario && SCENARIOS[sim.scenario]) ui.toast(`${SCENARIOS[sim.scenario].name}: ${SCENARIOS[sim.scenario].desc}`, 'info');
 
-  let last = performance.now(), saveT = 0;
+  let last = performance.now(), saveT = 0, hostT = 0;
   function loop(now) {
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
     sim.update(dt);
@@ -162,7 +196,8 @@ async function boot(opts) {
     rend.frame(dt);
     ui.update(dt);
     audio.update(dt);
-    saveT += dt;
+    saveT += dt; hostT = (hostT || 0) + dt;
+    if (hostT > 1) { hostT = 0; host.tick(); }
     if (saveT > 120 && world.buildings.size) { saveT = 0; persist().catch(() => { /* quota exceeded — keep playing */ }); }
     requestAnimationFrame(loop);
   }

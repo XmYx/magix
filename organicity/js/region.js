@@ -29,14 +29,15 @@ export function createRegion(world, sim) {
     const k = tileKey(x, z);
     r.tiles[k] = { x, z, seed: Math.floor(hash2(x, z, seed % 99991) * 1e6), preset: PRESETS[Math.floor(hash2(x, z, (seed % 99991) + 5) * PRESETS.length)], kind: 'wild', owned: false };
   }
-  Object.assign(r.tiles[home], { seed: world.seed, preset: world.mapPreset || 'river', kind: 'city', owned: true, name: CITY_NAMES[0] });
+  Object.assign(r.tiles[home], { seed: world.seed, preset: world.mapPreset || 'river', kind: 'city', owned: true, gov: 'player', name: CITY_NAMES[0] });
   // the neighbours the city already trades with sit beyond its highway exits
   const used = new Set();
   for (const n of world.net.nodes.values()) {
     if (!n.outside) continue;
     const [dx, dz] = exitDir(n), t = r.tiles[tileKey(c + dx, c + dz)]; if (!t || t.kind !== 'wild') continue;
     const nb = sim.regionList().find((q) => q.id === n.id);
-    Object.assign(t, { kind: 'ai', name: nb?.name || NEIGHBOUR_NAMES[0], pop: nb?.pop || 50000, exitNode: n.id });
+    // an AI governor's tile: a city is founded there and grows in the background
+    Object.assign(t, { kind: 'ai', gov: 'ai', name: nb?.name || NEIGHBOUR_NAMES[0], pop: Math.round(2000 + hash2(t.x, t.z, seed % 811) * 6000), exitNode: n.id });
     used.add(t.name);
   }
   // a few more AI cities further out
@@ -44,7 +45,7 @@ export function createRegion(world, sim) {
   free.sort((a, b) => hash2(a.x, a.z, seed % 7919) - hash2(b.x, b.z, seed % 7919));
   for (const t of free.slice(0, 4)) {
     const name = NEIGHBOUR_NAMES.find((nm, i) => !used.has(nm) && hash2(i, t.x * 7 + t.z, seed % 613) < 0.6) || NEIGHBOUR_NAMES.find((nm) => !used.has(nm));
-    used.add(name); Object.assign(t, { kind: 'ai', name, pop: Math.round(15000 + hash2(t.x, t.z, seed % 3571) * 160000) });
+    used.add(name); Object.assign(t, { kind: 'ai', gov: 'ai', name, pop: Math.round(2000 + hash2(t.x, t.z, seed % 3571) * 10000) });
   }
   return r;
 }

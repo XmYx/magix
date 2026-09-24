@@ -240,3 +240,4 @@ body.reduced-motion * { transition: none !important; animation: none !important;
 .dbar i { display: block; height: 100%; } .dbar i.p { background: var(--pos); } .dbar i.n { background: var(--neg); }
 table.term td { vertical-align: top; }
 #panel details { margin: 4px 0; } #panel summary { cursor: pointer; color: var(--acc); }
+.wt.aigov { border-color: #5c6f8a; } .wt small.gov { color: #c8d4ff; }

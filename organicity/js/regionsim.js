@@ -17,6 +17,7 @@ import { N, ZONES } from './config.js';
 import { hash2, clamp } from './util.js';
 import { OPPOSITE, neighbours, tileKey, exitsOf } from './region.js';
 import { newPresident, clampPolicy, applyPolicy, aiDecide, predict, POLICY_DEFAULT } from './presidents.js';
+import { cityBlocks } from './tileview.js';
 import { rentOf, salaryOf, newFamily, reconsider, settle, bestJob, utility, sampleHomes, THRESHOLD, WORKDAYS } from './families.js';
 
 export const TERM_YEARS = 10;
@@ -49,9 +50,10 @@ export class RegionSim {
       treasury: s.treasury ?? (t.kind === 'city' ? t.summary?.money ?? 0 : Math.round((t.pop || 20000) * 6)),
       housing: unpackRows(s.housing, H_KEYS), jobs: unpackRows(s.jobs, J_KEYS),
       acc: s.acc || { income: 0, expense: 0, tolls: 0, migIn: 0, migOut: 0, crossings: 0 },
-      month: { tolls: 0, crossings: 0, migIn: 0, migOut: 0 }, predicted: s.predicted || null,
+      month: { tolls: 0, crossings: 0, migIn: 0, migOut: 0 }, predicted: s.predicted || null, pendingTolls: s.pendingTolls || 0,
     };
     if (t.kind === 'ai' && !st.housing.size) this.synthesize(st, t);
+    this.govern(st, t);
     return st;
   }
   // an AI city as 24 housing blocks and 16 job blocks spread over its tile
@@ -130,28 +132,46 @@ export class RegionSim {
   // city's occupancy (arrivals from outside the region, or departures), and moves between
   // buildings change occupancy directly.
   refreshActive() {
-    const sim = this.sim, w = this.world, st = this.tiles.get(this.active), H = new Map(), J = new Map();
-    const at = (f, b) => (f ? sim.at(f, b.cx, b.cz) : 0);
-    for (const b of w.buildings.values()) {
-      if (b.svc || b.abandoned || b.rubble > 0) continue;
-      if (b.hh > 0) {
-        const services = (sim.bcov('clinic', b) + sim.bcov('school', b) + sim.bcov('police', b) + sim.bcov('fire', b)) / 4;
-        H.set(b.id, { id: b.id, units: b.hh, occ: 0, quality: clamp(0.35 * b.level / 5 + 0.4 * (b.lv ?? 0.3) + 0.25 * (b.happy ?? 0.5), 0, 1), x: b.cx, z: b.cz, appeal: b.lv ?? 0.3, pollution: at(sim.f.pollution, b), crime: at(sim.f.crime, b), services });
-      }
-      if (b.jobs > 0) J.set(b.id, { id: b.id, slots: Math.max(1, Math.round(b.jobs)), filled: 0, kind: ZONES[b.zone].kind, level: b.level, x: b.cx, z: b.cz });
-    }
-    st.housing = H; st.jobs = J;
-    const byHome = new Map();
-    for (const f of [...this.families.values()]) if (f.tile === this.active) { if (!H.has(f.home)) { this.leave(f); continue; } if (!byHome.has(f.home)) byHome.set(f.home, []); byHome.get(f.home).push(f); }
+    const blocks = cityBlocks(this.world, this.sim), st = this.tiles.get(this.active);
+    st.housing = new Map(blocks.housing.map((h) => [h.id, h])); st.jobs = new Map(blocks.jobs.map((j) => [j.id, j]));
+    this.reconcile(this.active);
+    this.recountJobs();
+  }
+  // Families in a tile follow its buildings: a building's occupancy is how many families live
+  // there, so extra families leave the region and missing ones arrive from outside it.
+  reconcile(k) {
+    const st = this.tiles.get(k), H = st.housing, byHome = new Map();
+    for (const f of [...this.families.values()]) if (f.tile === k) { if (!H.has(f.home)) { this.leave(f); continue; } if (!byHome.has(f.home)) byHome.set(f.home, []); byHome.get(f.home).push(f); }
     // newcomers settle in for a year before looking around
     for (const [id, h] of H) {
-      const b = w.buildings.get(id), target = Math.max(0, Math.min(h.units, Math.round(b.occ || 0))), list = byHome.get(id) || [];
+      const target = Math.max(0, Math.min(h.units, Math.round(h.occ || 0))), list = byHome.get(id) || [];
       list.sort((p, q) => p.happy - q.happy);
-      while (list.length > target) this.leave(list.shift());
-      for (let n = list.length; n < target; n++) { const id2 = this.e.nextFamily++, f = newFamily(id2, this.active, id, this.r.seed, { next: this.day + 360 + Math.floor(hash2(id2, 3, 7) * 360) }); this.families.set(f.id, f); list.push(f); }
+      while (list.length > target) { const f = list.shift(); this.families.delete(f.id); const j = f.wt != null ? this.tiles.get(f.wt)?.jobs.get(f.wid) : null; if (j) j.filled = Math.max(0, j.filled - f.earners); }
+      for (let n = list.length; n < target; n++) { const id2 = this.e.nextFamily++, f = newFamily(id2, k, id, this.r.seed, { next: this.day + 360 + Math.floor(hash2(id2, 3, 7) * 360) }); this.families.set(f.id, f); list.push(f); }
       h.occ = list.length;
     }
-    this.recountJobs();
+  }
+  // a background city's latest run: its homes and jobs replace the tile's blocks
+  updateTile(k, blocks, summary) {
+    const t = this.r.tiles[k]; let st = this.tiles.get(k);
+    if (!st) { st = this.loadTile(k, t); this.tiles.set(k, st); }
+    st.kind = 'city'; this.govern(st, t);
+    st.housing = new Map(blocks.housing.map((h) => [h.id, h])); st.jobs = new Map(blocks.jobs.map((j) => [j.id, j]));
+    st.treasury = summary.money; st.pop = summary.pop;
+    if (st.level !== 'far') this.reconcile(k);
+    this.buildPortals(); this.recountJobs(); this.conditions(); this.index();
+  }
+  // families per building of a tile, to carry the region's moves into its own simulation
+  occupancy(k) {
+    const st = this.tiles.get(k); if (!st || st.level === 'far' || st.kind !== 'city') return [];
+    const n = new Map(); for (const f of this.families.values()) if (f.tile === k) n.set(f.home, (n.get(f.home) || 0) + 1);
+    return [...st.housing.keys()].map((id) => [id, n.get(id) || 0]);
+  }
+  // who governs a tile: you, or an AI president with a priority
+  govern(st, t) {
+    const ai = t.kind === 'ai' || t.gov === 'ai';
+    st.president.controller = ai ? 'ai' : 'player';
+    if (ai && !st.president.priority) st.president.priority = newPresident(this.r.seed, st.key, 'ai', 0).priority;
   }
   recountJobs() {
     for (const st of this.tiles.values()) if (st.kind === 'city') for (const j of st.jobs.values()) j.filled = 0;
@@ -298,7 +318,7 @@ export class RegionSim {
   // far tiles of yours: families rest, the city follows its recent trend (reduced detail)
   farTiles() {
     for (const [k, st] of this.tiles) {
-      if (st.kind !== 'city' || st.level !== 'far') continue;
+      if (st.kind !== 'city' || st.level !== 'far' || this.background?.has(k)) continue;
       const s = this.r.tiles[k].summary; if (!s) continue;
       s.pop = Math.max(0, Math.round((s.pop || 0) * (1 + (s.growth || 0)))); s.growth = +((s.growth || 0) * 0.96).toFixed(5);
     }
@@ -346,11 +366,15 @@ export class RegionSim {
     const byTile = new Map(); for (const f of this.families.values()) { if (!byTile.has(f.tile)) byTile.set(f.tile, []); byTile.get(f.tile).push(f); }
     for (const [k, st] of this.tiles) {
       const fams = byTile.get(k) || [];
-      st.pop = k === this.active ? Math.round(sim.stats.pop) : st.kind === 'ai' ? Math.round([...st.housing.values()].reduce((s, h) => s + h.occ, 0) * 2.6)
+      st.pop = k === this.active ? Math.round(sim.stats.pop) : this.background?.has(k) && st.kind === 'city' ? this.r.tiles[k].summary?.pop ?? 0 : st.kind === 'ai' ? Math.round([...st.housing.values()].reduce((s, h) => s + h.occ, 0) * 2.6)
         : st.level === 'far' ? this.r.tiles[k].summary?.pop ?? fams.reduce((s, f) => s + f.size, 0) : fams.reduce((s, f) => s + f.size, 0);
-      if (st.kind === 'ai') this.r.tiles[k].pop = st.pop; else if (this.r.tiles[k].summary && k !== this.active) this.r.tiles[k].summary.pop = st.pop;
+      if (st.kind === 'ai') this.r.tiles[k].pop = st.pop; else if (this.r.tiles[k].summary && k !== this.active && !this.background?.has(k)) this.r.tiles[k].summary.pop = st.pop;
       st.stats = this.snapshot(st, fams);
       if (k === this.active) { sim.tollIncome = st.month.tolls; st.treasury = sim.money; st.acc.income += sim.month.income; st.acc.expense += sim.month.expense; }
+      else if (st.kind === 'city' && this.background?.has(k)) {   // simulated in the background: its own city keeps the books; tolls are credited on its next run
+        st.pendingTolls = (st.pendingTolls || 0) + st.month.tolls; st.treasury = (this.r.tiles[k].summary?.money ?? st.treasury) + st.pendingTolls;
+        st.pop = this.r.tiles[k].summary?.pop ?? st.pop;
+      }
       else {
         const p = st.policy, hh = st.kind === 'ai' ? st.occ : fams.length;
         // scaled so a tile earns and spends per resident about what a played city does
@@ -412,7 +436,7 @@ export class RegionSim {
   pack() {
     for (const [k, st] of this.tiles) {
       if (k === this.active && this.sim) st.treasury = this.sim.money;
-      Object.assign(this.e.tiles[k] ||= {}, { president: st.president, policy: st.policy, treasury: Math.round(st.treasury), acc: st.acc, predicted: st.predicted,
+      Object.assign(this.e.tiles[k] ||= {}, { president: st.president, policy: st.policy, treasury: Math.round(st.treasury), acc: st.acc, predicted: st.predicted, pendingTolls: st.pendingTolls || 0,
         left: k === this.active ? this.day : this.e.tiles[k].left ?? null, housing: packRows(st.housing, H_KEYS), jobs: packRows(st.jobs, J_KEYS) });
     }
     this.e.families = [...this.families.values()].map(packF);

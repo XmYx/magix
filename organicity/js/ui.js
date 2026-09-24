@@ -547,7 +547,7 @@ export class UI {
   // utility deals with your neighbouring cities (stored in the region)
   dealsHtml() {
     const r = this.actions.region?.(); if (!r) return '';
-    const s = this.sim, mine = Object.values(s.tileNeighbours || {}).filter((t) => t.kind === 'city'), mk = s.market();
+    const s = this.sim, mine = Object.values(s.tileNeighbours || {}).filter((t) => t.kind === 'city' && t.gov !== 'ai'), mk = s.market();
     const rows = s.dealFlow?.rows || s.deals || [];
     return `<h3>Utility deals</h3>
       ${rows.map((d) => { const other = r.tiles[d.partner]; return `<p>${d.role === 'sell' ? 'Sell' : 'Buy'} ${d.amount} ${d.kind === 'power' ? 'MW' : 'water'} ${d.role === 'sell' ? 'to' : 'from'} ${esc(other?.name || d.partner)} · ₵${d.price}/unit/month${d.linked === false ? ' · <span class="neg">no road link on that side</span>' : d.role === 'sell' && d.delivered < d.amount ? ` · <span class="warn">delivering ${Math.round(d.delivered)}</span>` : ''} <button data-deal-del="${d.id}">Cancel</button></p>`; }).join('') || '<p class="dim">No deals yet.</p>'}
@@ -949,9 +949,13 @@ export class UI {
       if (t.kind === 'city') {
         const sm = active ? { ...(t.summary || {}), pop: Math.round(this.sim.stats.pop), year: this.sim.year } : t.summary || {};
         if (t.summary?.thumb) style = `background-image:url(${t.summary.thumb})`;
-        body = `<b>${esc(t.name || 'City')} <button class="ren" data-wm-rename="${k}" title="Rename">✎</button></b><small>${fmtPop(sm.pop || 0)} people${sm.year ? ` · ${sm.year}` : ''}</small>${active ? '<em>You are here</em>' : `<button data-wm-switch="${k}">Play this city</button>`}`;
+        const gov = this.w.econ?.tile(k)?.president, ai = t.gov === 'ai';
+        body = `<b>${esc(t.name || 'City')}${ai ? '' : ` <button class="ren" data-wm-rename="${k}" title="Rename">✎</button>`}</b><small>${fmtPop(sm.pop || 0)} people${sm.year ? ` · ${sm.year}` : ''}</small>`
+          + (ai ? `<small class="gov">AI · ${esc(gov?.name || 'governor')}${gov?.priority ? ` · ${AIMS[gov.priority]}` : ''}</small>${active ? '' : `<button data-wm-take="${k}" title="Play this city as its governor">Play as governor</button>`}`
+            : active ? '<em>You are here</em>' : `<button data-wm-switch="${k}">Play this city</button><button data-wm-hand="${k}" title="Let an AI governor run and build it">Hand to AI</button>`);
+        if (ai) cls += ' aigov';
       } else if (t.kind === 'ai') {
-        body = `<b>${esc(t.name)}</b><small>${fmtPop(t.pop || 0)} people ${t.trend > 0.001 ? '▲' : t.trend < -0.001 ? '▼' : ''} · neighbour</small>${next ? '<em>Trades over the highway</em>' : ''}`;
+        body = `<b>${esc(t.name)}</b><small>${fmtPop(t.pop || 0)} people · AI city</small><em>Being founded by its governor…</em>`;
       } else if (t.owned) {
         body = `<b>Your land</b><small>${MAP_PRESETS[t.preset]}</small><button class="primary" data-wm-found="${k}">Found a city</button>`;
       } else {
@@ -967,6 +971,8 @@ export class UI {
     el.querySelectorAll('[data-wm-buy]').forEach((b) => { b.onclick = () => this.actions.buyTile(b.dataset.wmBuy); });
     el.querySelectorAll('[data-wm-found]').forEach((b) => { b.onclick = () => this.actions.foundTile(b.dataset.wmFound); });
     el.querySelectorAll('[data-wm-switch]').forEach((b) => { b.onclick = () => this.actions.switchTile(b.dataset.wmSwitch); });
+    el.querySelectorAll('[data-wm-take]').forEach((b) => { b.onclick = () => this.actions.takeOver(b.dataset.wmTake); });
+    el.querySelectorAll('[data-wm-hand]').forEach((b) => { b.onclick = () => this.actions.handOver(b.dataset.wmHand); });
     el.querySelectorAll('[data-wm-rename]').forEach((b) => { b.onclick = () => { const n = prompt('Name this city', r.tiles[b.dataset.wmRename].name || ''); if (n) this.actions.renameTile(b.dataset.wmRename, n); }; });
   }
 

@@ -10,6 +10,7 @@ import { genBuilding, rgb, hex } from './procgen.js';
 import { hash2, clamp, fbm } from './util.js';
 import { technology, buildingFloors } from './eras.js';
 import { frontAt, WEATHER } from './weather.js';
+import { unb64 } from './tileview.js';
 import { Traffic, AgentSim, TYPE_IDS, POSE_STRIDE, deckHeight } from './agents.js';
 import { netSnapshot } from './core.js';
 
@@ -1109,7 +1110,7 @@ export class Renderer {
 
   // Neighbouring cities of the region stand on the horizon beyond the map edge,
   // sized by their population (AI neighbours and your own other cities alike).
-  setRegion(region) {
+  setRegion(region, views = {}) {
     if (this.regionGroup) { this.regionGroup.traverse((o) => o.geometry?.dispose()); this.scene.remove(this.regionGroup); }
     const g = this.regionGroup = new THREE.Group(), here = region?.tiles[region.active]; this.scene.add(g);
     if (!here) return;
@@ -1121,8 +1122,10 @@ export class Renderer {
       for (const o of [-5, 5]) boxes.push(coloredBox(0.6, 3, 0.6, x + (along ? 0 : o), y + 1.5, z + (along ? o : 0), 0xf0a030));
     }
     for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-      const t = region.tiles[`${here.x + dx},${here.z + dz}`];
+      const key = `${here.x + dx},${here.z + dz}`, t = region.tiles[key];
       if (!t || (t.kind !== 'ai' && t.kind !== 'city')) continue;
+      if (views[key]) { g.add(this.neighbourMesh(views[key], dx * N, dz * N)); continue; }
+      // not built yet (or no view): a hazy skyline sized by population
       const pop = t.kind === 'ai' ? t.pop || 20000 : t.summary?.pop || 0; if (pop < 50) continue;
       const n = Math.round(clamp(pop / 1500, 10, 140)), top = clamp(Math.sqrt(pop) / 4, 8, 110), seed = t.x * 31 + t.z;
       const cx = N / 2 + dx * N * 0.62, cz = N / 2 + dz * N * 0.62;
@@ -1135,6 +1138,28 @@ export class Renderer {
       }
     }
     if (boxes.length) { const m = new THREE.Mesh(mergeGeometries(boxes), new THREE.MeshLambertMaterial({ vertexColors: true })); m.receiveShadow = false; g.add(m); }
+  }
+  // A neighbouring city from its view: ground (terrain, water, roads and zoned land coloured
+  // like the map) and a lit box for every building, placed beyond the shared edge.
+  neighbourMesh(view, ox, oz) {
+    const S = view.S, k = N / S, cls = unb64(view.cls), hgt = unb64(view.hgt), bx = unb64(view.boxes, Int16Array), grp = new THREE.Group();
+    const GROUND = [[96, 146, 62], [60, 112, 150], [128, 128, 124], ...[1, 2, 3, 4, 5, 6].map((z) => ZONES[z].color.map((c, i) => Math.round(c * 0.45 + [96, 146, 62][i] * 0.55))), [170, 168, 160]];
+    const pos = new Float32Array((S + 1) * (S + 1) * 3), col = new Float32Array((S + 1) * (S + 1) * 3), idx = [];
+    for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) {
+      const c = Math.min(S - 1, j) * S + Math.min(S - 1, i), v = j * (S + 1) + i, g = GROUND[cls[c]] || GROUND[0], sh = 0.92 + hash2(i, j, 91) * 0.1;
+      pos.set([ox + i * k, cls[c] === 1 ? -1.4 : hgt[c] / 3, oz + j * k], v * 3); col.set([g[0] / 255 * sh, g[1] / 255 * sh, g[2] / 255 * sh], v * 3);
+    }
+    for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const a = j * (S + 1) + i, b = a + 1, c = a + S + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.setIndex(idx); geo.computeVertexNormals();
+    const ground = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true })); ground.receiveShadow = true; grp.add(ground);
+    const WALL = { 3: 0xd8cfb8, 4: 0xc8c2b4, 5: 0x9fb4d8, 6: 0xd8cc9a, 7: 0xb4b8cc, 8: 0xd8b8c0, 9: 0xd0d0cc };
+    const boxes = [];
+    for (let i = 0; i < bx.length; i += 7) {
+      const x0 = bx[i], z0 = bx[i + 1], x1 = bx[i + 2], z1 = bx[i + 3], y0 = bx[i + 4] / 4, h = Math.max(0.6, bx[i + 5] / 4), w = Math.max(1, (x1 - x0) * 0.8), d = Math.max(1, (z1 - z0) * 0.8);
+      boxes.push(coloredBox(w, h, d, ox + (x0 + x1) / 2, y0 + h / 2, oz + (z0 + z1) / 2, WALL[bx[i + 6]] || 0xcccccc));
+    }
+    if (boxes.length) { const m = new THREE.Mesh(mergeGeometries(boxes), new THREE.MeshLambertMaterial({ vertexColors: true })); m.castShadow = false; grp.add(m); }
+    return grp;
   }
 
   // Disasters and events on screen: the ground shakes after a quake, a funnel sweeps

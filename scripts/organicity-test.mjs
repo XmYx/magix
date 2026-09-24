@@ -9,7 +9,7 @@ import { deckHeight } from '../organicity/js/agents.js';
 import { World } from '../organicity/js/world.js';
 import { Sim } from '../organicity/js/sim.js';
 import { makeSave, loadSave, migrate, SAVE_VERSION } from '../organicity/js/save.js';
-import { PROB } from '../organicity/js/sim.js';
+import { PROB, SANDBOX_DEFAULTS } from '../organicity/js/sim.js';
 import { RoadNet } from '../organicity/js/roads.js';
 import { fastestRoute, commuteRoutes } from '../organicity/js/routes.js';
 import { weatherAt, WEATHER, frontAt } from '../organicity/js/weather.js';
@@ -24,6 +24,9 @@ import { registerPack, landmarkDef } from '../organicity/js/packs.js';
 import { t as tr, setLang, STRINGS } from '../organicity/js/i18n.js';
 import { backgroundMonth } from '../organicity/js/region.js';
 import { RegionSim, TERM_YEARS } from '../organicity/js/regionsim.js';
+import { aiBuild } from '../organicity/js/builder.js';
+import { runTile, found } from '../organicity/js/tile-worker.js';
+import { unb64, viewSnapshot } from '../organicity/js/tileview.js';
 import { rentOf, salaryOf, utility as famUtility, reconsider, newFamily, THRESHOLD } from '../organicity/js/families.js';
 import { applyPolicy, aiDecide, clampPolicy, predict } from '../organicity/js/presidents.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -1327,6 +1330,57 @@ test('economy 10 — annual statistics, ten-year terms, elections and saved hist
   assert(econ.events.filter((e) => e.type === 'term').length === 2, 'no term-end events for the interface');
   econ.pack(); const again = new RegionSim(JSON.parse(JSON.stringify(r)));
   assert(again.families.size === econ.families.size && again.e.terms.length === 2 && again.tile(s.w ? r.active : r.active).president.name === econ.tile(r.active).president.name, 'region economy not saved');
+});
+
+// ------------------------------------------------------------------ AI governors build real cities
+test('AI governor builds a real city: utilities, services, streets and zoning, within its budget', () => {
+  const { world: w, sim: s } = found({ seed: 777, preset: 'river', startYear: 2000, eraPace: 5, year: 2000 });
+  const days = (n) => { for (let d = 0; d < n; d++) for (let k = 0; k < 30; k++) s.update(1 / 30); };
+  s.sandbox = { ...SANDBOX_DEFAULTS, infinite: false, instant: true, noFires: true, noIllness: true, noDisasters: true };
+  const done = []; for (let m = 0; m < 8; m++) { done.push(...aiBuild(w, s, { dev: 'balanced' })); days(30); }
+  s.sandbox = null; for (let m = 0; m < 6; m++) { done.push(...aiBuild(w, s, { dev: 'balanced' })); days(30); }
+  const has = (k) => [...w.buildings.values()].some((b) => b.svc === k);
+  assert(has('coal') && (has('pump') || has('tower')) && has('outlet') && has('fire'), `utilities or services missing: ${[...new Set(done)]}`);
+  assert(w.net.edges.size > 8 && s.stats.pop > 250 && [...w.buildings.values()].filter((b) => !b.svc).length > 50, `no city: pop ${s.stats.pop}, edges ${w.net.edges.size}`);
+  assert(s.money > -20000, `AI governor bankrupt: ${s.money}`);
+  const again = found({ seed: 777, preset: 'river', startYear: 2000, eraPace: 5, year: 2000 });
+  assert(JSON.stringify(aiBuild(again.world, again.sim, {})) === JSON.stringify(aiBuild(found({ seed: 777, preset: 'river', startYear: 2000, eraPace: 5, year: 2000 }).world, found({ seed: 777, preset: 'river', startYear: 2000, eraPace: 5, year: 2000 }).sim, {})), 'builder not deterministic');
+});
+
+test('background tiles: found an AI city, run it on, carry family moves and tolls in, and see it next door', () => {
+  const policy = clampPolicy({ dev: 'housing' });
+  const a = runTile({ generate: { seed: 4321, preset: 'hills', startYear: 2000, eraPace: 5, year: 2003, stubs: [{ side: 'east', pos: 262 }] }, days: 0, gov: 'ai', policy });
+  assert(a.summary.pop > 100 && a.blocks.housing.length > 10 && a.save.v === SAVE_VERSION && a.built.includes('street'), `founding failed: pop ${a.summary.pop}`);
+  assert(a.summary.exits.some((x) => x.side === 'east' && Math.abs(x.pos - 262) < 3), 'stub road to the neighbour not built');
+  const cls = unb64(a.view.cls), boxes = unb64(a.view.boxes, Int16Array);
+  assert(cls.length === 128 * 128 && boxes.length === a.view.n * 7 && a.view.n === JSON.parse(JSON.stringify(a.save)).world.buildings.filter((b) => !b.platformId).length, 'view snapshot malformed');
+  const home = a.blocks.housing.find((h) => h.units > 1) || a.blocks.housing[0], money0 = a.summary.money;
+  const b = runTile({ save: JSON.parse(JSON.stringify(a.save)), days: 30, gov: 'ai', policy, occ: [[home.id, 0]], credit: 5000 });
+  assert(b.day >= a.day + 29 && b.summary.money !== money0, `city did not run on: day ${a.day}→${b.day}`);
+  const c = runTile({ save: JSON.parse(JSON.stringify(a.save)), days: 0, gov: 'ai', policy, credit: 5000 });
+  assert(c.summary.money === money0 + 5000, `toll credit not applied: ${c.summary.money} vs ${money0}`);
+  const d = runTile({ save: JSON.parse(JSON.stringify(a.save)), days: 0, gov: 'ai', policy, occ: [[home.id, 0]] });
+  assert(d.blocks.housing.find((h) => h.id === home.id).occ === 0, 'family moves not carried into the city');
+});
+
+test('regional economy adopts a founded AI city: real homes and jobs, families, governors', () => {
+  const { s, econ, r, homeKey } = econFixture();
+  const ai = econ.reach.get(homeKey).map((k) => econ.tile(k)).find((t) => t.kind === 'ai');
+  const t = r.tiles[ai.key];
+  const res = runTile({ generate: { seed: t.seed, preset: t.preset, startYear: 2000, eraPace: 5, year: s.year, stubs: [] }, days: 0, gov: 'ai', policy: ai.policy });
+  t.kind = 'city'; t.gov = 'ai'; t.summary = res.summary;
+  econ.background = new Set([ai.key]);
+  econ.updateTile(ai.key, res.blocks, res.summary);
+  const st = econ.tile(ai.key);
+  assert(st.kind === 'city' && st.president.controller === 'ai' && st.president.priority && st.housing.size === res.blocks.housing.length, 'AI city not adopted');
+  const fams = [...econ.families.values()].filter((f) => f.tile === ai.key).length, occ = res.blocks.housing.reduce((n, h) => n + h.occ, 0);
+  assert(st.level === 'near' ? fams === occ : fams === 0, `families ${fams} vs occupied homes ${occ}`);
+  const o = econ.occupancy(ai.key); assert(o.length === st.housing.size && o.reduce((n, [, c]) => n + c, 0) === fams, 'occupancy patch wrong');
+  s.day += 30; econ.month(s);
+  assert(Math.abs(st.treasury - (res.summary.money + (st.pendingTolls || 0))) < 1, 'background treasury not the city’s own');
+  // you take over the AI governor's city; later hand it back
+  t.gov = 'player'; econ.govern(st, t); assert(st.president.controller === 'player', 'take-over did not make it yours');
+  t.gov = 'ai'; econ.govern(st, t); assert(st.president.controller === 'ai' && st.president.priority, 'hand-over did not restore the AI');
 });
 
 // ------------------------------------------------------------------ runner
