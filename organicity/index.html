@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Organicity</title>
+  <meta name="description" content="A pixel-art 3D city builder about organic, free-form urban growth.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="city.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <header id="top"></header>
+  <nav id="dock" aria-label="Tools"></nav>
+  <div id="fly"></div>
+  <aside id="panel" hidden></aside>
+  <div id="tip" hidden></div>
+  <div id="toasts" aria-live="polite"></div>
+
+  <div id="intro">
+    <div class="card">
+      <h1>ORGANICITY</h1>
+      <p class="lede">A pixel-art city builder where nothing snaps to a grid. Draw streets any way you like; every wedge, curve, sliver and corner becomes a lot, and buildings shape themselves to fit.</p>
+      <ol class="loop">
+        <li><b>Roads</b> Branch off the highway (2). Curves, any angle, bridges over water.</li>
+        <li><b>Utilities</b> Power, a water pump and a sewage outlet by the shore (4). They flow through the road network.</li>
+        <li><b>Zones</b> Paint homes, shops, industry, offices or mixed-use along the streets (3), or fill a whole block.</li>
+        <li><b>Growth</b> Buildings grow into their lots. Appealing areas densify and merge lots; neglected ones decline.</li>
+        <li><b>Services</b> Fire, police, clinics, schools, parks and landfill (5). Coverage follows the roads.</li>
+        <li><b>Tune</b> Taxes (9), overlays (8) and districts with local policies (6).</li>
+      </ol>
+      <p class="keys"><kbd>Right-drag</kbd> rotate · <kbd>Middle-drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>WASD</kbd> move · <kbd>Space</kbd> pause · <kbd>Esc</kbd> cancel · <kbd>Ctrl+Z</kbd> undo</p>
+      <div id="newOpts" class="opts">
+        <label>Starting era <select id="optEra"><option value="1800">1800s · Heritage</option><option value="1900">1900s · Industrial</option><option value="2000" selected>2000s · Modern → Cyberpunk</option></select></label>
+        <label>Technology pace <select id="optPace"><option value="1">1 year per game year</option><option value="5" selected>5 years per game year</option><option value="10">10 years per game year</option></select></label>
+        <label>Goal <select id="optScenario"><option value="">Free play</option><option value="town">Thriving town · 1,000 residents</option><option value="prosper">Prosperous city · 2,500 residents</option></select></label>
+        <label>Map seed <input id="optSeed" type="text" placeholder="random" maxlength="24" autocomplete="off"></label>
+        <label class="chk"><input id="optSandbox" type="checkbox"> Sandbox mode: unlimited money, terrain painting, growth &amp; demand controls</label>
+      </div>
+      <div class="go">
+        <button id="introGo" class="primary">Found a new city</button>
+        <button id="introLoad" hidden>Continue saved city</button>
+        <button id="introBack" hidden>Cancel</button>
+      </div>
+      <p class="dim"><a href="../index.html">← back to the site</a></p>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

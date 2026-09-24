@@ -1,0 +1,642 @@
+{
+  "person": {
+    "name": "Miklós Nagy",
+    "pronunciation": "meek-losh naj",
+    "headline": "Technical Artist · Generative-AI Tool Builder · VFX",
+    "tagline": "Art · Development · Photography · Film/VFX — helping ideas take form.",
+    "location": "Budapest, HU",
+    "email": "miklos.mnagy@gmail.com"
+  },
+  "links": {
+    "github": "https://github.com/XmYx",
+    "imdb": "https://www.imdb.com/name/nm8954147/",
+    "linkedin": "https://www.linkedin.com/in/mikl%C3%B3s-nagy-35b030bb/",
+    "instagram": [
+      {
+        "handle": "@humanmagix",
+        "href": "https://www.instagram.com/humanmagix/"
+      },
+      {
+        "handle": "@yomyxy2",
+        "href": "https://www.instagram.com/yomyxy2/"
+      }
+    ],
+    "book": "https://docs.google.com/document/d/1UPd5CaTu33Jy61sitmgnRnH9_z-cl6oVx7oYiTn4oTE/edit?usp=sharing",
+    "paypalButtonId": "ML75JPKHKZZC2"
+  },
+  "tags": {
+    "comfyui": "ComfyUI",
+    "deforum": "Deforum & animation",
+    "ainodes": "aiNodes",
+    "tools": "Tools & apps",
+    "ml": "ML research",
+    "experiments": "Experiments"
+  },
+  "featured": [
+    {
+      "repo": "ainodes-engine",
+      "title": "aiNodes Engine",
+      "blurb": "A desktop, node-based AI image and motion engine with a live execution chain, a Python code-editor node and plug-in support — officially supported by Deforum.",
+      "tags": [
+        "ainodes",
+        "tools"
+      ],
+      "stars": 280,
+      "language": "Python",
+      "pushed": "2025-02-19",
+      "url": "https://github.com/XmYx/ainodes-engine",
+      "description": null
+    },
+    {
+      "repo": "deforum-comfy-nodes",
+      "title": "Deforum for ComfyUI",
+      "blurb": "The Deforum animation toolkit as a ComfyUI node pack, installable straight from ComfyUI Manager.",
+      "tags": [
+        "deforum",
+        "comfyui"
+      ],
+      "stars": 198,
+      "language": "Python",
+      "pushed": "2026-06-01",
+      "url": "https://github.com/XmYx/deforum-comfy-nodes",
+      "description": "Deforum ComfyUI Nodes - ai animation node package "
+    },
+    {
+      "repo": "ComfyStudio",
+      "title": "ComfyStudio",
+      "blurb": "A cinema shot designer for ComfyUI: design shots, render them through chained workflows, version every take, cut them on a multitrack timeline and export video.",
+      "tags": [
+        "comfyui",
+        "tools"
+      ],
+      "stars": 23,
+      "language": "Python",
+      "pushed": "2026-07-20",
+      "url": "https://github.com/XmYx/ComfyStudio",
+      "description": "PyQt6 GUI to queue and render images and videos using ComfyUI Workflows"
+    },
+    {
+      "repo": "ComfyWebStudio",
+      "title": "ComfyWebStudio",
+      "blurb": "Shot-based orchestration for ComfyUI on the web — chains one workflow's outputs into the next through a companion node pack. FastAPI + React.",
+      "tags": [
+        "comfyui",
+        "tools"
+      ],
+      "stars": 2,
+      "language": "Python",
+      "pushed": "2026-08-30",
+      "url": "https://github.com/XmYx/ComfyWebStudio",
+      "description": "Web based orchestrator for ComfyUI to be able to chain workflows into shots, render them on a timeline."
+    },
+    {
+      "repo": "ainodes-pyside",
+      "title": "aiNodes Desktop",
+      "blurb": "The original aiNodes: a Stable Diffusion desktop GUI with Deforum animation, outpainting, upscalers and more.",
+      "tags": [
+        "ainodes",
+        "deforum",
+        "tools"
+      ],
+      "stars": 101,
+      "language": "Python",
+      "pushed": "2023-04-14",
+      "url": "https://github.com/XmYx/ainodes-pyside",
+      "description": "Desktop AI Generator"
+    },
+    {
+      "repo": "deforum-studio",
+      "title": "Deforum Studio",
+      "blurb": "Animation diffusion in PyTorch and TensorRT, with easy installers for Windows and Linux.",
+      "tags": [
+        "deforum",
+        "ml"
+      ],
+      "stars": 9,
+      "language": "Python",
+      "pushed": "2026-05-30",
+      "url": "https://github.com/XmYx/deforum-studio",
+      "description": null
+    },
+    {
+      "repo": "Cloudy",
+      "title": "Cloudy",
+      "blurb": "An in-browser agentic OS where modules — agents and plugins — are written by an LLM, run sandboxed, and can even rewrite Cloudy's own source.",
+      "tags": [
+        "tools",
+        "experiments"
+      ],
+      "stars": 1,
+      "language": "TypeScript",
+      "pushed": "2026-08-05",
+      "url": "https://github.com/XmYx/Cloudy",
+      "description": null
+    },
+    {
+      "repo": "tinyvae-flux",
+      "title": "TinyVAE for Flux",
+      "blurb": "A compact variational autoencoder for Flux latents, trained with a cyclical KL-annealing schedule.",
+      "tags": [
+        "ml"
+      ],
+      "stars": 34,
+      "language": "Python",
+      "pushed": "2024-08-09",
+      "url": "https://github.com/XmYx/tinyvae-flux",
+      "description": null
+    }
+  ],
+  "archive": [
+    {
+      "repo": "comfyui-model-downloader",
+      "tags": [
+        "comfyui",
+        "tools"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2026-08-27",
+      "url": "https://github.com/XmYx/comfyui-model-downloader",
+      "description": "Fetches the models to their destination a workflow references but does not have."
+    },
+    {
+      "repo": "lifedrawing",
+      "tags": [
+        "tools"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2026-02-24",
+      "url": "https://github.com/XmYx/lifedrawing",
+      "description": "Simple timer / announcer app for life drawing sessions"
+    },
+    {
+      "repo": "ComfyChainer",
+      "tags": [
+        "comfyui",
+        "tools"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2026-01-07",
+      "url": "https://github.com/XmYx/ComfyChainer",
+      "description": "Simple applet to process chained json workflows using ComfyUI"
+    },
+    {
+      "repo": "magix-nodes",
+      "blurb": "Utility ComfyUI nodes: scene/shot detection, disk-backed pipelines, Qwen2-VL captioning.",
+      "tags": [
+        "comfyui"
+      ],
+      "stars": 2,
+      "language": "Python",
+      "pushed": "2025-09-15",
+      "url": "https://github.com/XmYx/magix-nodes",
+      "description": null
+    },
+    {
+      "repo": "magix",
+      "blurb": "This site, plus day-to-day scripts for the AI scene.",
+      "tags": [
+        "tools"
+      ],
+      "stars": 1,
+      "language": "HTML",
+      "pushed": "2025-09-10",
+      "url": "https://github.com/XmYx/magix",
+      "description": "Tools to optimize processes one does day to day in the AI scene"
+    },
+    {
+      "repo": "QuantumCommodore",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2025-07-15",
+      "url": "https://github.com/XmYx/QuantumCommodore",
+      "description": "An idea for brain inspired diy quantum computer"
+    },
+    {
+      "repo": "ComfyUI-SmolLM3",
+      "blurb": "Hugging Face SmolLM3 language models as ComfyUI nodes.",
+      "tags": [
+        "comfyui"
+      ],
+      "stars": 6,
+      "language": "Python",
+      "pushed": "2025-07-10",
+      "url": "https://github.com/XmYx/ComfyUI-SmolLM3",
+      "description": null
+    },
+    {
+      "repo": "webosx",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "JavaScript",
+      "pushed": "2025-06-25",
+      "url": "https://github.com/XmYx/webosx",
+      "description": "Simple yet fun experiment on a javascript web template aiming to emulate old OS's look and feel"
+    },
+    {
+      "repo": "LTX-Video-ControlNet",
+      "tags": [
+        "ml"
+      ],
+      "stars": 2,
+      "language": "Python",
+      "pushed": "2025-03-30",
+      "url": "https://github.com/XmYx/LTX-Video-ControlNet",
+      "description": null
+    },
+    {
+      "repo": "pyqt-video-tools",
+      "tags": [
+        "tools"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-11-22",
+      "url": "https://github.com/XmYx/pyqt-video-tools",
+      "description": "A collection of useful video tools"
+    },
+    {
+      "repo": "trainer_api",
+      "tags": [
+        "ml"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-09-17",
+      "url": "https://github.com/XmYx/trainer_api",
+      "description": null
+    },
+    {
+      "repo": "openGameNGine",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-08-30",
+      "url": "https://github.com/XmYx/openGameNGine",
+      "description": null
+    },
+    {
+      "repo": "vllm-playground",
+      "tags": [
+        "ml",
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-08-20",
+      "url": "https://github.com/XmYx/vllm-playground",
+      "description": null
+    },
+    {
+      "repo": "TheFramework",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-07-26",
+      "url": "https://github.com/XmYx/TheFramework",
+      "description": null
+    },
+    {
+      "repo": "stable-kalandor",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-04-28",
+      "url": "https://github.com/XmYx/stable-kalandor",
+      "description": null
+    },
+    {
+      "repo": "LGanXL",
+      "tags": [
+        "ml"
+      ],
+      "stars": 1,
+      "language": "Python",
+      "pushed": "2024-03-22",
+      "url": "https://github.com/XmYx/LGanXL",
+      "description": "Latent Gan with merged Diffusion weights"
+    },
+    {
+      "repo": "pz-gen-journal",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2024-02-12",
+      "url": "https://github.com/XmYx/pz-gen-journal",
+      "description": null
+    },
+    {
+      "repo": "ainodes_engine_base_nodes",
+      "blurb": "Core node pack for aiNodes Engine.",
+      "tags": [
+        "ainodes"
+      ],
+      "stars": 4,
+      "language": "Python",
+      "pushed": "2023-12-11",
+      "url": "https://github.com/XmYx/ainodes_engine_base_nodes",
+      "description": null
+    },
+    {
+      "repo": "ainodes_engine_deforum_nodes",
+      "blurb": "Deforum nodes for aiNodes Engine.",
+      "tags": [
+        "ainodes",
+        "deforum"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2023-12-11",
+      "url": "https://github.com/XmYx/ainodes_engine_deforum_nodes",
+      "description": null
+    },
+    {
+      "repo": "ainodes_engine_comfy_nodes",
+      "blurb": "ComfyUI nodes for aiNodes Engine.",
+      "tags": [
+        "ainodes",
+        "comfyui"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2023-11-01",
+      "url": "https://github.com/XmYx/ainodes_engine_comfy_nodes",
+      "description": null
+    },
+    {
+      "repo": "deforum",
+      "tags": [
+        "deforum"
+      ],
+      "stars": 1,
+      "language": "Python",
+      "pushed": "2023-10-29",
+      "url": "https://github.com/XmYx/deforum",
+      "description": "deforum inference"
+    },
+    {
+      "repo": "journey",
+      "tags": [
+        "tools"
+      ],
+      "stars": 0,
+      "language": "Python",
+      "pushed": "2023-10-05",
+      "url": "https://github.com/XmYx/journey",
+      "description": "Journey is a modular streamlit webUI aiming to provide a natural and pleasing way to use various diffusion models with Diffusers."
+    },
+    {
+      "repo": "ainodes_engine_faceswapper_nodes",
+      "tags": [
+        "ainodes"
+      ],
+      "stars": 1,
+      "language": "Python",
+      "pushed": "2023-08-16",
+      "url": "https://github.com/XmYx/ainodes_engine_faceswapper_nodes",
+      "description": "aiNodes engine FaceSwapper node pack"
+    },
+    {
+      "repo": "deforum-inference",
+      "tags": [
+        "deforum"
+      ],
+      "stars": 0,
+      "language": null,
+      "pushed": "2023-07-26",
+      "url": "https://github.com/XmYx/deforum-inference",
+      "description": null
+    },
+    {
+      "repo": "ainodes-api",
+      "tags": [
+        "ainodes"
+      ],
+      "stars": 1,
+      "language": "Python",
+      "pushed": "2023-05-12",
+      "url": "https://github.com/XmYx/ainodes-api",
+      "description": null
+    },
+    {
+      "repo": "ainodes-installer",
+      "tags": [
+        "ainodes",
+        "tools"
+      ],
+      "stars": 4,
+      "language": "Python",
+      "pushed": "2023-02-17",
+      "url": "https://github.com/XmYx/ainodes-installer",
+      "description": "Installer for aiNodes, a desktop AI suite"
+    },
+    {
+      "repo": "webcam-diffusion",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 5,
+      "language": "Python",
+      "pushed": "2023-01-04",
+      "url": "https://github.com/XmYx/webcam-diffusion",
+      "description": "Webcam Stable-Diffusion"
+    },
+    {
+      "repo": "Adoro",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": "HTML",
+      "pushed": "2022-11-14",
+      "url": "https://github.com/XmYx/Adoro",
+      "description": null
+    },
+    {
+      "repo": "stable-diffusion-gradio-anim-opt",
+      "blurb": "Early Stable Diffusion animation notebook with a Gradio UI.",
+      "tags": [
+        "deforum",
+        "experiments"
+      ],
+      "stars": 13,
+      "language": "Jupyter Notebook",
+      "pushed": "2022-09-17",
+      "url": "https://github.com/XmYx/stable-diffusion-gradio-anim-opt",
+      "description": null
+    },
+    {
+      "repo": "ThirdPerson",
+      "tags": [
+        "experiments"
+      ],
+      "stars": 0,
+      "language": null,
+      "pushed": "2021-09-28",
+      "url": "https://github.com/XmYx/ThirdPerson",
+      "description": null
+    }
+  ],
+  "skipRepos": [
+    "test_001",
+    "survive",
+    "UE4_testCollab",
+    "xmyx.github.io",
+    "magix-photos"
+  ],
+  "film": {
+    "imdb": "https://www.imdb.com/name/nm8954147/",
+    "credits": [
+      {
+        "title": "Moon Knight",
+        "kind": "TV mini-series",
+        "role": "VFX coordinator",
+        "years": "2022",
+        "note": "6 episodes"
+      },
+      {
+        "title": "Shadow and Bone",
+        "kind": "TV series",
+        "role": "VFX data wrangler",
+        "years": "2021",
+        "note": "8 episodes"
+      },
+      {
+        "title": "The Witcher",
+        "kind": "TV series",
+        "role": "VFX photographer & lidar operator",
+        "years": "2019",
+        "note": "8 episodes"
+      },
+      {
+        "title": "Midsommar",
+        "kind": "Feature",
+        "role": "Data wrangler",
+        "years": "2019"
+      },
+      {
+        "title": "The Alienist",
+        "kind": "TV series",
+        "role": "VFX coordinator",
+        "years": "2018–2020",
+        "note": "11 episodes"
+      },
+      {
+        "title": "Robin Hood",
+        "kind": "Feature",
+        "role": "VFX production assistant",
+        "years": "2018"
+      },
+      {
+        "title": "Ransom",
+        "kind": "TV series",
+        "role": "Lab technician",
+        "years": "2018",
+        "note": "6 episodes"
+      },
+      {
+        "title": "Year Million",
+        "kind": "TV mini-series",
+        "role": "Production assistant",
+        "years": "2017",
+        "note": "6 episodes"
+      }
+    ],
+    "other": [
+      "Hunyadi",
+      "Dust Bunny",
+      "All the Light We Cannot See"
+    ]
+  },
+  "lab": [
+    {
+      "href": "game.html",
+      "label": "Space Drift",
+      "blurb": "Six-axis flight through a drifting star field."
+    },
+    {
+      "href": "organicity/",
+      "label": "Organicity",
+      "blurb": "Pixel-art 3D city builder: free-form roads, lots that fit any shape."
+    },
+    {
+      "href": "pathmaker.html",
+      "label": "Path Maker",
+      "blurb": "Retro path-drawing with evolving little lives."
+    },
+    {
+      "href": "viz/net.html",
+      "label": "Be"
+    },
+    {
+      "href": "viz/net2.html",
+      "label": "Boom"
+    },
+    {
+      "href": "viz/net3.html",
+      "label": "Evolve"
+    },
+    {
+      "href": "viz/net4.html",
+      "label": "Evolve 2"
+    },
+    {
+      "href": "viz/net5.html",
+      "label": "Petals"
+    },
+    {
+      "href": "viz/net6.html",
+      "label": "WhatIsDis"
+    },
+    {
+      "href": "viz/net7.html",
+      "label": "Meditate"
+    },
+    {
+      "href": "viz/game_of_flowers.html",
+      "label": "Flower Game"
+    },
+    {
+      "href": "viz/hypno.html",
+      "label": "Hypno Game"
+    }
+  ],
+  "pages": [
+    {
+      "href": "gallery.html",
+      "label": "Photography",
+      "blurb": "Photos, video and embeds."
+    },
+    {
+      "href": "docbrowser.html",
+      "label": "Docs",
+      "blurb": "Notes for the scripts in this repo."
+    },
+    {
+      "href": "resume.html",
+      "label": "Resume",
+      "blurb": "Experience, credits and skills."
+    },
+    {
+      "href": "about.html",
+      "label": "About",
+      "blurb": "A few words, typed out."
+    }
+  ],
+  "generated": "2026-09-24"
+}

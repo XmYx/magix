@@ -1,253 +1,139 @@
-<!-- index.html – “Raindrops → morphing-castle blob” background -->
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Miklós Nagy — Home</title>
+  <title>Miklós Nagy — magix</title>
+  <meta name="description" content="Miklós Nagy — technical artist, generative-AI tool builder and VFX. Walk a gravity-bending world of works, or browse them." />
+  <meta name="theme-color" content="#0a0616" />
 
-  <!-- Tailwind v3 CDN -->
-  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/site.css" />
 
-  <!-- Site logic (nav, sparkles, …) -->
-  <script defer src="js/main.js" type="module"></script>
-
-  <!-- Fluid raindrop-to-castle background  ──────────────────── -->
-  <style>
-    :root{
-      /* ~~~ tweakables ~~~ */
-      --tile-size: 40;               /* virtual pixel size used for castle grid */
-
-      /* Droplet behaviour */
-      --drops-per-second: 10;
-      --drop-min-radius: 2;
-      --drop-max-radius: 12;
-      --drop-min-speed: 20;          /* px / s */
-      --drop-max-speed: 60;
-
-      /* Blob (castle) */
-      --blob-blur: 10px;             /* higher = softer edge */
-      --blob-opacity: 0.65;          /* must be < text opacity */
-      --blob-wobble-px: 3;           /* how far vertices wiggle */
-      --blob-wobble-speed: 0.002;    /* radians per ms */
-
-      /* Colour palette */
-      --random-colours: 1;           /* 1 = pick random pastel, 0 = monochrome */
-      --blob-colour: #fde2e4;        /* used when random-colours = 0 */
-
-      --pastel-1:#fde2e4; --pastel-2:#e2ece9;
-      --pastel-3:#dfe7fd; --pastel-4:#e0bbec; --pastel-5:#fff1d0;
+  <!-- three.js is only downloaded when the world is entered -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
     }
-    #bgTiles{ /* we still reuse the id, but now drawing drops & blob */
-      position:fixed;inset:0;z-index:-2;pointer-events:none;
-    }
-  </style>
+  }
+  </script>
+  <script type="module" src="js/site/app.js"></script>
 </head>
 
-<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 leading-relaxed">
+<body>
+  <canvas id="aurora" aria-hidden="true"></canvas>
 
-  <canvas id="bgTiles"></canvas>
+  <!-- ░░ Portal ░░ -->
+  <div id="portal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="portalTitle">
+    <div class="portal-inner">
+      <h1 id="portalTitle" class="shimmer">Miklós Nagy</h1>
+      <p class="pron">“meek-losh naj” — art, code, film</p>
+      <div class="portal-choices">
+        <button class="choice" id="choiceWorld" type="button">
+          <div class="glyph" aria-hidden="true">🪐</div>
+          <strong>Enter the world</strong>
+          <span>Walk a small universe where gravity follows every surface. Mouse + keyboard.</span>
+        </button>
+        <button class="choice" id="choiceBrowse" type="button">
+          <div class="glyph" aria-hidden="true">✦</div>
+          <strong>Browse</strong>
+          <span>The same works, laid out calmly — projects, film credits, experiments.</span>
+        </button>
+      </div>
+      <label class="portal-remember"><input type="checkbox" id="rememberChoice" checked /> Remember my choice</label>
+    </div>
+  </div>
 
-  <!-- Hero -->
-  <section class="max-w-3xl mx-auto pt-32 pb-20 text-center px-6 fade-in">
-    <h1 class="text-5xl font-extrabold tracking-wide mb-4">Miklós Nagy</h1>
-    <p class="italic text-lg text-gray-600 dark:text-gray-400 mb-6">“meek-losh naj”</p>
-    <p class="text-xl leading-relaxed mb-8">
-      Art&nbsp;·  Development&nbsp;·  Photography&nbsp;·  Film/VFX<br>
-      thriving to help form and shape ideas into being
-    </p>
-    <a href="gallery.html"
-       class="px-6 py-3 rounded-lg font-semibold backdrop-blur bg-indigo-600 text-white hover:bg-indigo-700 transition">
-       See my photography →
-    </a>
-  </section>
-  <section class="text-center my-10 px-6 fade-in">
-    <!-- Download Link Always Visible -->
-    <a href="https://docs.google.com/document/d/1UPd5CaTu33Jy61sitmgnRnH9_z-cl6oVx7oYiTn4oTE/edit?usp=sharing"
-       target="_blank"
-       class="text-2xl font-semibold mb-2 text-indigo-600 hover:underline block">
-      📘 Download My Book
-    </a>
+  <!-- ░░ Browse mode ░░ -->
+  <header class="site-header">
+    <a class="brand shimmer" href="#top">magix</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#works">Works</a>
+      <a href="#archive">Archive</a>
+      <a href="#film">Film</a>
+      <a href="#lab">Lab</a>
+      <a href="gallery.html">Photos</a>
+      <a href="resume.html">Resume</a>
+    </nav>
+    <div class="header-actions">
+      <button class="btn small primary" id="enterWorldHeader" type="button">Enter the world ✦</button>
+      <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle colour theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </header>
 
-    <p class="mb-4 text-gray-600 dark:text-gray-400">
-      You can read it for free — but if you'd like to support my work, feel free to donate 💖
-    </p>
+  <main id="top">
+    <section class="hero reveal">
+      <div class="eyebrow">Technical artist · Tool builder · VFX</div>
+      <h1><span class="shimmer">Miklós</span><br />Nagy</h1>
+      <p class="pron">“meek-losh naj”</p>
+      <p class="lede">I build tools that let people make moving pictures with AI — and spent years on film sets making sure the pixels had somewhere to land.</p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#works">See the work</a>
+        <button class="btn" id="enterWorldHero" type="button">🪐 Walk through it instead</button>
+      </div>
+      <div class="hero-links" id="heroLinks"></div>
+    </section>
 
-    <!-- PayPal Donate Button (opens in new tab) -->
-    <form action="https://www.paypal.com/donate" method="post" target="_blank">
-      <input type="hidden" name="hosted_button_id" value="ML75JPKHKZZC2" />
-      <input type="image"
-             src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif"
-             border="0" name="submit"
-             title="Donate with PayPal"
-             alt="Donate with PayPal button" />
-      <img alt="" border="0"
-           src="https://www.paypal.com/en_HU/i/scr/pixel.gif"
-           width="1" height="1" />
-    </form>
-  </section>
-  <footer class="text-center text-xs text-gray-500 dark:text-gray-400 py-10 fade-in">
-    © 2025 Miklós Nagy — Built with a bit of <span class="animate-pulse">✨ magix</span>
+    <section id="works" class="reveal">
+      <div class="eyebrow">Selected open source</div>
+      <h2 class="section-title">Works</h2>
+      <p class="section-lede">Node engines, animation toolkits and shot-based studios for generative image and video.</p>
+      <div class="grid" id="featuredGrid"></div>
+    </section>
+
+    <section id="archive" class="reveal">
+      <div class="eyebrow">Everything else</div>
+      <h2 class="section-title">Archive</h2>
+      <p class="section-lede">Node packs, utilities, experiments and half-finished ideas.</p>
+      <div class="filters" id="archiveFilters" role="group" aria-label="Filter by topic"></div>
+      <div class="archive-list" id="archiveList" aria-live="polite"></div>
+    </section>
+
+    <section id="film" class="reveal">
+      <div class="eyebrow">Film &amp; series</div>
+      <h2 class="section-title">VFX credits</h2>
+      <p class="section-lede">On-set VFX data — lidar, photogrammetry, HDRI and metadata — and coordination across vendors, from first scan to final shot.</p>
+      <ul class="credits" id="creditList"></ul>
+      <p class="film-foot" id="filmFoot"></p>
+    </section>
+
+    <section id="lab" class="reveal">
+      <div class="eyebrow">Play</div>
+      <h2 class="section-title">Lab</h2>
+      <p class="section-lede">Small visual toys and games that run right in the browser.</p>
+      <div class="lab-grid" id="labGrid"></div>
+    </section>
+
+    <section id="more" class="reveal">
+      <div class="eyebrow">Around the site</div>
+      <h2 class="section-title">More</h2>
+      <div class="grid" id="pagesGrid"></div>
+    </section>
+
+    <section id="book" class="reveal">
+      <div class="book">
+        <div>
+          <div class="eyebrow">Free to read</div>
+          <h2 class="section-title">📘 The book</h2>
+          <p class="section-lede" style="margin-bottom:1.2rem">You can read it for free. If you'd like to support my work, a donation is always appreciated 💖</p>
+          <a class="btn primary" id="bookLink" href="#" target="_blank" rel="noopener">Read the book</a>
+        </div>
+        <form action="https://www.paypal.com/donate" method="post" target="_blank">
+          <input type="hidden" name="hosted_button_id" id="paypalId" value="ML75JPKHKZZC2" />
+          <button class="btn" type="submit">Donate with PayPal</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    © <span id="year">2026</span> Miklós Nagy — built with a bit of ✨ magix
   </footer>
-
-  <!-- ▼▼▼  Background animation logic  ▼▼▼ -->
-  <script type="module">
-
-
-
-    /*
-      Raindrops fall from random x positions with random radii & speed.
-      When they reach the baseline (visible bottom), they are absorbed
-      into a constantly “wobbling” blob that roughly resembles a two-tower
-      castle silhouette. The blob sticks to the page bottom, stays
-      horizontally centred, is fully visible, and rendered with lower
-      opacity than foreground text.
-    */
-    const cvs = document.getElementById('bgTiles');
-    const ctx = cvs.getContext('2d');
-
-    /* ------- CSS → JS helpers -------------------------------- */
-    const css = getComputedStyle(document.documentElement);
-    const PX      = n=>parseFloat(css.getPropertyValue(n));
-    const VAL     = n=>css.getPropertyValue(n);
-
-    const TILE    = PX('--tile-size');
-    const PPS     = PX('--drops-per-second');
-    const R_MIN   = PX('--drop-min-radius');
-    const R_MAX   = PX('--drop-max-radius');
-    const VY_MIN  = PX('--drop-min-speed');
-    const VY_MAX  = PX('--drop-max-speed');
-
-    const BLUR    = VAL('--blob-blur');
-    const B_OPAC  = PX('--blob-opacity');
-    const WOBBLE  = PX('--blob-wobble-px');
-    const W_SPEED = PX('--blob-wobble-speed');
-
-    const RANDCLR = !!PX('--random-colours'); // 0/1 bool from css
-    const BLOB_CLR= VAL('--blob-colour');
-    const PASTELS = [VAL('--pastel-1'),VAL('--pastel-2'),VAL('--pastel-3'),VAL('--pastel-4'),VAL('--pastel-5')];
-
-    /* ------- Castle silhouette definition (grid) -------------- */
-    const ART = [
-      '  ##     ##  ',
-      ' ####   #### ',
-      '#############',
-      '#############',
-      '#############',
-      '#############',
-      '   #######   ',
-      '   #######   '
-    ];
-    let verts = []; // will hold vertex data with random phase for wobble
-
-    /* ------- State arrays ------------------------------------- */
-    const droplets = [];
-
-    /* Canvas sizing & castle vertex pre-calc ------------------- */
-    let BASELINE = 0, DPR = 1, viewW = 0, viewH = 0;
-    function resize(){
-      DPR   = devicePixelRatio || 1;
-      viewW = innerWidth;
-      viewH = innerHeight;
-      cvs.width  = viewW * DPR;
-      cvs.height = viewH * DPR;
-      ctx.setTransform(DPR,0,0,DPR,0,0);
-
-      BASELINE = viewH - TILE * 0.5; // half tile above bottom so fully visible
-
-      // compute castle grid offset (centered)
-      const artW = ART[0].length;
-      const artH = ART.length;
-      const offsetX = (viewW - artW * TILE) / 2;
-      const offsetY = BASELINE - artH * TILE;
-
-      // Build vertex list once, each with unique phase for wobble
-      verts = [];
-      ART.forEach((row, ry)=>{
-        [...row].forEach((ch, cx)=>{
-          if(ch === '#'){
-            const x = offsetX + cx * TILE + TILE/2; // centre of cell
-            const y = offsetY + ry * TILE + TILE/2;
-            verts.push({x, y, phase: Math.random()*Math.PI*2});
-          }
-        });
-      });
-    }
-    addEventListener('resize', resize);
-    resize();
-
-    /* ------- Raindrop spawner --------------------------------- */
-    let lastSpawn = 0;
-    function spawnDrops(now){
-      const interval = 2000 / PPS;
-      while(now - lastSpawn > interval){
-        lastSpawn += interval;
-        droplets.push({
-          x: Math.random()*viewW,
-          y: -20,
-          r: R_MIN + Math.random()*(R_MAX - R_MIN),
-          vy: VY_MIN + Math.random()*(VY_MAX - VY_MIN),
-          clr: RANDCLR ? PASTELS[Math.random()*PASTELS.length|0] : BLOB_CLR
-        });
-      }
-    }
-
-    /* ------- Draw blob (castle) -------------------------------- */
-    function drawBlob(now){
-      ctx.save();
-      ctx.filter = `blur(${BLUR})`;
-      ctx.globalAlpha = B_OPAC;
-      ctx.fillStyle = RANDCLR ? PASTELS[2] : BLOB_CLR; // base fill
-
-      ctx.beginPath();
-      verts.forEach((v,i)=>{
-        const ang = now * W_SPEED + v.phase;
-        const dx = Math.sin(ang) * WOBBLE;
-        const dy = Math.cos(ang) * WOBBLE;
-        if(i===0) ctx.moveTo(v.x+dx, v.y+dy);
-        else      ctx.lineTo(v.x+dx, v.y+dy);
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-
-    /* ------- Main loop ---------------------------------------- */
-    let prevT = 0;
-    function tick(t){
-      const now = t;
-      const dt  = now - prevT; prevT = now;
-
-      spawnDrops(now);
-
-      // physics for droplets
-      droplets.forEach(d => d.y += d.vy * dt/1000);
-      // remove ones past baseline
-      for(let i=droplets.length-1; i>=0; i--){
-        if(droplets[i].y - droplets[i].r > BASELINE){
-          droplets.splice(i,1);
-        }
-      }
-
-      // clear screen
-      ctx.clearRect(0,0,viewW,viewH);
-
-      // draw droplets
-      ctx.globalAlpha = 1;
-      droplets.forEach(d => {
-        ctx.fillStyle = d.clr;
-        ctx.beginPath();
-        ctx.arc(d.x, d.y, d.r, 0, Math.PI*2);
-        ctx.fill();
-      });
-
-      // draw blob castle silhouette
-      drawBlob(now);
-
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  </script>
 </body>
 </html>
