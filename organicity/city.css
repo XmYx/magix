@@ -209,3 +209,34 @@ body.reduced-motion * { transition: none !important; animation: none !important;
   #news { left: 8px; max-width: calc(100vw - 16px); bottom: 8px; }
   #coach { left: 8px; right: 8px; width: auto; top: auto; bottom: 48px; }
 }
+
+/* ---------------- world map (region of tiles) ---------------- */
+#worldmap { position: fixed; inset: 0; z-index: 30; background: rgba(8, 12, 20, 0.72); display: flex; align-items: center; justify-content: center; padding: 16px; zoom: var(--ui-scale); }
+#worldmap[hidden] { display: none; }
+.wm-card { background: var(--bg); border: 2px solid var(--line); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.35); padding: 12px 14px; width: min(760px, 100%); max-height: 100%; overflow: auto; }
+.wm-card header { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; }
+.wm-card h2 { margin: 0; color: var(--acc); font-size: 18px; }
+.wm-card .x { margin-left: auto; background: none; border: 0; color: var(--dim); font-size: 16px; }
+.wm-grid { display: grid; gap: 4px; }
+.wt { aspect-ratio: 1; position: relative; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; padding: 5px; font-size: 11px; border: 2px solid rgba(0, 0, 0, 0.35);
+  background-size: cover; image-rendering: pixelated; text-shadow: 1px 1px 0 #000; overflow: hidden; }
+.wt b { font-size: 12px; font-weight: 600; } .wt small { color: #e4ecf4; } .wt em { font-style: normal; color: var(--acc); }
+.wt button { font-size: 11px; padding: 2px 4px; background: var(--btn); border: 2px solid var(--line); }
+.wt button.primary { border-color: var(--acc); color: var(--acc); }
+.wt.wild.p-river { background: linear-gradient(160deg, #6f9a4c 0 40%, #4a7fa8 40% 52%, #7aa656 52%); }
+.wt.wild.p-hills { background: radial-gradient(circle at 30% 30%, #8fb065, #5d7f3f 60%, #4d6b34); }
+.wt.wild.p-coast { background: linear-gradient(90deg, #7a9f52 0 58%, #d8c890 58% 63%, #3f79a6 63%); }
+.wt.wild.p-islands { background: radial-gradient(circle at 35% 40%, #7aa656 0 18%, transparent 19%), radial-gradient(circle at 70% 65%, #7aa656 0 14%, transparent 15%), #3f79a6; }
+.wt.wild { filter: saturate(0.6) brightness(0.8); } .wt.wild.owned { filter: none; outline: 2px dashed var(--acc); outline-offset: -4px; }
+.wt.ai { background: repeating-linear-gradient(90deg, #39424f 0 6px, #4a5566 6px 9px), #39424f; }
+.wt.city { background-color: #2c3a2c; } .wt.here { border-color: var(--acc); }
+.wt .ren { padding: 0 3px; font-size: 10px; background: none; border: 0; color: var(--dim); }
+
+/* ---------------- presidents, history charts, term report ---------------- */
+.spark.hist { height: 130px; background: rgba(0, 0, 0, 0.18); }
+.legend-lines { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; margin: 4px 0; }
+.legend-lines i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; }
+.dbar { display: inline-block; width: 70px; height: 7px; background: rgba(0, 0, 0, 0.3); vertical-align: middle; margin: 0 4px; }
+.dbar i { display: block; height: 100%; } .dbar i.p { background: var(--pos); } .dbar i.n { background: var(--neg); }
+table.term td { vertical-align: top; }
+#panel details { margin: 4px 0; } #panel summary { cursor: pointer; color: var(--acc); }

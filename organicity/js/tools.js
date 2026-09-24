@@ -71,8 +71,10 @@ export class Tools {
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.undo(); return; }
     this.keys.add(k);
     if (k === 'p') { this.ui.togglePhoto(); return; }
+    if (k === 'm') { this.ui.toggleWorldMap(); return; }
+    if (k === 'escape' && !document.getElementById('worldmap').hidden) { this.ui.toggleWorldMap(false); return; }
     if (document.body.classList.contains('photo')) { if (k === 'escape') this.ui.togglePhoto(false); return; }   // photo mode: camera keys only
-    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', 6: 'district', 7: 'bulldoze', l: 'lines', t: 'terrain', y: 'people', n: 'advisors', r: 'region' };
+    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', 6: 'district', 7: 'bulldoze', l: 'lines', t: 'terrain', y: 'people', n: 'advisors', r: 'region', k: 'president' };
     if (map[k]) { this.ui.pickCategory(map[k]); return; }
     if (k === '8') { this.ui.togglePanel('overlays'); return; }
     if (k === '9') { this.ui.togglePanel('budget'); return; }
@@ -197,6 +199,11 @@ export class Tools {
       const sa = Math.round(ang / st) * st, len = Math.hypot(g.x - a.x, g.z - a.z);
       p = { x: a.x + Math.cos(sa) * len, z: a.z + Math.sin(sa) * len };
     }
+    // a neighbour's road reaches the border here: snap onto it so the two roads meet
+    if (!p.node && !p.edge) for (const st of this.w.edgeStubs || []) {
+      const sx = st.side === 'west' ? 0.5 : st.side === 'east' ? 511.5 : st.pos, sz = st.side === 'north' ? 0.5 : st.side === 'south' ? 511.5 : st.pos;
+      if (Math.hypot(p.x - sx, p.z - sz) < 12) { p = { x: sx, z: sz, stub: st }; break; }
+    }
     p.x = clamp(p.x, 0, 511.9); p.z = clamp(p.z, 0, 511.9);
     return p;
   }
@@ -262,7 +269,7 @@ export class Tools {
         break;
       case 'terrain':
         r.setBrush(g.x, g.z, s.brush, s.water ? 0x4a9aff : 0x9ad06a);
-        tip = s.terrainMode==='levee'?'Build flood levees · ₵12/cell':s.terrainMode==='removeLevee'?'Remove levees':s.water?'Paint water':'Paint land';
+        tip = ['raise', 'lower', 'level', 'smooth'].includes(s.terrainMode) ? `${s.terrainMode[0].toUpperCase() + s.terrainMode.slice(1)} ground · ₵3 per unit of earth · height ${this.w.heightAt(g.x, g.z).toFixed(1)}` : s.terrainMode==='levee'?'Build flood levees · ₵12/cell':s.terrainMode==='removeLevee'?'Remove levees':s.water?'Paint water':'Paint land';
         break;
       case 'util': case 'svc': {
         const S = SERVICES[s.svc], plan = this.w.planService(s.svc, g.x, g.z, s.platform);
@@ -332,7 +339,12 @@ export class Tools {
         else w.paintZone(g.x, g.z, s.brush, s.zone);
         break;
       case 'terrain': {
-        if(s.terrainMode==='levee'||s.terrainMode==='removeLevee') {
+        if (['raise', 'lower', 'level', 'smooth'].includes(s.terrainMode)) {
+          if (first) this.levelTarget = w.heightAt(g.x, g.z);
+          if (!sim.sandbox && !sim.canAfford(Math.PI * s.brush * s.brush * 0.6 * 3)) { this.ui.toast('Not enough money to move more earth.', 'warn'); break; }
+          const vol = w.terraform(g.x, g.z, s.brush, s.terrainMode, this.levelTarget), cost = sim.sandbox ? 0 : Math.round(vol * 3);
+          sim.spend(cost); this.strokeCost = (this.strokeCost || 0) + cost;
+        } else if(s.terrainMode==='levee'||s.terrainMode==='removeLevee') {
           const on=s.terrainMode==='levee'?1:0;
           const upper=Math.ceil(Math.PI*(s.brush+2)**2)*12;
           if(on&&!sim.canAfford(upper)){this.ui.toast('Insufficient funds for this levee brush. Use a smaller brush.','warn');break;}

@@ -9,6 +9,7 @@ import { CH, CHN } from './world.js';
 import { genBuilding, rgb, hex } from './procgen.js';
 import { hash2, clamp, fbm } from './util.js';
 import { technology, buildingFloors } from './eras.js';
+import { frontAt, WEATHER } from './weather.js';
 import { Traffic, AgentSim, TYPE_IDS, POSE_STRIDE, deckHeight } from './agents.js';
 import { netSnapshot } from './core.js';
 
@@ -232,7 +233,7 @@ export class Renderer {
 
   // ---------------------------------------------------------------- ground
   initGround() {
-    const S = 128, st = N / S;
+    const S = 256, st = N / S;   // a vertex every 2 cells, fine enough to show levelled road bands
     this.groundS = S;
     const pos = new Float32Array((S + 1) * (S + 1) * 3), uv = new Float32Array((S + 1) * (S + 1) * 2);
     for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) { const k = j * (S + 1) + i; pos.set([i * st, 0, j * st], k * 3); uv.set([(i * st) / N, (j * st) / N], k * 2); }
@@ -256,9 +257,21 @@ export class Renderer {
     this.refreshTerrain();
   }
 
+  // Ground vertices in a region follow graded terrain (roads and lots reshape it).
+  refreshGround(x0, z0, x1, z1) {
+    const w = this.w, S = this.groundS, st = N / S, pos = this.ground.geometry.attributes.position;
+    const i0 = clamp(Math.floor(x0 / st) - 1, 0, S), i1 = clamp(Math.ceil(x1 / st) + 1, 0, S), j0 = clamp(Math.floor(z0 / st) - 1, 0, S), j1 = clamp(Math.ceil(z1 / st) + 1, 0, S);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const wd = w.wdist[clamp(Math.floor(j * st), 0, N - 1) * N + clamp(Math.floor(i * st), 0, N - 1)];
+      pos.setY(j * (S + 1) + i, w.heightAt(i * st, j * st) + (wd < 0 ? Math.max(-3.2, wd * 0.5) - 0.4 : wd < 1.5 ? (-0.4 * (1.5 - wd)) / 1.5 : 0));
+    }
+    pos.needsUpdate = true; this.ground.geometry.computeVertexNormals();
+  }
+
   // shoreline heights + natural ground colours; rerun after sandbox terrain edits
   refreshTerrain() {
     const w = this.w, S = this.groundS, st = N / S, pos = this.ground.geometry.attributes.position;
+    w.dirty.grade = null;
     for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) {
       const wd = w.wdist[clamp(Math.floor(j * st), 0, N - 1) * N + clamp(Math.floor(i * st), 0, N - 1)];
       pos.setY(j * (S + 1) + i, w.heightAt(i*st,j*st) + (wd < 0 ? Math.max(-3.2, wd * 0.5) - 0.4 : wd < 1.5 ? (-0.4 * (1.5 - wd)) / 1.5 : 0));
@@ -498,6 +511,19 @@ export class Renderer {
         for (const sg of [-1, 1]) column(f.x + f.nx * (hw + 0.6) * sg, f.z + f.nz * (hw + 0.6) * sg, 0.6, y0, 1.2, col);
         ribbonR(e, s - 0.8, s + 0.8, -hw - 1.2, hw + 1.2, 1.2, col);
       }
+      if (e.struct) { // automatic viaducts (piers down to the ground) and tunnel portals
+        const col = lin([150, 146, 138]), kAt = (s) => { let k = 0; while (k < e.n - 1 && e.cum[k + 1] < s) k++; return k; };
+        for (let s = 6; s < e.len - 6; s += 10) {
+          const k = kAt(s); if (e.struct[k] !== 1 || e.struct[k + 1] !== 1) continue;
+          const f = frame(e, s), top = deckHeight(e, s) - 0.9, base = this.w.heightAt(f.x, f.z);
+          if (top - base > 1.5) column(f.x, f.z, 0.8, base - 1, top, col);
+        }
+        for (let k = 1; k <= e.n; k++) if ((e.struct[k] === -1) !== (e.struct[k - 1] === -1)) {
+          const s = e.cum[k], f = frame(e, s), y0 = deckHeight(e, s), pc = lin([96, 92, 86]);
+          for (const sg of [-1, 1]) column(f.x + f.nx * (hw + 0.6) * sg, f.z + f.nz * (hw + 0.6) * sg, 0.7, y0 - 0.5, y0 + 4.5, pc);
+          ribbonR(e, s - 0.9, s + 0.9, -hw - 1.3, hw + 1.3, 4.5, pc);
+        }
+      }
       if (e.layer) continue;
       for (let s = 3; s < e.len - 3; s += 9) { // bridge piers
         const f = frame(e, s), ci = this.w.cellAt(f.x, f.z);
@@ -639,7 +665,7 @@ export class Renderer {
 
   // Chunks far from the camera target (relative to zoom) draw as boxes instead of full detail.
   updateLod() {
-    const c = this.cam, far = Math.max(260, c.dist * 1.6);
+    const c = this.cam, far = this.perfLow ? Math.max(160, c.dist * 1.1) : Math.max(260, c.dist * 1.6);
     for (let ch = 0; ch < this.chunks.length; ch++) {
       const g = this.chunks[ch]; if (!g) continue;
       const cx = (ch % CHN + 0.5) * CH, cz = (Math.floor(ch / CHN) + 0.5) * CH;
@@ -659,7 +685,17 @@ export class Renderer {
   }
 
   // ---------------------------------------------------------------- trees
+  // seasonal foliage: spring blossom, summer green, autumn colours, winter bare (or snowy)
+  treeColor(c, h, h2) {
+    const season = this.sim.weather.season, snowy = (this.w.hazards?.snow || 0) > 0.05;
+    if (season === 'Autumn') return h2 < 0.25 ? c.setRGB(0.3 + h * 0.1, 0.42 + h * 0.1, 0.14) : c.setRGB(0.75 + h * 0.2, 0.3 + h2 * 0.35, 0.08 + h * 0.06);
+    if (season === 'Winter') return snowy ? c.setRGB(0.85, 0.88, 0.9) : h2 < 0.3 ? c.setRGB(0.16, 0.3, 0.16) : c.setRGB(0.38 + h * 0.08, 0.32 + h * 0.06, 0.26);
+    if (season === 'Spring' && h2 < 0.2) return c.setRGB(0.95, 0.62 + h * 0.2, 0.75);
+    return c.setRGB(0.22 + h * 0.14, 0.45 + h * 0.18, 0.16 + h * 0.06);
+  }
+
   rebuildTrees() {
+    this.treeSeason = `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`;
     const w = this.w, C = 64, CN = N / C;
     if (!this.treeGeo) {
       this.treeGeo = mergeGeometries([coloredBox(0.36, 0.9, 0.36, 0, 0.45, 0, 0x7a5a3a), coloredBox(1.7, 1.5, 1.7, 0, 1.6, 0, 0xffffff)]);
@@ -684,7 +720,7 @@ export class Renderer {
         const ix = Math.floor(x * 7), iz = Math.floor(z * 7), h = hash2(ix, iz, 10);
         q.setFromAxisAngle(Y, hash2(ix, iz, 8) * 1.57); s.set(sc, sc * (0.85 + hash2(ix, iz, 9) * 0.4), sc); p.set(x, w.heightAt(x,z), z);
         M.compose(p, q, s); m.setMatrixAt(k, M);
-        c.setRGB(0.22 + h * 0.14, 0.45 + h * 0.18, 0.16 + h * 0.06); m.setColorAt(k, c);
+        m.setColorAt(k, this.treeColor(c, h, hash2(ix, iz, 12)));
       });
       m.computeBoundingSphere();
       m.castShadow = true; m.receiveShadow = true;
@@ -708,7 +744,9 @@ export class Renderer {
     const police = mergeGeometries([coloredBox(0.95, 0.45, 1.9, 0, 0.42, 0, 0xffffff), coloredBox(0.8, 0.38, 1.0, 0, 0.83, -0.1, 0x2a3440), coloredBox(0.7, 0.14, 0.3, 0, 1.08, -0.1, 0xffffff)]);
     const tram=mergeGeometries([coloredBox(1.3,1.5,6.5,0,1,0,0xffffff),coloredBox(1.32,.6,5.7,0,1.3,0,0x243a46)]);
     const snowplow=mergeGeometries([coloredBox(1.2,1.2,2.8,0,.9,0,0xf2a126),coloredBox(2,.7,.4,0,.4,1.7,0xd3e4ea)]);
-    const geo = { car, truck, bus, fire, garbage, police, tram, snowplow }, cap = { tram:80,snowplow:40, car: 1100, truck: 260, bus: 80, fire: 24, garbage: 40, police: 30 };
+    const ambulance = mergeGeometries([coloredBox(1.1, 1.1, 3, 0, 0.8, 0, 0xffffff), coloredBox(1.12, 0.25, 3.02, 0, 0.7, 0, 0xd83a3a), coloredBox(0.6, 0.14, 0.3, 0, 1.42, 0.6, 0xffffff)]);
+    const van = mergeGeometries([coloredBox(1.2, 1.3, 2.6, 0, 0.95, -0.35, 0xffffff), coloredBox(1.1, 0.8, 0.9, 0, 0.7, 1.2, 0x3a6ac8), coloredBox(1.22, 0.12, 2.62, 0, 1.2, -0.35, 0xe8a030)]);
+    const geo = { car, truck, bus, fire, garbage, police, tram, snowplow, ambulance, van }, cap = { tram:80,snowplow:40, car: 1100, truck: 260, bus: 80, fire: 24, garbage: 40, police: 30, ambulance: 24, van: 40 };
     this.vtypes = {};
     for (const k in geo) {
       const mesh = new THREE.InstancedMesh(geo[k], mat, cap[k]);
@@ -732,21 +770,24 @@ export class Renderer {
     const speed = sim.paused ? 0 : Math.min(sim.speed, 3), step = dt * speed;
     if (this.aNetKey !== `${net.version}:${sim.flowVersion}`) { this.aNetKey = `${net.version}:${sim.flowVersion}`; H.post({ type: 'net', net: netSnapshot(net) }); }
     if (this.aEra !== this.vehicleStyle) { this.aEra = this.vehicleStyle; H.post({ type: 'era', heritage: this.w.year < 1900 }); }
-    if (this.aSampleVer !== sim.sampleVersion) {
-      this.aSampleVer = sim.sampleVersion;
+    // rush hours: 07–09:30 and 16–19 fill the streets, nights are quiet; lines switch timetable
+    const hr = this.hour(), peak = (hr >= 7 && hr < 9.5) || (hr >= 16 && hr < 19), rush = peak ? 1.6 : hr >= 22 || hr < 5.5 ? 0.35 : 1;
+    if (this.aSampleVer !== `${sim.sampleVersion}:${rush}`) {
+      this.aSampleVer = `${sim.sampleVersion}:${rush}`;
       let tot = 0; for (const e of net.edges.values()) tot += e.flow * e.len;
-      H.post({ type: 'samples', samples: sim.trafficSamples || [], target: Math.min(1000, Math.round(tot / 260)) });
+      H.post({ type: 'samples', samples: sim.trafficSamples || [], target: Math.min(this.perfLow ? 300 : 1000, Math.round((tot / 260) * rush)) });
     }
-    if (this.aLineVer !== sim.lineInfoVersion) {
-      this.aLineVer = sim.lineInfoVersion;
+    const lineKey = `${sim.lineInfoVersion}:${this.w.lineVersion}:${peak}`;
+    if (this.aLineVer !== lineKey) {
+      this.aLineVer = lineKey;
       const lines = [];
       for (const l of this.w.lines) {
         const info = sim.lineInfo?.get(l.id);
-        if (info?.ok && info.segs.length) lines.push({ id: l.id, mode:l.mode, segs: info.segs, len: info.len, color: l.color, sig: info.segs.map((g) => `${g.edge}:${g.from.toFixed(1)}:${g.to.toFixed(1)}`).join('|') });
+        if (info?.ok && info.segs.length) lines.push({ id: l.id, mode:l.mode, segs: info.segs, len: info.len, color: l.color, headway: peak ? l.headway || 10 : l.offpeak || l.headway || 10, sig: `${peak}|` + info.segs.map((g) => `${g.edge}:${g.from.toFixed(1)}:${g.to.toFixed(1)}`).join('|') });
       }
       H.post({ type: 'lines', lines });
     }
-    const spawns = (sim.dispatches?.splice(0) || []).map((d) => ({ segs: d.segs, kind: d.kind, col: 0xd8302a }));
+    const spawns = (sim.dispatches?.splice(0) || []).map((d) => ({ segs: d.segs, kind: d.kind, col: d.kind === 'ambulance' ? 0xf4f4f4 : d.kind === 'van' ? 0xf0e6d0 : 0xd8302a }));
     // garbage trucks and police patrols: routed here, simulated in the worker
     this.serviceT += step;
     if (this.serviceT > 3) {
@@ -1010,6 +1051,125 @@ export class Renderer {
     const pal = o.palette === 'cb' ? 'cb' : 'default';
     if (pal !== this.palette) { this.palette = pal; this.w.markGround(0, 0, N, N); this.tintKey = null; }
     this.reducedMotion = !!o.reducedMotion; this.lod = o.lod !== false;
+    // performance profile: 'auto' picks the light one on phones and small, low-memory devices
+    const phone = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches && ((navigator.deviceMemory || 8) <= 4 || innerWidth < 900);
+    this.perfLow = o.perf === 'low' || ((o.perf || 'auto') === 'auto' && phone);
+    this.r.shadowMap.enabled = !this.perfLow; this.sun.castShadow = !this.perfLow;
+  }
+
+  // Toll booths where the played tile's roads cross into a neighbouring tile: a booth and a
+  // barrier on the outbound side of each portal (only where a toll is charged).
+  updateBooths() {
+    const econ = this.w.econ, key = econ ? `${this.w.net.version}:${econ.portals.map((p) => `${p.node}:${econ.tile(p.to)?.policy.toll}`).join(',')}` : 'none';
+    if (key === this.boothKey) return; this.boothKey = key;
+    if (this.boothGroup) { this.boothGroup.traverse((o) => o.geometry?.dispose()); this.scene.remove(this.boothGroup); this.boothGroup = null; }
+    if (!econ) return;
+    const boxes = [];
+    for (const p of econ.portals) {
+      if (p.tile !== econ.active || p.node == null || !(econ.tile(p.to)?.policy.toll > 0)) continue;
+      const n = this.w.net.nodes.get(p.node); if (!n) continue;
+      const e = this.w.net.edges.get([...n.edges][0]); if (!e) continue;
+      const s = e.a === n.id ? Math.min(10, e.len / 2) : Math.max(0, e.len - 10), f = this.w.net.sampleAt(e, s), y = deckHeight(e, s), hw = e.hw;
+      const nx = -f.tz, nz = f.tx;
+      boxes.push(coloredBox(1.6, 2.6, 1.6, f.x + nx * (hw + 1.4), y + 1.3, f.z + nz * (hw + 1.4), 0xe8e0d0));
+      boxes.push(coloredBox(2, 0.3, 2, f.x + nx * (hw + 1.4), y + 2.75, f.z + nz * (hw + 1.4), 0xd83a3a));
+      for (let k = 0; k < 6; k++) { const o = -hw + (k + 0.5) * (2 * hw / 6); boxes.push(coloredBox(0.35, 0.25, 0.35, f.x + nx * o, y + 1.1, f.z + nz * o, k % 2 ? 0xd83a3a : 0xf4f4f4)); }
+    }
+    if (boxes.length) { this.boothGroup = new THREE.Mesh(mergeGeometries(boxes), new THREE.MeshLambertMaterial({ vertexColors: true })); this.scene.add(this.boothGroup); }
+  }
+
+  // hour of the day from the visual clock (tod 0 = 06:00, 0.25 = noon)
+  hour() { return (this.tod * 24 + 6) % 24; }
+  // Following one resident: at home, on the way along their real route, at work, and back.
+  updateFollow(dt) {
+    const f = this.follow; if (!f) { if (this.followMark) this.followMark.visible = false; return; }
+    const w = this.w, net = w.net, home = w.buildings.get(f.citizen.home); if (!home) { this.follow = null; return; }
+    if (!this.followMark) {
+      const g = new THREE.Group(); g.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.8, 1.2), new THREE.MeshBasicMaterial({ color: 0xffd23a })));
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.25, 4, 16), new THREE.MeshBasicMaterial({ color: 0xffd23a })); ring.rotation.x = Math.PI / 2; ring.position.y = -0.8; g.add(ring);
+      this.followMark = g; this.scene.add(g);
+    }
+    const r = this.sim.routes;
+    if (r?.origin === home.id && r.job && f.routeKey !== r.job.destination) {   // polyline of the commute
+      f.routeKey = r.job.destination; f.work = r.job.destination; f.minutes = Math.max(4, Math.round(r.job.seconds / 4)); f.pts = [];
+      for (const sg of r.job.segments) { const e = net.edges.get(sg.edge); if (!e) continue; const n = Math.max(2, Math.ceil(Math.abs(sg.to - sg.from) / 4)); for (let k = 0; k <= n; k++) { const s = sg.from + (sg.to - sg.from) * (k / n), p = net.sampleAt(e, s); f.pts.push([p.x, deckHeight(e, s), p.z]); } }
+    }
+    const H = this.hour(), c = f.citizen, dur = (f.minutes || 20) / 60, work = f.work && w.buildings.get(f.work);
+    let pos = [home.cx, home.pad ?? home.baseY ?? 0, home.cz], state = 'home';
+    const along = (t) => { const P = f.pts; if (!P?.length) return null; const k = Math.min(P.length - 1, t * (P.length - 1)), i = Math.floor(k), u = k - i, a = P[i], b = P[Math.min(P.length - 1, i + 1)]; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]; };
+    if (work && c.cohort !== 'retiree') {
+      if (H >= c.depart && H < c.depart + dur) { pos = along((H - c.depart) / dur) || pos; state = 'commute'; }
+      else if (H >= c.depart + dur && H < c.back) { pos = [work.cx, work.pad ?? work.baseY ?? 0, work.cz]; state = 'work'; }
+      else if (H >= c.back && H < c.back + dur) { pos = along(1 - (H - c.back) / dur) || pos; state = 'return'; }
+    }
+    f.state = state;
+    this.followMark.visible = true; this.followMark.position.set(pos[0], pos[1] + 2.5 + Math.sin(this.time * 4) * 0.3, pos[2]);
+    if (f.camera) { this.cam.x += (pos[0] - this.cam.x) * Math.min(1, dt * 3); this.cam.z += (pos[2] - this.cam.z) * Math.min(1, dt * 3); }
+  }
+
+  // Neighbouring cities of the region stand on the horizon beyond the map edge,
+  // sized by their population (AI neighbours and your own other cities alike).
+  setRegion(region) {
+    if (this.regionGroup) { this.regionGroup.traverse((o) => o.geometry?.dispose()); this.scene.remove(this.regionGroup); }
+    const g = this.regionGroup = new THREE.Group(), here = region?.tiles[region.active]; this.scene.add(g);
+    if (!here) return;
+    const boxes = [];
+    // where a neighbour's road reaches the shared border: amber posts mark the connection point
+    for (const st of this.w.edgeStubs || []) {
+      const x = st.side === 'west' ? 0.5 : st.side === 'east' ? N - 0.5 : st.pos, z = st.side === 'north' ? 0.5 : st.side === 'south' ? N - 0.5 : st.pos, y = this.w.heightAt(x, z);
+      const along = st.side === 'west' || st.side === 'east';
+      for (const o of [-5, 5]) boxes.push(coloredBox(0.6, 3, 0.6, x + (along ? 0 : o), y + 1.5, z + (along ? o : 0), 0xf0a030));
+    }
+    for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const t = region.tiles[`${here.x + dx},${here.z + dz}`];
+      if (!t || (t.kind !== 'ai' && t.kind !== 'city')) continue;
+      const pop = t.kind === 'ai' ? t.pop || 20000 : t.summary?.pop || 0; if (pop < 50) continue;
+      const n = Math.round(clamp(pop / 1500, 10, 140)), top = clamp(Math.sqrt(pop) / 4, 8, 110), seed = t.x * 31 + t.z;
+      const cx = N / 2 + dx * N * 0.62, cz = N / 2 + dz * N * 0.62;
+      for (let i = 0; i < n; i++) {
+        const along = (hash2(i, seed, 401) - 0.5) * N * 0.75, depth = hash2(i, seed, 402) * N * 0.35, core = 1 - Math.abs(along) / (N * 0.4);
+        const x = cx + (dx ? dx * depth : along), z = cz + (dz ? dz * depth : along);
+        const h = 3 + top * core * core * (0.3 + hash2(i, seed, 403) * 0.7), w = 5 + hash2(i, seed, 404) * 9;
+        const shade = 150 + Math.round(hash2(i, seed, 405) * 40);
+        boxes.push(coloredBox(w, h, w * (0.6 + hash2(i, seed, 406) * 0.8), x, h / 2 - 0.5, z, (shade << 16) | ((shade + 8) << 8) | (shade + 22)));
+      }
+    }
+    if (boxes.length) { const m = new THREE.Mesh(mergeGeometries(boxes), new THREE.MeshLambertMaterial({ vertexColors: true })); m.receiveShadow = false; g.add(m); }
+  }
+
+  // Disasters and events on screen: the ground shakes after a quake, a funnel sweeps
+  // along a tornado's track, and fireworks burst over a festival after dark.
+  updateEvents(dt) {
+    const s = this.sim, now = performance.now();
+    if (s.quake && !this.reducedMotion) {
+      const k = 1 - (now - s.quake.t) / 3000;
+      if (k > 0) { const a = k * (s.quake.mag - 4.5) * 0.6; this.camera.position.x += (Math.random() - 0.5) * a; this.camera.position.y += (Math.random() - 0.5) * a; }
+    }
+    const tor = s.tornado, tk = tor ? (now - tor.t) / 9000 : 2;
+    if (tk < 1) {
+      if (!this.funnel) {
+        const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0x6f7378, transparent: true, opacity: 0.7, depthWrite: false });
+        for (let i = 0; i < 9; i++) { const c = new THREE.Mesh(new THREE.CylinderGeometry(1.5 + i * 1.3, 1 + i * 1.3, 5, 10, 1, true), m); c.position.y = 2.5 + i * 5; g.add(c); }
+        this.funnel = g; this.scene.add(g);
+      }
+      const x = tor.x0 + (tor.x1 - tor.x0) * tk, z = tor.z0 + (tor.z1 - tor.z0) * tk;
+      this.funnel.visible = true; this.funnel.position.set(x, this.w.heightAt(x, z), z);
+      this.funnel.children.forEach((c, i) => { c.rotation.y += dt * (4 + i); c.position.x = Math.sin(now / 300 + i) * i * 0.4; });
+    } else if (this.funnel) this.funnel.visible = false;
+    // fireworks: short-lived bright sparks above the festival venue at night
+    if (!this.sparks) {
+      this.sparks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshBasicMaterial({ color: 0xffffff }), 600);
+      this.sparks.count = 0; this.sparks.frustumCulled = false; this.scene.add(this.sparks); this.sparkList = [];
+    }
+    const v = s.event && this.w.buildings.get(s.event.venue), L = this.sparkList;
+    if (v && this.night > 0.4 && !this.reducedMotion && !s.paused && Math.random() < dt * 1.6) {
+      const col = [0xff5a5a, 0xffd23a, 0x5ad8ff, 0xb45aff, 0x5aff8a][Math.floor(Math.random() * 5)], y = (v.top || 10) + 25 + Math.random() * 20;
+      for (let i = 0; i < 40 && L.length < 600; i++) { const a = Math.random() * 6.283, b = Math.acos(2 * Math.random() - 1), sp = 8 + Math.random() * 4; L.push({ x: v.cx, y, z: v.cz, vx: Math.sin(b) * Math.cos(a) * sp, vy: Math.cos(b) * sp, vz: Math.sin(b) * Math.sin(a) * sp, age: 0, col }); }
+    }
+    const M = new THREE.Matrix4(), c = new THREE.Color(); let n = 0;
+    for (let i = L.length - 1; i >= 0; i--) { const p = L[i]; p.age += dt; if (p.age > 1.6) { L.splice(i, 1); continue; } p.vy -= 9 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; }
+    for (const p of L) { const k = 1 - p.age / 1.6; M.makeScale(k, k, k).setPosition(p.x, p.y, p.z); this.sparks.setMatrixAt(n, M); this.sparks.setColorAt(n, c.setHex(p.col)); n++; }
+    this.sparks.count = n; this.sparks.instanceMatrix.needsUpdate = true; if (this.sparks.instanceColor) this.sparks.instanceColor.needsUpdate = true;
   }
 
   // PNG of the current view (rendered now, so the drawing buffer is still intact)
@@ -1070,23 +1230,43 @@ export class Renderer {
     if (this.weatherType !== this.sim.weather.type) { this.weatherType=this.sim.weather.type; this.w.markGround(0,0,N,N); }
     const w=this.sim.weather, snow=w.type==='snow', wet=snow || w.type==='rain' || w.type==='storm';
     this.scene.background.setHex(w.sky);this.scene.fog.color.setHex(w.sky);this.sun.intensity=w.light;
+    // under the front it's darker; ahead of and behind it the sun breaks through
+    const here = frontAt(w, this.cam.x, this.cam.z, this.sim.day + this.sim.acc);
+    if (wet) { this.sun.intensity = WEATHER.clear.light + (w.light - WEATHER.clear.light) * here; this.scene.background.lerp(new THREE.Color(WEATHER.clear.sky), 1 - here); this.scene.fog.color.copy(this.scene.background); }
     if(this.sim.tech.style==='cyberpunk'){this.scene.background.lerp(new THREE.Color(0x252340),0.65);this.scene.fog.color.copy(this.scene.background);this.sun.intensity*=0.65;}
     if (w.type==='fog') { this.scene.fog.near=this.cam.dist*0.35;this.scene.fog.far=this.cam.dist*2+100; }
     this.ground.material.color.setHex(this.w.hazards.snow>.05 ? 0xe1e9ef : wet ? 0xa4b5bd : 0xffffff);
+    // Rain and snow fall over the whole tile: three in five drops are spread over the
+    // entire map (following the terrain), the rest crowd around the camera for close-ups.
+    const COUNT = 6000;
     if (!this.precipitation) {
-      const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(600*6),3));
+      const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(COUNT*6),3));
       this.precipitation=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0xc8e3ff,transparent:true,opacity:0.65,depthWrite:false}));
       this.precipitation.frustumCulled=false;this.scene.add(this.precipitation);this.weatherClock=0;
+      this.dropBase = new Float32Array(COUNT);   // ground height under each whole-tile drop, refreshed as terrain changes
+      this.dropVer = -1;
     }
     this.precipitation.visible=wet && !this.reducedMotion;if(!wet || this.reducedMotion)return;
     if(!this.sim.paused)this.weatherClock+=dt;
-    const a=this.precipitation.geometry.attributes.position;
+    const a=this.precipitation.geometry.attributes.position, c=this.cam;
+    const heavy = (w.type === 'storm' ? 1 : w.type === 'rain' ? 0.75 : 0.85) * (this.perfLow ? 0.35 : 1), n = Math.round(COUNT * heavy);
+    this.precipitation.geometry.setDrawRange(0, n * 2);
     this.precipitation.material.color.setHex(snow?0xffffff:0xb8dfff);
-    for(let i=0;i<600;i++) {
-      const fall=snow?5:35, y=65-((hash2(i,1,71)*65+this.weatherClock*fall)%65);
-      const x=this.cam.x+(hash2(i,2,71)-0.5)*180 + Math.sin(w.direction)*y*0.2;
-      const z=this.cam.z+(hash2(i,3,71)-0.5)*180 + Math.cos(w.direction)*y*0.2;
-      a.setXYZ(i*2,x,y,z);a.setXYZ(i*2+1,x+(snow?0.3:0.6),y+(snow?0.3:3),z);
+    this.precipitation.material.opacity = clamp(0.35 + c.dist / 900, 0.45, 0.8);
+    const gv = `${this.w.terrainVersion}:${this.w.net.version}`;
+    if (this.dropVer !== gv) { this.dropVer = gv; for (let i = 0; i < COUNT; i++) this.dropBase[i] = this.w.heightAt(hash2(i, 2, 71) * N, hash2(i, 3, 71) * N); }
+    const clock = this.sim.day + this.sim.acc;
+    const near = clamp(c.dist * 0.9, 60, 260), streak = snow ? 0.3 : clamp(c.dist / 70, 2.5, 9), H = 90;
+    const sx = Math.sin(w.direction) * (snow ? 0.35 : 0.2), sz = Math.cos(w.direction) * (snow ? 0.35 : 0.2);
+    for(let i=0;i<n;i++) {
+      const fall=snow?5:35, drop=H-((hash2(i,1,71)*H+this.weatherClock*fall*(0.85+hash2(i,4,71)*0.3))%H);
+      let x, z, base;
+      if (i % 5 < 3) { x = hash2(i,2,71)*N; z = hash2(i,3,71)*N; base = this.dropBase[i]; }
+      else { x = c.x+(hash2(i,2,71)-0.5)*near*2; z = c.z+(hash2(i,3,71)-0.5)*near*2; base = (c.targetY || 0) + this.w.heightAt(c.x, c.z); }
+      x += sx * drop; z += sz * drop;
+      if (hash2(i, 5, 71) > frontAt(w, x, z, clock)) { a.setXYZ(i * 2, 0, -500, 0); a.setXYZ(i * 2 + 1, 0, -500, 0); continue; }   // dry outside the band
+      const y = base + drop;
+      a.setXYZ(i*2,x,y,z);a.setXYZ(i*2+1,x+(snow?0.3:sx*streak),y+(snow?0.3:streak),z+(snow?0:sz*streak));
     }
     a.needsUpdate=true;
   }
@@ -1230,10 +1410,13 @@ export class Renderer {
     this.time += dt; this.lastTrainDt=dt*Math.min(this.sim.speed,3);
     const w = this.w;
     if (this.terrainVer !== w.terrainVersion) this.refreshTerrain();
+    this.gradeT = (this.gradeT || 0) + dt;
+    if (w.dirty.grade && this.gradeT > 0.2) { const g = w.dirty.grade; w.dirty.grade = null; this.gradeT = 0; this.refreshGround(g[0], g[1], g[2], g[3]); }
     if (this.roadVer !== w.net.version || this.roadEra !== this.sim.tech.style) this.buildRoads();
     if (this.flowVer !== this.sim.flowVersion && (this.overlay === 'traffic' || this.flowVer === -1)) this.colorTraffic();
     this.syncBuildings(); this.updateLod();
     this.updateBuildingTints(); this.updateRoute();
+    if (this.treeSeason && this.treeSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) w.dirty.trees = true;
     if (w.dirty.trees) { this.treeT = (this.treeT || 0) + dt; if (this.treeT > 0.3 || !this.treeMesh) { this.rebuildTrees(); w.dirty.trees = false; this.treeT = 0; } }
     const ov = this.overlay !== 'none' && this.overlay !== 'districts' && this.overlay !== 'traffic';
     if (ov) { const v = (this.sim.fieldVersion || 0) + ':' + this.sim.flowVersion; if (v !== this.overlayVer) { this.overlayVer = v; w.markGround(0, 0, N, N); } }
@@ -1245,7 +1428,7 @@ export class Renderer {
     this.updateVehicles(dt); this.updateFuture(dt); this.updateLines(); this.updateBridges(dt);
     this.updateParticles(dt);
     this.iconT += dt; if (this.iconT > 0.25) { this.iconT = 0; this.updateIcons(); }
-    this.updateCamera(); this.updateWeather(dt); this.updateDayNight(dt);
+    this.updateBooths(); this.updateFollow(dt); this.updateCamera(); this.updateEvents(dt); this.updateWeather(dt); this.updateDayNight(dt);
     this.r.render(this.scene, this.camera);
   }
 }

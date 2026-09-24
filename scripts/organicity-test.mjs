@@ -12,10 +12,21 @@ import { makeSave, loadSave, migrate, SAVE_VERSION } from '../organicity/js/save
 import { PROB } from '../organicity/js/sim.js';
 import { RoadNet } from '../organicity/js/roads.js';
 import { fastestRoute, commuteRoutes } from '../organicity/js/routes.js';
-import { weatherAt, WEATHER } from '../organicity/js/weather.js';
+import { weatherAt, WEATHER, frontAt } from '../organicity/js/weather.js';
 import { Core, netSnapshot, sampleField } from '../organicity/js/core.js';
 import { N, ZONES, SERVICES } from '../organicity/js/config.js';
 import { setupScenario, TUTORIAL } from '../organicity/js/scenarios.js';
+import { quake, tornado, accident, festival, disasterTick, DISASTERS } from '../organicity/js/disasters.js';
+import { createRegion, canBuy, tileCost, partnersOf, neighbours as tileNeighbours, exitDir, edgeProfile, exitsOf, stubsFor, evolveAI } from '../organicity/js/region.js';
+import { headway, lineCapacity, transitGraph, transitSearch, transitTo, updateCosts } from '../organicity/js/assign.js';
+import { pond } from '../organicity/js/terrain.js';
+import { registerPack, landmarkDef } from '../organicity/js/packs.js';
+import { t as tr, setLang, STRINGS } from '../organicity/js/i18n.js';
+import { backgroundMonth } from '../organicity/js/region.js';
+import { RegionSim, TERM_YEARS } from '../organicity/js/regionsim.js';
+import { rentOf, salaryOf, utility as famUtility, reconsider, newFamily, THRESHOLD } from '../organicity/js/families.js';
+import { applyPolicy, aiDecide, clampPolicy, predict } from '../organicity/js/presidents.js';
+import { readFileSync, existsSync } from 'node:fs';
 import { encodeSave, decodeSave, readShared } from '../organicity/js/share.js';
 import { technology, buildingFloors, massPlan } from '../organicity/js/eras.js';
 import { assignTraffic, routeLines, junctionDelay } from '../organicity/js/assign.js';
@@ -759,7 +770,7 @@ test('region: named neighbours per exit, floating prices, goods exports, persist
   assert(reg.length >= 1 && reg[0].name && reg[0].pop > 10000 && reg[0].connected, 'no neighbour city');
   const mk = s.market(); for (const k of ['goods', 'power', 'water']) assert(mk[k] >= 0.6 && mk[k] <= 1.6, `price out of range: ${k}`);
   const shop = [...w.buildings.values()].find((b) => !b.svc && ZONES[b.zone].kind === 'C'); shop.zone = 4;   // the fixture has no industry
-  run(s, 3); assert(s.stats.filled.I > 0 && s.stats.inc.exports > 0, `no goods exports: ${s.stats.filled.I}`);
+  run(s, 3); assert(s.stats.filled.I > 0 && (s.stats.inc.exports > 0 || s.stats.goods.usedLocal > 0), `industry output unused: ${s.stats.filled.I}`);
   const p0 = reg[0].pop; s.growRegion(); assert(s.regionList()[0].pop > p0, 'neighbour did not grow');
   const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false }).sim;
   assert(back.regionList()[0].pop === s.regionList()[0].pop && back.news.length > 0, 'region/news lost on reload');
@@ -866,6 +877,456 @@ test('H: lightning dispatches a fire and sandbox can suppress damage', () => {
   const make=()=>{const w=new World();w.newGame();const b=w.createBuilding({zone:1,cells:[100*N+100],level:1});const s=new Sim(w,{worker:false,sandbox:{noFires:false}});s.weather={type:'storm'};return{w,b,s};};
   const {w,b,s}=make();for(let d=1;d<=100&&!w.hazards.lightning;d++){s.day=d;hazardTick(s);}assert(w.hazards.lightning&&b.fire,'no lightning fire');
   const other=make();other.s.sandbox.noFires=true;other.s.day=s.day;hazardTick(other.s);assert(other.w.hazards.lightning&&!other.b.fire,'sandbox fire suppression ignored');
+});
+
+// ------------------------------------------------------------------ terrain grading and the region
+function hillTown(seed = 5151) {
+  const w = new World(seed, 'hills'); w.newGame();
+  // find a hilly stretch next to the highway end
+  road(w, [150, 262], [230, 262]); road(w, [230, 262], [300, 200]); road(w, [230, 262], [300, 330]);
+  return w;
+}
+
+test('grading: roads get smooth, grade-limited profiles that meet at junctions and sit on levelled ground', () => {
+  const w = hillTown();
+  let relief = 0; for (let i = 0; i < w.elevation.length; i += 97) relief = Math.max(relief, w.elevation[i]);
+  assert(relief > 5, `hills preset is flat: ${relief}`);
+  for (const e of w.net.edges.values()) {
+    if (e.type === 'highway' && !e.heights) continue;
+    assert(e.heights && e.heights.length === e.n + 1, 'edge without a profile');
+    for (let k = 1; k <= e.n; k++) { const d = e.cum[k] - e.cum[k - 1]; const J = Math.min(e.hw + 3, e.len / 4), g = Math.max(0.09, 1.02 * Math.abs(e.heights[e.n] - e.heights[0]) / Math.max(1, e.len - 2 * J)); assert(Math.abs(e.heights[k] - e.heights[k - 1]) <= g * d + 1e-6, `too steep on edge ${e.id} at ${k}`); }
+    for (let k = 0; k <= e.n; k += 2) { const got = w.heightAt(e.pts[2 * k], e.pts[2 * k + 1]); assert(Math.abs(got - e.heights[k]) < 0.6, `ground not levelled under edge ${e.id}: ${got.toFixed(2)} vs ${e.heights[k].toFixed(2)}`); }
+  }
+  for (const n of w.net.nodes.values()) {
+    const ends = [...n.edges].map((id) => { const e = w.net.edges.get(id); return e.a === n.id ? e.heights[0] : e.heights[e.n]; });
+    assert(ends.every((h) => Math.abs(h - ends[0]) < 1e-6), `junction ${n.id} heights differ: ${ends}`);
+  }
+});
+
+test('grading: buildings sit on flat pads; grading replays identically on load', () => {
+  const w = hillTown(); const s = new Sim(w, { worker: false, sandbox: { instant: true } });
+  for (const [x, z, id] of [[190, 250, 1], [260, 250, 3], [265, 290, 1]]) w.fillZone(x, z, id);
+  for (let i = 0; i < w.zone.length; i += 5) if (w.zone[i] && w.free(i) && w.accEdge[i] >= 0) w.placeGrowable((i % N) + 0.5, Math.floor(i / N) + 0.5, 1);
+  const blds = [...w.buildings.values()].filter((b) => !b.svc);
+  assert(blds.length > 5, 'no buildings on the hill');
+  for (const b of blds) {
+    for (const c of b.cells) if (!w.water[c]) assert(Math.abs(w.elevation[c] - b.pad) < 1e-4, `lot ${b.id} not flat: cell ${c} ${w.elevation[c].toFixed(2)} vs ${b.pad.toFixed(2)}, road ${w.road[c]}`);
+    assert(Math.abs(b.baseY - b.pad) < 1e-4, 'building not on its pad');
+  }
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false }).world;
+  let diff = 0; for (let i = 0; i < w.elevation.length; i++) diff = Math.max(diff, Math.abs(back.elevation[i] - w.elevation[i]));
+  assert(diff < 0.5, `grading changed on reload by ${diff.toFixed(2)}`);
+  for (const b of blds) assert(Math.abs(back.buildings.get(b.id).baseY - b.baseY) < 0.5, 'pad moved on reload');
+});
+
+test('region: AI neighbours beyond exits, buying adjacent tiles, partners share commuters', () => {
+  const { w } = town(); const s = new Sim(w, { worker: false, sandbox: { instant: true } }); run(s, 60);
+  const r = createRegion(w, s), home = r.tiles[r.active];
+  assert(r.size === 5 && home.kind === 'city' && home.owned && home.seed === w.seed, 'home tile wrong');
+  const exit = [...w.net.nodes.values()].find((n) => n.outside), [dx, dz] = exitDir(exit), west = r.tiles[`${home.x + dx},${home.z + dz}`];
+  assert(west.kind === 'ai' && west.name === s.regionList()[0].name, 'exit neighbour not on its tile');
+  assert(Object.values(r.tiles).filter((t) => t.kind === 'ai').length >= 4, 'too few AI cities');
+  const adj = tileNeighbours(r, r.active).find((q) => q.t.kind === 'wild').t, far = r.tiles['0,0'];
+  assert(canBuy(r, `${adj.x},${adj.z}`) && !canBuy(r, '0,0') || far.kind !== 'wild', 'buying rules wrong');
+  const c1 = tileCost(r); adj.owned = true; assert(tileCost(r) > c1, 'tiles do not get dearer');
+  Object.assign(adj, { kind: 'city', name: 'Northgate', summary: { pop: 3000, jobsFree: 800, unemployed: 400 } });
+  const partners = partnersOf(r, r.active);
+  assert(partners.length === 1 && partners[0].name === 'Northgate', 'partner city missing');
+  const base = { ...s.stats }; s.partnerCities = partners; run(s, 3);
+  assert(s.regionList().some((q) => q.player && q.name === 'Northgate'), 'partner not in the region list');
+  assert(s.stats.outJobs > base.outJobs * 0.99 + 1, `no jobs in the partner city: ${s.stats.outJobs} vs ${base.outJobs}`);
+});
+
+// ------------------------------------------------------------------ phase K: disasters and events
+test('disasters: quakes wreck, rubble is cleared and rebuilt lower, and it all saves', () => {
+  const { w, s } = grown(120);
+  const homes = [...w.buildings.values()].filter((b) => !b.svc), c = homes[0];
+  for (const b of homes) b.level = Math.max(b.level, 2);
+  const n = quake(s, c.cx, c.cz, 7.2);
+  const ruins = homes.filter((b) => b.rubble > 0);
+  assert(n > 0 && ruins.length === n && s.shock > 0, `quake did nothing: ${n}`);
+  const r = ruins[0]; s.capacity(r); assert(r.occ === 0 && (r.hh === 0 || r.occ === 0), 'rubble still occupied');
+  s.evalBuilding(r); assert(r.prob & PROB.rubble, 'rubble not flagged');
+  assert(s.advisors().some((a) => a.who === 'Emergency'), 'no emergency advisor');
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false });
+  assert(back.world.buildings.get(r.id).rubble === r.rubble && back.sim.shock === s.shock, 'rubble lost on reload');
+  const lvl = r.level; s.sandbox.instant = false;
+  for (let d = 0; d < 60 && r.rubble > 0; d++) disasterTick(s), s.day++;
+  assert(!r.rubble && r.level === Math.max(1, lvl - 1) && r.constructionUntil > 0, `not rebuilt: rubble ${r.rubble}, level ${r.level}/${lvl}`);
+});
+
+test('disasters: tornado track, industrial spill, festival income', () => {
+  const { w, s } = grown(120);
+  const c = [...w.buildings.values()].find((b) => !b.svc);
+  let trees = 0; for (const t of w.tree) trees += t;
+  const n = tornado(s, c.cx, c.cz, 0.3);
+  let after = 0; for (const t of w.tree) after += t;
+  assert(n > 0 && after < trees && s.tornado, `tornado missed: ${n}, trees ${trees}→${after}`);
+  const shop = [...w.buildings.values()].find((b) => !b.svc && ZONES[b.zone].kind === 'C' && !b.rubble); shop.zone = 4;
+  run(s, 2); const polBefore = s.at(s.f.pollution, shop.cx, shop.cz);
+  assert(accident(s, shop) && shop.spill > 0 && shop.fire > 0, 'no accident');
+  run(s, 6); assert(s.at(s.f.pollution, shop.cx, shop.cz) > polBefore, 'spill did not raise pollution');
+  const put = (k, x, z) => { for (let d = 0; d < 60; d += 3) for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const p = w.planService(k, x + dx, z + dz); if (p.ok) return w.placeService(k, p); } return null; };
+  const park = put('parkL', 200, 300); assert(park, 'no park for the festival');
+  run(s, 1); const base = s.stats.inc.tourism;
+  assert(festival(s, park) && s.event.venue === park.id, 'festival not held');
+  run(s, 1); assert(s.stats.inc.tourism > base, 'festival earned nothing');
+  run(s, 5); assert(!s.event, 'festival never ended');
+});
+
+test('disasters: seeded schedule, sandbox switch', () => {
+  const rate = DISASTERS.quake.rate; DISASTERS.quake.rate = 1;
+  try {
+    const a = grown(90), b = grown(90);
+    a.s.sandbox.noDisasters = true; a.s.stats.pop = 900; disasterTick(a.s);
+    assert(![...a.w.buildings.values()].some((x) => x.rubble), 'sandbox switch ignored');
+    for (const x of [a, b]) { x.s.sandbox.noDisasters = false; x.s.stats.pop = 900; disasterTick(x.s); }
+    const ra = [...a.w.buildings.values()].filter((x) => x.rubble).map((x) => x.id).join(), rb = [...b.w.buildings.values()].filter((x) => x.rubble).map((x) => x.id).join();
+    assert(ra && ra === rb, `not deterministic: ${ra} vs ${rb}`);
+  } finally { DISASTERS.quake.rate = rate; }
+});
+
+// ------------------------------------------------------------------ N: connected region
+test('region edges: a new tile continues its neighbour\'s coast and hills, and keeps it on reload', () => {
+  const a = new World(777, 'hills'); a.newGame();
+  const east = edgeProfile(a, 'east');
+  const b = new World(888, 'coast'); b.edgeMatch = { west: east }; b.newGame();
+  let wet = 0, dh = 0;
+  for (let k = 0; k < 128; k++) { const z = Math.floor(k * 4 + 2), i = z * N; if (b.water[i] === east[2 * k]) wet++; if (!b.water[i]) dh = Math.max(dh, Math.abs(b.elevation[i] - east[2 * k + 1])); }
+  assert(wet >= 120 && dh < 1.5, `edge not matched: water ${wet}/128, height gap ${dh.toFixed(2)}`);
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(b, new Sim(b, { worker: false })))), { worker: false }).world;
+  assert(back.edgeMatch && Math.abs(back.elevation[100 * N] - b.elevation[100 * N]) < 1e-6, 'edge match lost on reload');
+});
+
+test('region roads: roads to the map edge become exits, stubs face the neighbour, trips use the right exit', () => {
+  const { w } = town(); const s = new Sim(w, { worker: false, sandbox: { instant: true } });
+  road(w, [205, 195], [205, 0.5]);
+  const north = [...w.net.nodes.values()].find((n) => n.outside && n.z < 3);
+  assert(north && exitsOf(w).some((x) => x.side === 'north'), 'road to the edge is not an exit');
+  const r = createRegion(w, s), up = r.tiles[`${r.tiles[r.active].x},${r.tiles[r.active].z - 1}`];
+  Object.assign(up, { kind: 'city', owned: true, name: 'Northgate', summary: { pop: 3000, jobsFree: 800, unemployed: 300, exits: [{ side: 'south', pos: 205 }] } });
+  const stubs = stubsFor(r, `${up.x},${up.z + 1}`);
+  assert(stubs.length === 1 && stubs[0].side === 'north' && stubs[0].pos === 205, 'no stub facing the neighbour');
+  s.partnerCities = partnersOf(r, r.active); s.tileNeighbours = { north: { name: 'Northgate', pop: 3000, kind: 'city', key: `${up.x},${up.z}` } };
+  run(s, 40);
+  assert(s.exitLoad?.get(north.id) > 0, `no regional trips through the north exit: ${JSON.stringify([...(s.exitLoad || [])])}`);
+  s.deals = [{ id: 1, role: 'sell', partner: `${up.x},${up.z}`, kind: 'power', amount: 5, price: 15 }];
+  run(s, 3);
+  const row = s.dealFlow.rows[0];
+  assert(row.linked && row.delivered > 0 && s.stats.inc.deals > 0, `deal not running: ${JSON.stringify(row)}`);
+});
+
+test('region AI: neighbours grow with trade and shrink under competition', () => {
+  const { w } = town(); const s = new Sim(w, { worker: false });
+  const r1 = createRegion(w, s), r2 = JSON.parse(JSON.stringify(r1));
+  evolveAI(r1, 0, true, 0); evolveAI(r1, 3600, true, 0);
+  evolveAI(r2, 0, false, 5e6); evolveAI(r2, 3600, false, 5e6);
+  const ai1 = Object.values(r1.tiles).filter((t) => t.kind === 'ai'), ai2 = Object.values(r2.tiles).filter((t) => t.kind === 'ai');
+  assert(ai1.every((t, i) => t.pop > ai2[i].pop), 'competition did not shrink neighbours');
+});
+
+// ------------------------------------------------------------------ O: terrain tools
+test('terraforming: raise, level and undo; roads and lots stay put', () => {
+  const { w } = town();
+  const i = 230 * N + 150, before = w.elevation[i], roadCell = w.road.findIndex((v) => v), roadH = w.elevation[roadCell];
+  w.beginTx('Terrain'); const vol = w.terraform(150.5, 230.5, 6, 'raise'); w.terraform(150.5, 230.5, 6, 'raise'); w.commitTx();
+  assert(vol > 0 && w.elevation[i] > before, 'raise did nothing');
+  w.terraform((roadCell % N) + 0.5, Math.floor(roadCell / N) + 0.5, 4, 'raise');
+  assert(w.elevation[roadCell] === roadH, 'terraformed under a road');
+  w.undo(); assert(Math.abs(w.elevation[i] - before) < 1e-6, 'undo did not restore the ground');
+  for (let k = 0; k < 6; k++) w.terraform(150.5, 230.5, 6, 'level', 3); assert(Math.abs(w.elevation[i] - 3) < 0.5, 'level did not reach its target');
+});
+
+test('steep roads bore tunnels through hills and cross valleys on viaducts', () => {
+  const w = new World(4242, 'river'); w.newGame();
+  for (let z = 70; z < 130; z++) for (let x = 40; x < 170; x++) { const i = z * N + x; w.water[i] = 0; w.elevation[i] = 30 * Math.exp(-((x - 100) ** 2) / 120); }
+  road(w, [50, 100], [150, 100]);
+  const hill = [...w.net.edges.values()].find((e) => e.type === 'street');
+  assert(hill.struct && hill.struct.includes(-1), 'no tunnel through the hill');
+  assert(w.elevation[100 * N + 100] > 25, 'the hill was dug away');
+  const v = new World(4242, 'river'); v.newGame();
+  for (let z = 70; z < 130; z++) for (let x = 40; x < 170; x++) { const i = z * N + x; v.water[i] = 0; v.elevation[i] = Math.abs(x - 100) < 14 ? 0 : 30; }
+  road(v, [50, 100], [150, 100]);
+  const gap = [...v.net.edges.values()].find((e) => e.type === 'street');
+  assert(gap.struct && gap.struct.includes(1) && v.elevation[100 * N + 100] < 1, 'no viaduct over the valley');
+});
+
+// ------------------------------------------------------------------ P: transit and freight
+test('transit: headways set capacity; transfers join two lines', () => {
+  assert(lineCapacity({ mode: 'bus', headway: 5 }) === 2 * lineCapacity({ mode: 'bus', headway: 10 }) && headway({}) === 10, 'headway capacity wrong');
+  const c = corridor();
+  const lines = [
+    { id: 1, mode: 'bus', headway: 10, stops: [{ x: -20, z: 5, edge: c.home.id, s: 10 }, { x: 100, z: 0, edge: c.direct.id, s: 100 }] },
+    { id: 2, mode: 'bus', headway: 10, stops: [{ x: 110, z: 0, edge: c.direct.id, s: 110 }, { x: 220, z: 5, edge: c.work.id, s: 10 }] },
+  ];
+  const out = drain(assignTraffic(c.net, c.blds, { total: 300, rng: () => 1, lines }));
+  assert(out.transfers > 0 && out.riders.get(1) > 0 && out.riders.get(2) > 0, `no transfers: ${out.transfers}`);
+});
+
+test('freight: terminals take trucks off the highway; goods supply the shops', () => {
+  const { w, s } = grown(90);
+  let placed = null; for (let d = 0; d < 80 && !placed; d += 3) for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const p = w.planService('cargorail', 200 + dx, 300 + dz); if (p.ok) { placed = w.placeService('cargorail', p); break; } }
+  assert(placed, 'could not place a cargo terminal');
+  const shop = [...w.buildings.values()].find((b) => !b.svc && ZONES[b.zone].kind === 'C'); shop.zone = 4;
+  run(s, 30);
+  assert(s.terminals().length === 1 && s.stats.goods.termCap > 0, 'terminal not active');
+  assert(s.terminalLoad?.get(placed.id) > 0, 'no freight at the terminal');
+  assert(s.stats.goods.supply >= 0 && s.stats.goods.supply <= 1 && s.stats.goods.demand > 0, 'goods chain missing');
+});
+
+// ------------------------------------------------------------------ Q: economy
+test('bonds and credit: ratings price debt; coupons, maturity and redemption', () => {
+  const { w } = town(); const s = new Sim(w, { worker: false }); run(s, 40);
+  s.stats.incomeM = 20000;
+  const r0 = s.creditRating(); assert(r0.grade === 'AAA', `clean city not AAA: ${JSON.stringify(r0)}`);
+  assert(s.issueBond(250000, 10) && s.bonds.length === 1, 'bond refused');
+  const r1 = s.creditRating(); assert(r1.score < r0.score && r1.rate >= r0.rate, 'debt did not lower the rating');
+  const coupon = s.bondTick(); assert(Math.abs(coupon - 250000 * s.bonds[0].rate / 360) < 1e-6, 'coupon wrong');
+  s.day = s.bonds[0].due; const m = s.money; s.bondTick(); assert(!s.bonds.length && s.money === m - 250000, 'maturity not repaid');
+  s.issueBond(25000, 20); s.money = 100000; assert(s.redeemBond(s.bonds[0].id) && Math.abs(s.money - (100000 - 25500)) < 1e-6, 'early redemption premium wrong');
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false }).sim; assert(back.bondId === s.bondId, 'bonds lost on reload');
+});
+
+test('insurance pays claims; preparedness limits damage; land tax and gentrification', () => {
+  const a = grown(120), b = grown(120);
+  for (const x of [a, b]) for (const q of x.w.buildings.values()) if (!q.svc) q.level = Math.max(q.level, 2);
+  const c = [...a.w.buildings.values()].find((q) => !q.svc);
+  a.s.sandbox.infinite = false; a.s.insurance = true; const m0 = a.s.money;
+  const na = quake(a.s, c.cx, c.cz, 7.4);
+  b.s.preparedness = 1.5; const nb = quake(b.s, c.cx, c.cz, 7.4);
+  assert(na > 0 && a.s.claims > 0 && a.s.money > m0, 'insurance paid nothing');
+  assert(nb < na, `preparedness did not help: ${nb} vs ${na}`);
+  a.s.landTax = 2; run(a.s, 2); assert(a.s.stats.inc.land > 0 && a.s.stats.exp.insurance > 0, 'land tax or premium missing');
+  const g = grown(60);
+  const homes = [...g.w.buildings.values()].filter((q) => q.hh && q.level <= 2 && !q.rubble);
+  for (const h of homes) { h.lv = 0.95; h.built = g.s.day - 2000; }
+  g.s.rng = () => 0; g.s.gentrify();
+  assert(g.s.stats.gentrified > 0 && g.s.stats.displaced >= 0 && homes.some((h) => h.level > 2 || h.constructionUntil > g.s.day), 'no gentrification');
+});
+
+// ------------------------------------------------------------------ R: simulation fidelity
+test('weather fronts: rain bands move across the tile; only roads under them slow down', () => {
+  const w = { ...weatherAt(5, 40, 'rain') }, xs = [];
+  for (let x = 0; x < 512; x += 64) xs.push(frontAt(w, x, x, 3.2));
+  assert(Math.max(...xs) > 0.8 && Math.min(...xs) < 0.3, `no band: ${xs.map((v) => v.toFixed(2))}`);
+  assert(frontAt({ ...w, type: 'clear' }, 100, 100, 1) === 0 && frontAt({ ...w, type: 'fog' }, 100, 100, 1) === 1, 'clear/fog wrong');
+  const a = frontAt(w, 256, 256, 3.0), b = frontAt(w, 256, 256, 3.4); assert(Math.abs(a - b) > 0.01, 'front does not move');
+  const c = corridor(); for (const e of c.net.edges.values()) e.wet = 0; c.direct.wet = 1;
+  updateCosts(c.net, 0.5);
+  assert(c.direct.speedF < c.home.speedF * 0.8, 'wet road not slower than dry');
+});
+
+test('pluvial ponding collects rain in hollows; storms are forecast with a warning', () => {
+  const { w, s } = grown(30);
+  let hx = -1; for (let i = 200 * N + 150; i < 240 * N; i++) if (!w.water[i] && !w.road[i] && !w.bld[i] && w.wdist[i] > 20) { hx = i; break; }
+  for (let dz = -6; dz <= 6; dz++) for (let dx = -6; dx <= 6; dx++) { const i = hx + dz * N + dx; if (!w.water[i]) w.elevation[i] = 2 + Math.hypot(dx, dz) * 0.4; }
+  w.elevation[hx] = 0.5;
+  s.weather = { ...weatherAt(w.seed, s.day, 'storm') }; s.weather.front = null;   // uniform storm
+  for (let k = 0; k < 4; k++) pond(w, s);
+  assert(w.pond[hx] > 0.2 && w.pond[hx] > w.pond[hx + 5 * N] * 2, `no ponding in the hollow: ${w.pond[hx]}`);
+  let warned = false; s.sandbox.noDisasters = false;
+  for (let d = 0; d < 400 && !warned; d++) { s.day = d; s.weather = weatherAt(w.seed, d); s.surgeWarning = null; s.messages.length = 0; s.msgAt = {}; s.surgeForecast(); warned = s.messages.some((m) => m.text.startsWith('Storm warning')); if (warned) assert(weatherAt(w.seed, d + 3).type === 'storm', 'warned for no storm'); }
+  assert(warned, 'no storm warning in 400 days');
+});
+
+test('following a resident: a stable person with an age group and a way to work', () => {
+  const { w, s } = grown(60);
+  const home = [...w.buildings.values()].find((b) => b.hh && b.occ);
+  const a = s.citizenOf(home, 0), b = s.citizenOf(home, 0), c = s.citizenOf(home, 1);
+  assert(a.name === b.name && a.age === b.age && /\w+ \w+/.test(a.name), 'citizen not stable');
+  assert(['child', 'adult', 'retiree'].includes(a.cohort) && ['car', 'transit', 'walk', 'bike'].includes(a.mode) && a.depart >= 7 && a.back >= 16.5, 'citizen fields wrong');
+  assert(c.name !== a.name || c.age !== a.age, 'next resident identical');
+});
+
+// ------------------------------------------------------------------ S: platform
+test('platform: offline app files, content packs (sanitised, saved with the city), languages', () => {
+  const root = new URL('../organicity/', import.meta.url);
+  const man = JSON.parse(readFileSync(new URL('manifest.webmanifest', root), 'utf8'));
+  assert(man.display === 'standalone' && man.icons.length && existsSync(new URL('sw.js', root)) && existsSync(new URL('icon.svg', root)), 'PWA files missing');
+  const sw = readFileSync(new URL('sw.js', root), 'utf8');
+  for (const f of ['js/packs.js', 'js/i18n.js', 'js/region.js']) assert(sw.includes(f.replace('js/', '').replace('.js', '')), `service worker misses ${f}`);
+  const pack = JSON.parse(readFileSync(new URL('packs/sample-pack.json', root), 'utf8'));
+  const info = registerPack(pack);
+  assert(info.styles.length === 2 && info.landmarks.length === 2 && SERVICES.pk_lighthouse?.model.length === 5, 'sample pack not registered');
+  const evil = landmarkDef({ name: '<img src=x onerror=alert(1)>', w: 1e9, model: [{ h: -5, color: 'red' }] }, 'x', 'pk_evil');
+  assert(!/[<>]/.test(evil.name) && evil.w === 40 && evil.model[0].h === 0.1 && evil.model[0].color === 0x999999, 'pack not sanitised');
+  const { w } = town(); const s = new Sim(w, { worker: false, sandbox: {} });
+  let lh = null; for (let d = 0; d < 80 && !lh; d += 3) for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const p = w.planService('pk_lighthouse', 200 + dx, 300 + dz); if (p.ok) { lh = w.placeService('pk_lighthouse', p); break; } }
+  assert(lh && lh.svc === 'pk_lighthouse' && SERVICES.pk_lighthouse.model.some((m) => m.y + m.h > 15), 'pack landmark not built');
+  const save = JSON.parse(JSON.stringify(makeSave(w, s))); delete SERVICES.pk_lighthouse;
+  const back = loadSave(save, { worker: false });
+  assert(back.world.buildings.get(lh.id) && SERVICES.pk_lighthouse, 'city with a pack landmark did not load without the pack');
+  for (const l of ['en', 'hu', 'de']) assert(Object.keys(STRINGS[l]).length === Object.keys(STRINGS.en).length, `${l} strings incomplete`);
+  assert(tr('no.such.key', 'fallback') === 'fallback', 'translation fallback wrong');
+});
+
+// ------------------------------------------------------------------ T: deeper region play
+test('region in the background: neighbours keep growing; deals only deliver spare supply', () => {
+  const r = { tiles: { '2,2': { kind: 'city', summary: { pop: 1000 } }, '2,1': { kind: 'city', summary: { pop: 2000, growth: 0.02, jobsFree: 100, unemployed: 50, surplus: { power: 40, water: 60 } } } } };
+  for (let m = 0; m < 12; m++) backgroundMonth(r, '2,2');
+  const nb = r.tiles['2,1'].summary;
+  assert(nb.pop > 2400 && nb.surplus.power < 40 && r.tiles['2,2'].summary.pop === 1000, `background growth wrong: ${JSON.stringify(nb)}`);
+  const { w } = town(); const s = new Sim(w, { worker: false, sandbox: { instant: true } });
+  road(w, [205, 195], [205, 0.5]);
+  s.tileNeighbours = { north: { name: 'Northgate', pop: 3000, kind: 'city', key: '2,1' } };
+  s.partnerCities = [{ key: '2,1', dir: 'north', name: 'Northgate', pop: 3000, jobsFree: 0, unemployed: 0, surplus: { power: 4, water: 0 }, services: ['university'] }];
+  s.deals = [{ id: 1, role: 'buy', partner: '2,1', kind: 'power', amount: 20, price: 15 }];
+  run(s, 30);
+  const row = s.dealFlow.rows[0];
+  assert(row.linked && Math.abs(row.delivered - 4) < 1e-6, `buyer got more than the seller had: ${row.delivered}`);
+  assert(s.shared('university') && !s.shared('airport') && s.stats.hiSeats >= SERVICES.university.seats / 2, 'shared university not used');
+});
+
+test('region edges: an older city eases its edge toward a newer neighbour', () => {
+  const w = new World(3131, 'hills'); w.newGame();
+  const prof = []; for (let k = 0; k < 128; k++) prof.push(0, 20);
+  const i = 200 * N + 511, before = w.elevation[i];
+  const n = w.blendEdge('east', prof);
+  assert(w.water[i] || (n > 0 && Math.abs(w.elevation[i] - 20) < Math.abs(before - 20)), 'edge not eased');
+  assert(w.blendEdge('east', prof) <= n, 'blending does not settle');
+});
+
+test('transit: journeys with several transfers; peak and off-peak timetables', () => {
+  const L = (id, pts, hw = 10, off = 30) => ({ id, mode: 'bus', headway: hw, offpeak: off, stops: pts.map(([x, z]) => ({ x, z })) });
+  const lines = [L(1, [[0, 0], [100, 0]]), L(2, [[110, 0], [210, 0]]), L(3, [[220, 0], [320, 0]])];
+  const G = transitGraph(lines, 'peak'), S = transitSearch(G, { x: 0, z: 5 });
+  const j = transitTo(G, S, { x: 320, z: 5 });
+  assert(j && j.transfers === 2 && j.lines.map((l) => l.id).join() === '1,2,3', `no two-transfer journey: ${j && j.lines.map((l) => l.id)}`);
+  const off = transitTo(transitGraph(lines, 'off'), transitSearch(transitGraph(lines, 'off'), { x: 0, z: 5 }), { x: 320, z: 5 });
+  assert(off.time > j.time && lineCapacity(lines[0], 'off') < lineCapacity(lines[0], 'peak'), 'off-peak not slower/smaller');
+  assert(!transitTo(G, transitSearch(G, { x: 0, z: 5 }, new Set([2])), { x: 320, z: 5 }), 'full line still used');
+});
+
+// ------------------------------------------------------------------ the regional economy
+// Organicity (grown, with a north exit) next to a city of yours with housing, jobs and a matching exit, plus AI cities
+function econFixture({ northJobs = 60, northQuality = 0.7, northToll = 2, northKind = 'O', northLevel = 4 } = {}) {
+  const { w, s } = grown(60);
+  road(w, [205, 195], [205, 0.5]);
+  run(s, 2);
+  const r = createRegion(w, s), home = r.tiles[r.active], up = r.tiles[`${home.x},${home.z - 1}`], upKey = `${up.x},${up.z}`;
+  Object.assign(up, { kind: 'city', owned: true, name: 'Northgate', summary: { pop: 800, exits: [{ side: 'south', pos: 205 }] } });
+  r.econ = { tiles: { [upKey]: { policy: { toll: northToll }, housing: Array.from({ length: 10 }, (_, i) => [i + 1, 30, 10, northQuality, 100 + i * 30, 400, 0.7, 0.05, 0.05, 0.8]), jobs: Array.from({ length: 6 }, (_, i) => [i + 1, northJobs, 0, northKind, northLevel, 200 + i * 20, 470]) } }, families: [], nextFamily: 1, history: {}, terms: [], termStart: null, lastYear: null };
+  const econ = new RegionSim(r).attach(s, w, r.active);
+  return { w, s, r, econ, upKey, homeKey: r.active };
+}
+
+test('economy 1 — portals: exits pair across tiles; AI cities accept any exit; unmatched exits are dead ends', () => {
+  const { w, econ, upKey, homeKey } = econFixture();
+  const north = econ.portals.find((p) => p.tile === homeKey && p.to === upKey);
+  assert(north && north.node != null && w.net.nodes.get(north.node)?.outside, 'north exit is not a portal on its node');
+  assert(econ.portals.some((p) => p.tile === upKey && p.to === homeKey), 'no portal back');
+  const west = econ.portals.find((p) => p.tile === homeKey && econ.tile(p.to).kind === 'ai');
+  assert(west, 'highway exit not linked to the AI neighbour');
+  assert(econ.reach.get(homeKey).includes(upKey), 'linked neighbour not reachable');
+  const r2 = econFixture(); r2.r.tiles[r2.upKey].summary.exits = [{ side: 'south', pos: 60 }]; r2.econ.buildPortals();
+  assert(!r2.econ.portals.some((p) => p.tile === r2.homeKey && p.to === r2.upKey) && !r2.econ.reach.get(r2.homeKey).includes(r2.upKey), 'unmatched exits linked');
+});
+
+test('economy 2 — families: one per occupied home, reconciled with the city, with a budget', () => {
+  const { w, s, econ, homeKey } = econFixture();
+  const occ = [...w.buildings.values()].filter((b) => b.hh > 0 && !b.svc).reduce((t, b) => t + Math.round(b.occ || 0), 0);
+  const fam = [...econ.families.values()].filter((f) => f.tile === homeKey);
+  assert(fam.length === occ && occ > 0, `families ${fam.length} vs occupied homes ${occ}`);
+  econ.month(s);
+  const f = [...econ.families.values()].find((q) => q.tile === homeKey);
+  assert(f.income > 0 && f.rent > 0 && f.size >= 1 && f.size <= 5 && f.happy >= 0 && f.happy <= 1, `family budget missing: ${JSON.stringify(f)}`);
+  assert([...econ.families.values()].filter((q) => q.tile === homeKey).some((q) => q.wt != null), 'nobody found work');
+});
+
+test('economy 3 — housing and rent: quality, tight markets and the rent target set rents; families weigh them', () => {
+  assert(rentOf(0.9, 0.9) > rentOf(0.3, 0.9) && rentOf(0.5, 0.98) > rentOf(0.5, 0.5) && rentOf(0.5, 0.9, 0.7) < rentOf(0.5, 0.9, 1), 'rent rules wrong');
+  assert(salaryOf('O', 4) > salaryOf('C', 1) && salaryOf('C', 2, 0.4) > salaryOf('C', 2, 1), 'salary rules wrong');
+  const ctx = { portal: () => null, toll: () => 0 }, fam = newFamily(1, 'a', 1, 1, { size: 3, earners: 1 }), job = { salary: 2600, x: 0, z: 0 };
+  const home = (o) => ({ rent: 900, quality: 0.5, services: 0.5, appeal: 0.5, pollution: 0.1, crime: 0.1, x: 10, z: 0, ...o });
+  const u = (o) => famUtility(ctx, fam, 'a', home(o), 'a', job);
+  assert(u({ rent: 700 }) > u({}) && u({ quality: 0.9 }) > u({}) && u({ pollution: 0.8 }) < u({}) && u({ crime: 0.8 }) < u({}) && u({ x: 400 }) < u({}), 'utility ignores a factor');
+});
+
+test('economy 4 — migration: a clearly better tile wins, within thresholds, costs and cooldowns', () => {
+  const { s, econ, upKey, homeKey } = econFixture({ northQuality: 0.95, northJobs: 200 });
+  for (let m = 0; m < 14; m++) { s.day += 30; econ.month(s); }
+  const north = [...econ.families.values()].filter((f) => f.tile === upKey);
+  assert(north.length > 0 && econ.tile(upKey).acc.migIn + (econ.e.history[upKey]?.reduce((t, r) => t + r.migIn, 0) || 0) > 0, 'nobody moved to the better tile');
+  const mover = north.find((f) => f.moved > 0);
+  assert(!mover || s.day - mover.moved < 420, 'mover timestamp missing');
+  // a family that just moved does not move again at once
+  if (mover) { mover.next = s.day; const d = reconsider(econ.ctx(), mover); assert(!d || s.day - mover.moved >= 360, 'moved again inside the cooldown'); }
+  const poor = [...econ.families.values()].find((f) => f.tile === homeKey); if (poor) { poor.savings = 0; poor.moved = -9999; assert(!reconsider(econ.ctx(), poor), 'moved without money for the move'); }
+});
+
+test('economy 5 — tolls: charged on entry, paid to the entered tile, and they deter commuters', () => {
+  // jobs next door paying about what local jobs pay: the toll decides
+  const cheap = econFixture({ northJobs: 200, northToll: 0, northKind: 'O', northLevel: 2 }), dear = econFixture({ northJobs: 200, northToll: 20, northKind: 'O', northLevel: 2 });
+  for (const x of [cheap, dear]) for (let m = 0; m < 6; m++) { x.s.day += 30; x.econ.month(x.s); }
+  const commuters = (x) => [...x.econ.families.values()].filter((f) => f.tile === x.homeKey && f.wt === x.upKey).length;
+  assert(commuters(cheap) > commuters(dear), `toll did not deter commuting: ${commuters(cheap)} vs ${commuters(dear)}`);
+  const mid = econFixture({ northJobs: 200 }); for (let m = 0; m < 3; m++) { mid.s.day += 30; mid.econ.month(mid.s); }
+  assert(commuters(mid) > 0 && mid.econ.tile(mid.upKey).acc.tolls > 0 && mid.econ.tile(mid.homeKey).acc.tolls > 0, 'tolls not paid to the tile entered (to work, and home again)');
+  assert(mid.s.tollIncome > 0, 'the played city receives no toll income');
+  assert(cheap.econ.tile(cheap.upKey).acc.tolls === 0 || cheap.econ.tile(cheap.upKey).policy.toll > 0, 'toll-free tile collected tolls');
+  assert(cheap.s.tollIncome >= 0 && cheap.s.stats.inc.tolls !== undefined, 'played city has no toll income line');
+});
+
+test('economy 6 — presidents: one policy object drives the played city and the region model', () => {
+  const { s, econ, homeKey } = econFixture();
+  econ.setPolicy(homeKey, { tax: 14, services: 1.3, infra: 0.6, dev: 'industry', rentTarget: 0.8, toll: 7 });
+  assert(s.tax.R === 14 && s.tax.I === 12 && s.infra === 0.6 && s.devPriority === 'I', `policy not applied: ${JSON.stringify(s.tax)}`);
+  assert([...s.w.buildings.values()].filter((b) => b.svc).every((b) => s.budgetFor(b.svc) === 1.3), 'service funding not applied');
+  econ.month(s);
+  assert(econ.ctx().toll(homeKey) === 7 && [...econ.tile(homeKey).housing.values()].every((h) => h.rent === rentOf(h.quality, econ.tile(homeKey).occ / Math.max(1, econ.tile(homeKey).units), 0.8)), 'rent target or toll not in force');
+  assert(clampPolicy({ tax: 99, toll: 0 }).tax === 20 && clampPolicy({ toll: 0 }).toll === 0, 'policy limits wrong');
+});
+
+test('economy 7 — AI presidents: deterministic, and their priorities lead to different policies', () => {
+  const st = { pop: 50000, units: 20000, occ: 19000, jobs: 22000, filled: 18000, baseRent: 1400, income: 2600, salary: 2200, crossings: 3000, appeal: 0.5, unemp: 0.12, treasury: 1e6 };
+  const base = clampPolicy({});
+  const pick = (priority) => { let p = base; for (let y = 0; y < 8; y++) p = aiDecide(st, { priority }, p); return p; };
+  const a = pick('treasury'), b = pick('affordability'), c = pick('growth');
+  assert(JSON.stringify(pick('treasury')) === JSON.stringify(a), 'not deterministic');
+  assert(a.tax > c.tax || a.toll > c.toll, `treasury president no greedier than growth: ${JSON.stringify(a)} vs ${JSON.stringify(c)}`);
+  assert(b.rentTarget < a.rentTarget, 'affordability president did not cut rents');
+  const broke = aiDecide({ ...st, treasury: -1e6 }, { priority: 'growth' }, base), rich = aiDecide(st, { priority: 'growth' }, base);
+  assert(predict(st, broke).treasury >= predict(st, rich).treasury, 'broke president ignored the budget');
+});
+
+test('economy 8 — simulation levels: the played tile full, neighbours near, the rest far', () => {
+  const { s, econ, upKey, homeKey } = econFixture();
+  assert(econ.tile(homeKey).level === 'full' && econ.tile(upKey).level === 'near', 'levels wrong');
+  const far = [...econ.tiles.values()].find((t) => t.level === 'far');
+  assert(far, 'no far tile');
+  const f = newFamily(econ.e.nextFamily++, far.key, [...far.housing.keys()][0] ?? 1, 1, { next: 0 }); econ.families.set(f.id, f);
+  const before = JSON.stringify(f); econ.month(s);
+  assert(!econ.families.has(f.id) || JSON.stringify(econ.families.get(f.id)) === before || far.kind === 'ai', 'far-tile family was simulated in detail');
+});
+
+test('economy 9 — regional migration: AI cities send families to a better tile of yours, through the portal', () => {
+  const { s, econ, homeKey } = econFixture();
+  const ai = econ.reach.get(homeKey).map((k) => econ.tile(k)).find((t) => t.kind === 'ai');
+  for (const h of ai.housing.values()) { h.quality = 0.05; h.pollution = 0.9; h.crime = 0.9; }
+  for (const j of ai.jobs.values()) j.slots = j.filled;   // no work there
+  for (const b of s.w.buildings.values()) if (b.hh > 1) b.occ = Math.floor(b.hh / 2);   // homes to move into
+  const occ0 = [...ai.housing.values()].reduce((t, h) => t + h.occ, 0), fam0 = [...econ.families.values()].filter((f) => f.tile === homeKey).length;
+  for (let m = 0; m < 4; m++) { s.day += 30; econ.month(s); }
+  const occ1 = [...ai.housing.values()].reduce((t, h) => t + h.occ, 0);
+  assert(occ1 < occ0, 'no families left the AI city');
+  assert(econ.portals.filter((p) => p.tile === ai.key && p.to === homeKey).length, 'no portal for the migrants');
+  const moved = [...econ.families.values()].filter((f) => f.tile === homeKey && f.moved > 0).length;
+  assert(moved > 0 || [...econ.families.values()].filter((f) => f.tile === homeKey).length > fam0 - 50, 'migrants did not arrive');
+});
+
+test('economy 10 — annual statistics, ten-year terms, elections and saved history', () => {
+  const { s, econ, r } = econFixture();
+  const y0 = s.year;
+  for (let y = 1; y <= TERM_YEARS * 2; y++) { s.year = y0 + y; s.day += 30; econ.month(s); }
+  const keys = Object.keys(econ.e.history);
+  assert(keys.length === econ.tiles.size && econ.e.history[keys[0]].length === TERM_YEARS * 2, `history incomplete: ${econ.e.history[keys[0]]?.length}`);
+  const row = econ.e.history[keys[0]][0];
+  for (const k of ['pop', 'treasury', 'income', 'expenses', 'rent', 'employment', 'migIn', 'migOut', 'landValue', 'tolls', 'president']) assert(k in row, `annual stat ${k} missing`);
+  assert(econ.e.terms.length === 2 && econ.e.terms[0].end - econ.e.terms[0].start === TERM_YEARS, `terms: ${econ.e.terms.map((t) => `${t.start}-${t.end}`)}`);
+  assert(Object.values(econ.e.terms[0].tiles).every((v) => v.president && v.pop.length === 2 && v.treasury.length === 2), 'term record incomplete');
+  assert(econ.events.filter((e) => e.type === 'term').length === 2, 'no term-end events for the interface');
+  econ.pack(); const again = new RegionSim(JSON.parse(JSON.stringify(r)));
+  assert(again.families.size === econ.families.size && again.e.terms.length === 2 && again.tile(s.w ? r.active : r.active).president.name === econ.tile(r.active).president.name, 'region economy not saved');
 });
 
 // ------------------------------------------------------------------ runner

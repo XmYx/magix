@@ -84,6 +84,10 @@ export const SERVICES = {
   depot:    { cat: 'svc',  name: 'Maintenance depot', w: 12, d: 10, cost: 5000,  upkeep: 300, radius: 260, desc: 'Keeps roads in good condition.' },
   busdepot: { cat: 'svc',  name: 'Bus depot',         w: 12, d: 10, cost: 6000,  upkeep: 400, desc: 'Required for bus stops to operate.' },
   busstop:  { cat: 'svc',  name: 'Bus stop',          w: 3,  d: 2,  cost: 300,   upkeep: 30,  radius: 45, desc: 'Better access, fewer car trips.' },
+  // freight terminals: exports leave by rail, sea or air instead of trucks on the highway (freight = capacity)
+  cargorail:  { cat: 'svc', name: 'Cargo rail terminal', w: 22, d: 12, cost: 30000,  upkeep: 900,  freight: 400, unlock: 1500, exportBonus: 0.08, noise: 0.3, desc: 'Ships exports by rail: fewer trucks and better goods prices.' },
+  harbour:    { cat: 'svc', name: 'Harbour',             w: 24, d: 18, cost: 60000,  upkeep: 1500, freight: 900, unlock: 3000, exportBonus: 0.15, nearWater: true, noise: 0.4, desc: 'Container port by the water: big export capacity, and industry wants to be near it.' },
+  airport:    { cat: 'svc', name: 'Airport',             w: 44, d: 16, cost: 120000, upkeep: 3000, freight: 250, unlock: 8000, exportBonus: 0.05, tourism: 3000, noise: 0.9, desc: 'Air freight, tourists and business travel. Offices want to be near it; neighbours hate the noise.' },
   // higher education: unlocked by population; seats serve residents across a wide road radius
   college:  { cat: 'svc',  name: 'College',           w: 18, d: 14, cost: 22000, upkeep: 1100, radius: 320, unlock: 1500, seats: 900,  desc: 'Higher education: more skilled workers and office demand.' },
   university: { cat: 'svc', name: 'University',       w: 28, d: 22, cost: 60000, upkeep: 2400, radius: 600, unlock: 5000, seats: 2500, park: 50, desc: 'Graduates unlock top offices and tech firms.' },

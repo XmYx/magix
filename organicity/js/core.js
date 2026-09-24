@@ -3,6 +3,7 @@
 // (road network + packed buildings) so the same code runs inside a Web Worker,
 // on the main thread as a fallback, or headless in Node tests.
 import { FC, FN, SERVICES, ROADS } from './config.js';
+import { frontAt } from './weather.js';
 import { commuteRoutes } from './routes.js';
 import { assignTraffic, routeLines, updateCosts, dirCapacity, netFromSnapshot } from './assign.js';
 import { RoadNet } from './roads.js';
@@ -82,6 +83,11 @@ export class Core {
     this.result = out;
   }
 
+  // how much of the current weather front each road sits under (1 = full effect)
+  wetRoads(req) {
+    for (const e of this.net.edges.values()) e.wet = req.weather ? frontAt(req.weather, (e.bb[0] + e.bb[2]) / 2, (e.bb[1] + e.bb[3]) / 2, req.clock ?? 0) : 1;
+  }
+
   // ---------------------------------------------------------------- coverage
   *coverage(req) {
     const net = this.net, cs = this.cs, busComps = new Set(req.busComps || []);
@@ -148,7 +154,7 @@ export class Core {
         continue;
       }
       if (b.zk === 'i') {
-        const v = (0.22 + 0.12 * b.level) * (b.green ? 0.45 : 1) * (b.spec === 'forestry' ? 0.4 : 1);
+        const v = (0.22 + 0.12 * b.level) * (b.green ? 0.45 : 1) * (b.spec === 'forestry' ? 0.4 : 1) * (b.spill ? 3 : 1);   // a chemical spill triples it
         plume(b.cx, b.cz, 30 + b.level * 10, v); splat(noi, b.cx, b.cz, 26, 0.22);
         if (nearWater(b.cx, b.cz, 18)) splat(wpol, b.cx, b.cz, 45, v * 1.2);
       }
@@ -196,7 +202,7 @@ export class Core {
   // ---------------------------------------------------------------- traffic
   *traffic(req, dt, out) {
     const net = this.net, rng = this.rng;
-    updateCosts(net, req.weather?.speed ?? 1);
+    this.wetRoads(req); updateCosts(net, req.weather?.speed ?? 1);
     for (const b of req.blds) { b.tOut = b.tJob = Infinity; b.cong = 0; b.prod = 1; }
     if (!net.edges.size) return;
     const outs = [...net.nodes.values()].filter((n) => n.outside).map((n) => [n.id, 0]);
@@ -228,7 +234,7 @@ export class Core {
     const old = new Map([...net.edges.values()].map((e) => [e.id, [e.fAB || 0, e.fBA || 0, e.heights || null, e.hazardSpeed ?? 1, e.speedF ?? 1]]));
     const lineRoutes = routeLines(net, req.lines || []);
     const lines = (req.lines || []).map((l, i) => ({ ...l, legs:lineRoutes[i].legs, speedF: l.mode==='rail'||l.mode==='metro'?1:lineRoutes[i].segs.reduce((n,s)=>n+(net.edges.get(s.edge)?.speedF||1)*Math.abs(s.to-s.from),0)/Math.max(1,lineRoutes[i].len), busLaneShare: lineRoutes[i].busLaneShare })).filter((l, i) => lineRoutes[i].ok);
-    const asg = yield* assignTraffic(net, req.blds, { total, commuters: st.commuters, weatherSpeed: req.weather?.speed ?? 1, skyShare: req.skyShare || 0, hubs: req.hubs || [], lines, transitBoost: req.ord?.freeTransit ? 1.5 : 1, rng });
+    const asg = yield* assignTraffic(net, req.blds, { total, commuters: st.commuters, weatherSpeed: req.weather?.speed ?? 1, skyShare: req.skyShare || 0, hubs: req.hubs || [], lines, transitBoost: req.ord?.freeTransit ? 1.5 : 1, exits: req.exits || [], outCommuters: st.outJobs || 0, terminals: req.terminals || [], rng });
     let jam = 0;
     for (const e of net.edges.values()) {   // blend with last pass so flows settle rather than flicker
       const [a0, b0] = old.get(e.id) || [0, 0];
@@ -236,12 +242,13 @@ export class Core {
       const cong = Math.max(e.fAB, e.fBA) / dirCapacity(e);
       if (cong > 1 && e.len > 20) jam++;
       const dep = sampleField(this.cov.depot, (e.bb[0] + e.bb[2]) / 2, (e.bb[1] + e.bb[3]) / 2);
-      e.cond = clamp(e.cond - 0.0012 * dt * (1 + cong) * (req.weather?.wear ?? 1) + (dep > 0.05 ? 0.03 * dt : 0), 0.2, 1);
+      e.cond = clamp(e.cond - 0.0012 * dt * (1 + cong) * (req.weather?.wear ?? 1) + (dep > 0.05 ? 0.03 * dt : 0) + 0.0012 * dt * ((req.infra ?? 1) - 1), 0.2, 1);   // infrastructure spending keeps roads up (or lets them go)
     }
-    updateCosts(net, req.weather?.speed ?? 1);
+    this.wetRoads(req); updateCosts(net, req.weather?.speed ?? 1);
     out.lines = lineRoutes.map((r) => ({ ...r, riders: asg.riders.get(r.id) || 0 }));
     out.samples = asg.samples;
-    out.modal = { car: asg.car, transit: asg.transit, bus: asg.bus, tram: asg.tram, rail: asg.rail, metro: asg.metro, air: asg.air, walk: asg.walk, unserved:asg.unserved };
+    out.modal = { car: asg.car, transit: asg.transit, bus: asg.bus, tram: asg.tram, rail: asg.rail, metro: asg.metro, air: asg.air, walk: asg.walk, unserved:asg.unserved, transfers: asg.transfers };
+    out.exitLoad = [...asg.exitLoad]; out.terminalLoad = [...asg.terminalLoad];
     out.air = { od: [...asg.airOD].map(([k, v]) => [...k.split('-').map(Number), v]), load: [...asg.hubLoad] };
     out.jam = jam;
     if (jam > 3) out.msgs.push([`Traffic jams on ${jam} roads — add avenues or alternate routes.`, 'warn', 'jam']);

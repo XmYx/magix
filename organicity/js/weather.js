@@ -14,5 +14,24 @@ export function weatherAt(seed, day, override = null) {
   const table = season === 'Winter' ? ['clear','snow','snow','fog','rain'] : season === 'Summer' ? ['clear','clear','heat','rain','storm'] : ['clear','rain','rain','fog','storm'];
   const type = override && WEATHER[override] ? override : table[Math.floor(rng() * table.length)];
   const wind = (type === 'storm' ? 0.95 : 0.35) + rng() * (type === 'storm' ? 0.25 : 0.6);
-  return { type, season, wind, direction: rng() * Math.PI * 2, ...WEATHER[type] };
+  const direction = rng() * Math.PI * 2;
+  // fronts move with the wind: a rain band (or storm cells) sweeping across the tile
+  const front = { speed: 160 + rng() * 220, width: 60 + rng() * 80, phase: rng() * 1000, cells: [0, 1, 2].map(() => [rng() - 0.5, 40 + rng() * 30]) };
+  return { type, season, wind, direction, front, ...WEATHER[type] };
+}
+
+// How hard the weather hits (x, z) at time t (days): rain and snow come in a moving
+// band with light drizzle either side; storms add fierce cells inside the band.
+// Fog and heat cover the whole tile; clear skies nothing.
+export function frontAt(w, x, z, t) {
+  if (!w || !w.front) return 1;
+  if (w.type === 'clear') return 0;
+  if (w.type !== 'rain' && w.type !== 'snow' && w.type !== 'storm') return 1;
+  const F = w.front, dx = Math.sin(w.direction), dz = Math.cos(w.direction), N2 = 256;
+  const p = (x - N2) * dx + (z - N2) * dz, q = (x - N2) * dz - (z - N2) * dx, L = 900 + 2 * F.width;
+  const pos = ((t * F.speed + F.phase) % L) - L / 2, band = Math.exp(-(((p - pos) / F.width) ** 2));
+  if (w.type !== 'storm') return 0.15 + 0.85 * band;
+  let cell = 0;
+  F.cells.forEach(([off, r], k) => { const cp = pos + (k - 1) * 110, cq = off * 320; cell = Math.max(cell, Math.exp(-(((p - cp) ** 2 + (q - cq) ** 2) / (r * r)))); });
+  return Math.min(1, 0.1 + 0.55 * band + 0.9 * cell);
 }

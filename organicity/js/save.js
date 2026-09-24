@@ -3,11 +3,20 @@
 import { World } from './world.js';
 import { Sim } from './sim.js';
 
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 10;
 export const SAVE_KEY = 'organicity-save';
 
 // MIGRATIONS[n] upgrades a version-n save to version n+1.
 const MIGRATIONS = {
+  // v10: off-peak timetables
+  9: (s) => { for (const l of s.world.lines || []) l.offpeak = l.offpeak || l.headway || 10; return s; },
+  // v9: bonds, insurance, preparedness, land tax; matched region edges; transit headways
+  8: (s) => {
+    Object.assign(s.sim, { bonds: s.sim.bonds || [], bondId: s.sim.bondId || 1, insurance: !!s.sim.insurance, preparedness: s.sim.preparedness || 0, landTax: s.sim.landTax || 0 });
+    s.world.edgeMatch = s.world.edgeMatch || null;
+    for (const l of s.world.lines || []) l.headway = l.headway || 10;
+    return s;
+  },
   7: s => {s.world.mapPreset ||= 'river';s.world.hazards ||= {snow:0,surge:0};for(const l of s.world.lines || [])l.mode ||= 'bus';return s;},
   // v7: ordinances, neighbouring cities, news feed, debt state, car-free districts
   6: (s) => {

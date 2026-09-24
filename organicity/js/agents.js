@@ -18,6 +18,8 @@ export const AGENT_TYPES = {
   fire:    { len: 3.6, speed: 1.35, signals: false, flash: true },
   garbage: { len: 3.4, speed: 0.75, signals: true },
   police:  { len: 2.2, speed: 1.1,  signals: true, flash: true },
+  ambulance: { len: 3.2, speed: 1.3, signals: false, flash: true },
+  van:     { len: 3.6, speed: 0.85, signals: true },   // a family moving between tiles
 };
 const GAP = 1.2, ACCEL = 7, SPILL = 3.5, SIGNAL_PERIOD = 7;
 
@@ -147,7 +149,7 @@ export class AgentSim {
       for (const [id, sig] of this.lines) if (want.get(id)?.sig !== sig) { T.agents = T.agents.filter((a) => a.line !== id); this.lines.delete(id); }
       for (const l of m.lines) {
         if (this.lines.get(l.id) === l.sig || !l.segs?.length) continue;
-        const n = Math.max(1, Math.min(6, Math.round(l.len / 140)));
+        const n = Math.max(1, Math.min(8, Math.round((l.len / 140) * (10 / (l.headway || 10)))));   // vehicles in service follow the current headway
         for (let k = 0; k < n; k++) { const b = T.spawn(l.segs, l.mode==='tram'?'tram':'bus', { loop: true, col: l.color, line: l.id }); b.i = Math.floor((k / n) * l.segs.length); b.s = l.segs[b.i].from; }
         this.lines.set(l.id, l.sig);
       }

@@ -1,0 +1,30 @@
+{
+  "name": "Old Town & Harbour Lights",
+  "styles": {
+    "artdeco": { "name": "Art deco", "walls": ["#e8dcc0", "#d8c8a0", "#c8b890", "#e0e4dc"], "roof": ["#5a6a70", "#4a5a60"] },
+    "nordic": { "name": "Nordic timber", "walls": ["#b8483a", "#e8c040", "#3a6a8a", "#f0ece0"], "roof": ["#3a3a3a", "#4a4440"] }
+  },
+  "landmarks": {
+    "lighthouse": {
+      "name": "Lighthouse", "w": 10, "d": 10, "cost": 18000, "upkeep": 250, "park": 70, "unlock": 800, "tourism": 1200,
+      "desc": "A striped tower with a lamp room: a landmark for any coast.",
+      "model": [
+        { "cyl": true, "u": 0, "v": 0, "y": 0, "r": 2.6, "h": 6, "color": "#f4f4f4" },
+        { "cyl": true, "u": 0, "v": 0, "y": 6, "r": 2.3, "h": 6, "color": "#d83a3a" },
+        { "cyl": true, "u": 0, "v": 0, "y": 12, "r": 2.0, "h": 6, "color": "#f4f4f4" },
+        { "cyl": true, "u": 0, "v": 0, "y": 18, "r": 1.6, "h": 2.5, "color": "#ffe27a", "roof": "#3a3a3a" },
+        { "u": 0.6, "v": 0.6, "y": 0, "w": 0.3, "d": 0.3, "h": 3, "color": "#e8e0d0", "roof": "#8a4a3a" }
+      ]
+    },
+    "clocktower": {
+      "name": "Clock tower", "w": 9, "d": 9, "cost": 24000, "upkeep": 300, "park": 90, "unlock": 1500, "tourism": 1500,
+      "desc": "A brick clock tower on a small square.",
+      "model": [
+        { "u": 0, "v": 0, "y": 0, "w": 0.95, "d": 0.95, "h": 0.15, "color": "#d8ccb0" },
+        { "u": 0, "v": 0, "y": 0, "w": 0.35, "d": 0.35, "h": 20, "color": "#a85a42" },
+        { "u": 0, "v": 0, "y": 14, "w": 0.4, "d": 0.4, "h": 3, "color": "#f0ead8" },
+        { "u": 0, "v": 0, "y": 20, "w": 0.3, "d": 0.3, "h": 4, "color": "#5a6a70" }
+      ]
+    }
+  }
+}

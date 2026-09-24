@@ -416,6 +416,25 @@ function genService(P, b, r) {
       B('plain', -hw * 0.25, hd * 0.45, 0, hw * 0.55, hd * 0.35, 0.06, 0x4aa04a); B('plain', -hw * 0.25, hd * 0.45, 0.05, 0.08, hd * 0.35, 0.03, 0xf0f0f0);
       B('plain', -hw * 0.9, hd * 0.85, 0, 0.07, 0.07, 6, 0xdddddd);
       break;
+    case 'cargorail':   // sidings, a long shed, stacked containers and a gantry
+      for (const v of [-hd * 0.55, -hd * 0.2]) { B('plain', 0, v, 0, hw * 0.95, 0.5, 0.12, 0x6a6258); for (const o of [-0.35, 0.35]) B('plain', 0, v + o, 0.12, hw * 0.95, 0.06, 0.08, 0xb8b8b0); }
+      B('ind', -hw * 0.35, hd * 0.45, 0, hw * 0.55, hd * 0.4, 5, 0x8a9aa8, 0x5a6670);
+      for (let k = 0; k < 8; k++) B('plain', hw * 0.25 + (k % 4) * 2.4, hd * 0.25 + Math.floor(k / 4) * 1.4, (k % 3 === 0 ? 1.3 : 0), 1.1, 0.6, 1.3, [0xd84a3a, 0x3a6ac8, 0xe8c040, 0x3aa86a][k % 4]);
+      for (const u of [-hw * 0.5, hw * 0.5]) B('plain', u, -hd * 0.37, 0, 0.3, 0.3, 6, 0xe8a030); B('plain', 0, -hd * 0.37, 6, hw * 0.55, 0.35, 0.6, 0xe8a030);
+      break;
+    case 'harbour':   // quay, warehouse, container stacks and two cranes
+      B('plain', 0, 0, 0, hw * 0.95, hd * 0.95, 0.3, 0xa8a49a);
+      B('ind', -hw * 0.45, -hd * 0.45, 0.3, hw * 0.45, hd * 0.35, 6, 0x9aa8b0, 0x6a7478);
+      for (let k = 0; k < 18; k++) B('plain', hw * 0.1 + (k % 6) * 2.3, -hd * 0.1 + Math.floor(k / 6) * 1.4, 0.3 + (k % 2) * 1.3, 1.05, 0.6, 1.3, [0xd84a3a, 0x3a6ac8, 0xe8c040, 0x3aa86a, 0xe07a30][k % 5]);
+      for (const u of [-hw * 0.2, hw * 0.45]) { B('plain', u, hd * 0.7, 0.3, 0.4, 0.4, 14, 0xd84a3a); B('plain', u, hd * 0.9, 14, 0.35, hd * 0.45, 0.6, 0xd84a3a); }
+      break;
+    case 'airport':   // runway with markings, terminal, control tower and a parked plane
+      B('plain', 0, -hd * 0.35, 0, hw * 0.98, hd * 0.3, 0.08, 0x4a4a4e);
+      for (let u = -hw * 0.85; u < hw * 0.85; u += 5) B('plain', u, -hd * 0.35, 0.08, 1.4, 0.15, 0.02, 0xf0f0f0);
+      B('res', -hw * 0.3, hd * 0.5, 0, hw * 0.4, hd * 0.35, 5, 0xd8dde2, 0x8a9aa8);
+      C(hw * 0.45, hd * 0.55, 0, 1.1, 12, 8, 0xe8e8e8); B('plain', hw * 0.45, hd * 0.55, 12, 1.8, 1.8, 2, 0x5a8ab8, 0x3a4a5a);
+      B('plain', hw * 0.1, hd * 0.2, 1, 5, 0.6, 0.8, 0xf4f4f4); B('plain', hw * 0.1, hd * 0.2, 1.3, 0.8, 4, 0.2, 0xf4f4f4); B('plain', hw * 0.1 - 4.5, hd * 0.2, 1.4, 0.4, 1.4, 0.9, 0x3a6ac8);
+      break;
     case 'college':   // a brick hall with a clock turret and a lawn
       B('res', 0, -hd * 0.35, 0, hw * 0.8, hd * 0.35, 7, 0xa85a42, 0x6a3a30);
       B('res', -hw * 0.6, hd * 0.2, 0, hw * 0.25, hd * 0.3, 5.5, 0xb86a4a, 0x6a3a30);
@@ -489,6 +508,12 @@ function genService(P, b, r) {
       B('plain',0,0,0,hw,hd,.3,0x797f87);B('plain',0,0,.3,hw*.65,hd*.7,.15,0x263743);
       B('plain',-hw*.7,0,0,.15,.15,3.5,0x778c99);B('plain',-hw*.7,0,3,.6,.2,.6,0x4ca6e8);break;
     case 'tramstop':
+    default:   // content-pack landmarks describe themselves as boxes and cylinders
+      for (const m of S.model || []) {
+        if (m.kind === 'cyl') C(m.u * hw, m.v * hd, m.y, m.r, m.h, 10, m.color, m.roof ?? undefined);
+        else B('plain', m.u * hw, m.v * hd, m.y, m.w * hw, m.d * hd, m.h, m.color, m.roof ?? undefined);
+      }
+      break;
     case 'busstop':
       B('plain', 0, -0.3, 2.1, 1.3, 0.6, 0.12, 0x3a6ac8); B('plain', 0, -0.8, 0, 1.2, 0.05, 2.1, 0xa8d0e8);
       B('plain', -1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777); B('plain', 1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777);
@@ -525,6 +550,18 @@ export function genBuilding(b, world) {
     for (let i = 0; i < b.cells.length; i += Math.max(1, Math.floor(b.cells.length / 10))) {
       const c = b.cells[i], dx = c % N + 0.5 - F.cx, dz = Math.floor(c / N) + 0.5 - F.cz;
       box(P, 'plain', F, dx * F.tx + dz * F.tz, dx * F.fx + dz * F.fz, 0, 0.12, 0.12, height, hex(0xe5b842));
+    }
+  }
+  // rubble: the building collapses into low, dusty heaps with a few leaning beams
+  if (b.rubble > 0) {
+    for (const g of Object.values(P.g)) { g.p.length = 0; g.n.length = 0; g.c.length = 0; g.u.length = 0; }
+    P.emit = []; P.extras = []; P.top = 0;
+    const F = frameOf(b);
+    for (let i = 0; i < b.cells.length; i += Math.max(1, Math.floor(b.cells.length / 18))) {
+      const c = b.cells[i], dx = c % N + 0.5 - F.cx, dz = Math.floor(c / N) + 0.5 - F.cz, h = 0.5 + r() * (1 + b.level * 0.6);
+      box(P, 'plain', F, dx * F.tx + dz * F.tz, dx * F.fx + dz * F.fz, 0, 0.8 + r(), 0.8 + r(), h, hex(pick(r, [0x9a948a, 0x8a8478, 0xa8a090, 0x6f6a62])));
+      if (r() < 0.25) box(P, 'plain', F, dx * F.tx + dz * F.tz, dx * F.fx + dz * F.fz, h, 0.12, 0.12, 1.5 + r() * 2, hex(0x5a4a3a));
+      P.top = Math.max(P.top, h);
     }
   }
   if (b.abandoned) for (const k in P.g) {

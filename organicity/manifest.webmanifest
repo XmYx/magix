@@ -1,0 +1,14 @@
+{
+  "name": "Organicity",
+  "short_name": "Organicity",
+  "description": "A pixel-art 3D city builder about organic, free-form urban growth.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#161b24",
+  "theme_color": "#161b24",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -11,12 +11,14 @@ import { weatherAt } from './weather.js';
 import { clamp, mulberry32, hash2 } from './util.js';
 import { dirCapacity } from './assign.js';
 import { TUTORIAL } from './scenarios.js';
+import { disasterTick } from './disasters.js';
+import { sideOf } from './region.js';
 import { Core, sampleField, splat, netSnapshot, F2, HH, COVER } from './core.js';
 const AUSTERITY = 0.75;   // service funding cap while the city is bankrupt-bound
 import { fastestRoute } from './routes.js';
 
-export const PROB = { power: 1, water: 2, sewage: 4, garbage: 8, road: 16, outside: 32, abandoned: 64, fire: 128, sick: 256 };
-export const SANDBOX_DEFAULTS = { infinite: true, instant: false, ignoreAppeal: false, noFires: true, noIllness: true, noDecline: false, lockDemand: false, demand: { R: 50, C: 50, I: 50, O: 50 } };
+export const PROB = { power: 1, water: 2, sewage: 4, garbage: 8, road: 16, outside: 32, abandoned: 64, fire: 128, sick: 256, rubble: 512 };
+export const SANDBOX_DEFAULTS = { infinite: true, instant: false, ignoreAppeal: false, noFires: true, noIllness: true, noDisasters: true, noDecline: false, lockDemand: false, demand: { R: 50, C: 50, I: 50, O: 50 } };
 const PRIO_CODE = { balanced: 0, safety: 1, health: 2, education: 3 };
 
 // Runs Core in a worker, or in-thread under the frame budget as a fallback.
@@ -66,6 +68,7 @@ export class Sim {
     this.scenario = opts.scenario || null; this.scenarioWon = false; this.scenarioStart = null; this.tutorialFlags = {};
     this.ordinances = {}; world.ordinances = this.ordinances;   // shared so building heights can read the high-rise ban
     this.region = {}; this.news = []; this.milestone = 0; this.jamRoads = null;
+    this.bonds = []; this.bondId = 1; this.insurance = false; this.preparedness = 0; this.landTax = 0; this.claims = 0;
     this.tax = { R: 9, C: 9, I: 9, O: 9 };
     this.brackets = { lowDensity: 0, highDensity: 0, smallBiz: 0, largeBiz: 0 };  // offsets on the zone rates
     this.trade = { sell: true, buy: false };                                     // utility trade at the highway
@@ -319,16 +322,19 @@ export class Sim {
       const Z = b.svc ? null : ZONES[b.zone], pol = b.svc ? null : w.policyAt(b);
       blds.push({
         id: b.id, cx: b.cx, cz: b.cz, edge: b.edge, s: b.s, comp: b.comp ?? -1, svc: b.svc, platformId: b.platformId, zk: Z ? Z.key : '', kind: Z ? Z.kind : '',
-        level: b.level, occ: b.occ || 0, workers: b.workers || 0, ab: !!b.abandoned || (b.flood||0)>1, construction: b.constructionUntil > this.day, power: !!b.power, water: !!b.water, sewage: !!b.sewage,
+        level: b.level, occ: b.occ || 0, workers: b.workers || 0, ab: !!b.abandoned || (b.flood||0)>1, construction: b.constructionUntil > this.day || b.rubble > 0, spill: b.spill > 0, power: !!b.power, water: !!b.water, sewage: !!b.sewage,
         green: !!(pol && pol.green), carFree: !!(this.ordinances.carFree && pol?.carFree), bus: this.bcov('busstop', b) > 0.1, sky: skyHubs.has(b.id), spec: b.spec || null,
       });
     }
+    // festival crowds: the venue draws trips like a large shopping district
+    const venue = this.event && w.buildings.get(this.event.venue);
+    if (venue && venue.edge >= 0) blds.push({ id: -1, cx: venue.cx, cz: venue.cz, edge: venue.edge, s: venue.s, comp: venue.comp ?? -1, svc: null, platformId: 0, zk: 'c', kind: 'C', level: 3, occ: 0, workers: 900, ab: false, construction: false, power: true, water: true, sewage: true, green: false, carFree: false, bus: false, sky: false, spec: null });
     // bus lines only run when a depot serves their road network
     w.pruneLines();
     const lines = [];
     for (const l of w.lines) {
       const stops = l.stops.map((id) => w.buildings.get(id)).filter((b) => b && b.edge >= 0);
-      if (stops.length >= 2 && stops.every(b=>!b.abandoned&&(b.flood||0)<1&&(!l.mode||l.mode==='bus'||b.power)) && ((l.mode && l.mode !== 'bus') || stops.every((b) => this.busComps?.has(b.comp)))) lines.push({ id: l.id, mode: l.mode || 'bus', stops: stops.map((b) => ({ edge: b.edge, s: b.s, x: b.cx, z: b.cz })) });
+      if (stops.length >= 2 && stops.every(b=>!b.abandoned&&(b.flood||0)<1&&(!l.mode||l.mode==='bus'||b.power)) && ((l.mode && l.mode !== 'bus') || stops.every((b) => this.busComps?.has(b.comp)))) lines.push({ id: l.id, mode: l.mode || 'bus', headway: l.headway || 10, offpeak: l.offpeak || l.headway || 10, stops: stops.map((b) => ({ edge: b.edge, s: b.s, x: b.cx, z: b.cz })) });
     }
     let prio = null;
     if (doCoverage && w.districts.some((d) => d && d.policy.priority !== 'balanced')) {
@@ -339,7 +345,7 @@ export class Sim {
       }
     }
     const st = this.stats;
-    host.request({ t, ord: { ...this.ordinances }, weather: this.weather, skyShare: this.sky.share, hubs: this.skyHubs(), lines, routeOrigin: this.routeOrigin, routeRevision: this.routeRevision, netVersion: w.net.version, bldVersion: w.bldVersion, budgets: { ...this.serviceBudgets }, doCoverage, blds, prio, busComps: [...(this.busComps || [])], stats: { employed: st.employed, pop: st.pop, commuters: st.commuters, filledI: st.filled.I } });
+    host.request({ t, clock: t, infra: this.infra ?? 1, ord: { ...this.ordinances }, weather: this.weather, skyShare: this.sky.share, hubs: this.skyHubs(), lines, routeOrigin: this.routeOrigin, routeRevision: this.routeRevision, netVersion: w.net.version, bldVersion: w.bldVersion, budgets: { ...this.serviceBudgets }, doCoverage, blds, prio, busComps: [...(this.busComps || [])], stats: { employed: st.employed, pop: st.pop, commuters: st.commuters, filledI: st.filled.I, outJobs: st.outJobs || 0 }, exits: this.exitWeights(), terminals: this.terminals() });
     cj.next = t + 1;
     if (doCoverage) { cj.covNext = t + 5; cj.covKey = covKey; }
   }
@@ -360,6 +366,7 @@ export class Sim {
     if (res.samples) { this.trafficSamples = res.samples; this.sampleVersion = (this.sampleVersion || 0) + 1; }
     if (res.modal) this.stats.modal = res.modal;
     if (res.jam !== undefined) this.jamRoads = res.jam;
+    if (res.exitLoad) { this.exitLoad = new Map(res.exitLoad); this.terminalLoad = new Map(res.terminalLoad || []); }
     if (res.air) { this.air = { od: res.air.od, load: new Map(res.air.load) }; this.airVersion = (this.airVersion || 0) + 1; }
     for (const [id, tOut, tJob, cong, prod] of res.blds) {
       const b = w.buildings.get(id); if (!b) continue;
@@ -437,7 +444,15 @@ export class Sim {
       const h = hash2(this.w.seed, n.id, 29);
       this.region[n.id] = { id: n.id, name: NEIGHBOUR_NAMES[Math.floor(hash2(this.w.seed, n.id, 31) * NEIGHBOUR_NAMES.length)], pop: Math.round(20000 + h * 180000), growth: 0.001 + h * 0.004 };
     }
-    return outs.map((n) => ({ ...this.region[n.id], connected: n.edges.size > 0 }));
+    // exits facing a region tile take that tile's city; cities you run join with their saved numbers
+    const nb = this.tileNeighbours || {}, seen = new Set();
+    const viaExits = outs.map((n) => {
+      const t = nb[sideOf(n)];
+      if (t?.kind === 'city') return null;                               // listed below as a partner
+      if (t) { if (seen.has(t.name)) return null; seen.add(t.name); return { ...this.region[n.id], name: t.name, pop: t.pop, connected: n.edges.size > 0 }; }
+      return { ...this.region[n.id], connected: n.edges.size > 0 };
+    }).filter(Boolean);
+    return [...viaExits, ...(this.partnerCities || []).map((p) => ({ id: `tile:${p.key}`, name: p.name, pop: p.pop, connected: true, player: true, dir: p.dir }))];
   }
   growRegion() {
     const trade = (this.stats.inc?.exports || 0) + (this.stats.inc?.trade || 0) > 0 ? 1.3 : 1;   // trading partners grow faster
@@ -446,7 +461,7 @@ export class Sim {
   // price multipliers for goods, power and water: seasonal swings plus the neighbours' size
   market() {
     const t = this.day / 90, ph = (k) => hash2(this.w.seed, k, 17) * 6.283;
-    const size = Math.min(1, Object.values(this.region).reduce((s, r) => s + r.pop, 0) / 400000);
+    const size = Math.min(1, (Object.values(this.region).reduce((s, r) => s + r.pop, 0) + (this.partnerCities || []).reduce((s, p) => s + p.pop, 0)) / 400000);
     return {
       goods: clamp(0.85 + 0.2 * Math.sin(t + ph(1)) + 0.2 * size, 0.6, 1.6),
       power: clamp(0.9 + 0.2 * Math.sin(t * 1.3 + ph(2)) + (this.weather.season === 'Winter' ? 0.15 : 0), 0.6, 1.6),
@@ -500,6 +515,8 @@ export class Sim {
     let crime = 0, n = 0, pol = 0;
     for (const b of this.w.buildings.values()) if (b.hh && !b.abandoned) { crime += this.at(this.f.crime, b.cx, b.cz); pol += this.at(this.f.pollution, b.cx, b.cz); n++; }
     crime = n ? crime / n : 0; pol = n ? pol / n : 0;
+    const ruins = [...this.w.buildings.values()].filter((b) => b.rubble > 0).length;
+    if (ruins) A('Emergency', 'bad', `${ruins} buildings lie in rubble. Fire stations and maintenance depots nearby clear sites twice as fast; clinics send ambulances.`, 'fire');
     A('Safety', crime > 0.35 ? 'bad' : crime > 0.2 ? 'warn' : 'good', crime > 0.2 ? `Crime reaches ${pct(crime)} in homes. Police stations, schools or a curfew bring it down.` : 'Streets are safe.', 'crime');
     A('Environment', pol > 0.3 ? 'bad' : pol > 0.15 ? 'warn' : 'good', pol > 0.15 ? `Homes breathe ${pct(pol)} pollution. Move industry downwind, plant parks, try green roofs.` : 'The air is clean.', 'pollution');
     const [ps, pd] = st.power, [ws, wd] = st.water;
@@ -508,6 +525,109 @@ export class Sim {
     const net = st.incomeM - st.expenseM;
     A('Finance', this.money < 0 ? 'bad' : net < 0 ? 'warn' : 'good', this.money < 0 ? 'The city is in debt. Raise taxes, cut funding or sell utilities.' : net < 0 ? `Losing ₵${Math.round(-net).toLocaleString('en-US')} a month.` : `Surplus of ₵${Math.round(net).toLocaleString('en-US')} a month.`, null);
     return out;
+  }
+
+  // One resident of a home, generated from the building (the same person every time):
+  // age group from the home's demography, and how they get about from what's on offer.
+  citizenOf(b, k = 0) {
+    const h = (s) => hash2(b.id, k * 97 + s, 419), FIRST = ['Ada', 'Bence', 'Chloé', 'Dmitri', 'Eszter', 'Farid', 'Greta', 'Hiro', 'Ines', 'Jonas', 'Kasia', 'Luca', 'Mira', 'Noor', 'Otto', 'Priya', 'Rosa', 'Sven', 'Tamás', 'Uma', 'Vera', 'Wen', 'Yara', 'Zoltán'];
+    const LAST = ['Andersen', 'Baker', 'Costa', 'Dubois', 'Esposito', 'Fischer', 'García', 'Horváth', 'Ivanova', 'Jensen', 'Kowalski', 'Lindqvist', 'Moreau', 'Nagy', 'Okafor', 'Petrov', 'Quinn', 'Rossi', 'Sato', 'Tanaka'];
+    const dg = this.demography(b), r = h(1), cohort = r < dg.kids ? 'child' : r < dg.kids + dg.seniors ? 'retiree' : 'adult';
+    const age = cohort === 'child' ? 5 + Math.floor(h(2) * 12) : cohort === 'retiree' ? 66 + Math.floor(h(2) * 25) : 19 + Math.floor(h(2) * 45);
+    const m = this.stats.modal || {}, tot = Math.max(1, (m.car || 0) + (m.transit || 0) + (m.walk || 0)), transitShare = (m.transit || 0) / tot;
+    const pol = this.w.policyAt(b);
+    const mode = pol?.carFree && this.ordinances.carFree ? 'walk' : this.bcov('busstop', b) > 0.1 && h(3) < transitShare * 1.6 + 0.1 ? 'transit' : h(3) > 0.93 ? 'bike' : cohort === 'child' ? 'walk' : 'car';
+    return { name: `${FIRST[Math.floor(h(4) * FIRST.length)]} ${LAST[Math.floor(h(5) * LAST.length)]}`, age, cohort, mode, home: b.id, k, depart: 7 + h(6) * 1.2, back: 16.5 + h(7) * 2 };
+  }
+
+  // Weather is seeded, so storms can be forecast: three days ahead, warn which low-lying,
+  // unprotected buildings by the water are at risk from the surge.
+  surgeForecast() {
+    if (this.sandbox?.noDisasters) return;
+    const ahead = weatherAt(this.w.seed, this.day + 3, this.weatherOverride);
+    if (ahead.type !== 'storm' || this.weather.type === 'storm' || this.surgeWarning?.day === this.day + 3) return;
+    const w = this.w; let risk = 0;
+    for (const b of w.buildings.values()) { const i = w.cellAt(b.cx, b.cz); if (!b.platformId && i >= 0 && w.wdist[i] < 30 && w.elevation[i] < 2.4 && !w.levees[i]) risk++; }
+    this.surgeWarning = { day: this.day + 3, risk };
+    this.msg(`Storm warning: a storm arrives in 3 days.${risk ? ` ${risk} buildings on low ground by the water are at risk of flooding. Levees and storm drains help.` : ' Low ground by the water is protected.'}`, risk ? 'bad' : 'warn', 'surge');
+  }
+
+  // A service in a neighbouring city of yours reaches this one when a road links the two.
+  shared(svc) {
+    const sides = new Set([...this.w.net.nodes.values()].filter((n) => n.outside && n.edges.size).map(sideOf));
+    return (this.partnerCities || []).some((p) => p.services?.includes(svc) && sides.has(p.dir));
+  }
+
+  // ---------------------------------------------------------------- region exits & freight
+  // weights for commuters in, commuters out and freight at each regional exit
+  exitWeights() {
+    const nb = this.tileNeighbours || {}, P = this.partnerCities || [], pf = this.portalFlows;
+    return [...this.w.net.nodes.values()].filter((n) => n.outside && n.edges.size).map((n) => {
+      const side = sideOf(n), t = nb[side], p = P.find((q) => q.dir === side), size = t ? t.pop || 0 : 20000;
+      // with the regional economy running, each exit is a portal carrying its families' commutes, migrants and freight
+      if (pf) { const f = pf.get(n.id); return { id: n.id, side, name: t?.name || null, in: f ? f.in + f.migrants : 0, out: f ? f.out + f.migrants : 0, freight: f ? f.freight : 0, toll: f?.toll ?? 0 }; }
+      return { id: n.id, side, name: t?.name || null, in: p ? (p.unemployed || 0) * 0.25 + 5 : size / 1000, out: p ? (p.jobsFree || 0) * 0.3 + 5 : size / 1000, freight: size / 1000 + (t?.kind === 'ai' ? 20 : 5) };
+    });
+  }
+  terminals() {
+    const out = [];
+    for (const b of this.w.buildings.values()) if (SERVICES[b.svc]?.freight && !b.abandoned && b.edge >= 0 && !(b.constructionUntil > this.day)) out.push({ id: b.id, svc: b.svc, edge: b.edge, s: b.s, cap: SERVICES[b.svc].freight * this.budgetFor(b.svc) });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- bonds, credit, insurance, land
+  // A credit rating from debt against yearly income, recent deficits and debt trouble.
+  creditRating() {
+    const st = this.stats, annual = Math.max(1, (st.incomeM || 0) * 12);
+    const debt = this.loans.reduce((s, l) => s + l.balance, 0) + this.bonds.reduce((s, b) => s + b.principal, 0);
+    const deficits = this.history.slice(-12).filter((h) => h.income < h.expense).length;
+    const score = 100 - (debt / annual) * 40 - deficits * 4 - (this.debtMonths || 0) * 12 - (this.money < 0 ? 15 : 0) - (this.loans.some((l) => l.bailout) ? 20 : 0);
+    const G = [['AAA', 85, 0.02], ['AA', 75, 0.025], ['A', 65, 0.03], ['BBB', 55, 0.04], ['BB', 45, 0.055], ['B', 35, 0.07], ['CCC', -Infinity, 0.1]];
+    const [grade, , rate] = G.find(([, min]) => score >= min);
+    return { grade, rate, score: Math.round(score), debt, limit: Math.max(100000, annual * 3) };
+  }
+  issueBond(amount, years) {
+    if (![25000, 50000, 100000, 250000].includes(amount) || ![10, 20].includes(years) || this.sandbox?.infinite) return false;
+    const cr = this.creditRating(); if (cr.grade === 'CCC' || cr.debt + amount > cr.limit) return false;
+    this.bonds.push({ id: this.bondId++, principal: amount, rate: cr.rate + (years === 20 ? 0.005 : 0), years, due: this.day + years * 360, grade: cr.grade });
+    this.money += amount; return true;
+  }
+  redeemBond(id) {
+    const b = this.bonds.find((q) => q.id === id); if (!b || this.money < b.principal * 1.02) return false;
+    this.money -= b.principal * 1.02; this.bonds = this.bonds.filter((q) => q !== b); return true;
+  }
+  // daily coupons; principal falls due at maturity
+  bondTick() {
+    let coupon = 0;
+    for (const b of [...this.bonds]) {
+      coupon += (b.principal * b.rate) / 360;
+      if (this.day >= b.due) { this.money -= b.principal; this.bonds = this.bonds.filter((q) => q !== b); this.msg(`A ${b.years}-year bond matured: ₵${b.principal.toLocaleString('en-US')} repaid.`, 'info', 'bond'); }
+    }
+    return coupon;
+  }
+  landValueOf(b) { const lv = b.lv ?? 0.3; return (b.area || 0) * (40 + 400 * lv * lv); }
+  // what a building would cost to rebuild; insurance covers 80% of it for a monthly premium of 0.04%
+  buildingValue(b) { return b.level * (b.area || 0) * 120 * (0.5 + (b.lv ?? 0.3)); }
+  insuredValue() { let v = 0; for (const b of this.w.buildings.values()) if (!b.svc && !b.abandoned) v += this.buildingValue(b); return v; }
+  // disaster claims pay most of a wrecked building's value when the city is insured
+  claim(b) {
+    if (!this.insurance) return 0;
+    const pay = Math.round(this.buildingValue(b) * 0.8);
+    if (!(this.sandbox && this.sandbox.infinite)) this.money += pay;
+    this.claims = (this.claims || 0) + pay; return pay;
+  }
+  // Rising land values in old, low-rise neighbourhoods bring redevelopment, and push out residents.
+  gentrify() {
+    const w = this.w; let n = 0, moved = 0, where = null;
+    for (const b of [...w.buildings.values()]) {
+      if (b.svc || !b.hh || b.locked || b.rubble || b.abandoned || b.constructionUntil > this.day) continue;
+      const pol = w.policyAt(b), lv = b.lv ?? 0;
+      if (b.level > 2 || lv < 0.68 || this.day - (b.built ?? 0) < 1200 || pol?.historic || b.level + 1 > Math.min(ZONES[b.zone].maxLevel, pol?.maxLevel ?? 5)) continue;
+      if (this.rng() > 0.08 * (lv - 0.68) / 0.32 + 0.01) continue;
+      moved += Math.round((b.occ || 0) * HH * 0.6); w.growBuilding(b, b.level + 1); b.constructionUntil = this.day + 6; b.occ = 0; w.touchBuilding(b); n++; where ||= b;
+    }
+    this.stats.gentrified = n; this.stats.displaced = moved;
+    if (n) this.msg(`Rising land values near ${this.streetName(where.edge)} bring redevelopment: ${moved} long-time residents move out.`, 'warn', 'gentrify');
   }
 
   // sky hubs with their capacity (air trips per assignment pass): taller towers take more
@@ -541,7 +661,7 @@ export class Sim {
   capacity(b) {
     const key = ZONES[b.zone].key, fl = this.floorsOf(b), A = b.area * 0.75;
     b.hh = 0; b.jobs = 0;
-    if ((b.flood||0)>1 || b.constructionUntil > this.day) { b.occ = 0; b.workers = 0; return; }
+    if ((b.flood||0)>1 || b.constructionUntil > this.day || b.rubble > 0) { b.occ = 0; b.workers = 0; return; }
     if (key === 'rl') b.hh = b.level === 1 ? 1 : b.level === 2 ? 2 : Math.max(3, Math.round((A * fl) / 45));
     else if (key === 'rh') b.hh = Math.max(2, Math.round((A * fl) / 40));
     else if (key === 'm') { b.hh = Math.max(1, Math.round((A * Math.max(1, fl - 1)) / 45)); b.jobs = Math.max(2, Math.round(A / 30)); }
@@ -575,7 +695,7 @@ export class Sim {
         eduSum += this.bcov('school', b) * b.occ;
         const people = b.occ * HH, dg = this.demography(b);
         b.kids = people * dg.kids; b.seniors = people * dg.seniors; kids += b.kids; seniors += b.seniors;
-        hiSum += Math.max(0.6 * this.bcov('college', b), this.bcov('university', b)) * b.occ;
+        hiSum += Math.max(0.6 * this.bcov('college', b), this.bcov('university', b), this.shared('university') ? 0.35 : this.shared('college') ? 0.2 : 0) * b.occ;
       }
       if (b.jobs) cap[kind === 'M' ? 'C' : kind] += b.jobs;
     }
@@ -584,13 +704,16 @@ export class Sim {
     const inv = (load) => (load > 1 ? 1 / load : 1);
     const seats = this.capacityOf('school', 'seats'), schoolLoad = seats ? kids / seats : kids > 1 ? 9 : 0;
     const eduRate = 0.15 + 0.7 * (nR ? eduSum / nR : 0) * inv(schoolLoad);
-    const hiSeats = this.capacityOf('college', 'seats') + this.capacityOf('university', 'seats'), students = adults * 0.1;
+    const hiSeats = this.capacityOf('college', 'seats') + this.capacityOf('university', 'seats') + (this.shared('university') ? SERVICES.university.seats / 2 : 0) + (this.shared('college') ? SERVICES.college.seats / 2 : 0), students = adults * 0.1;
     const hiLoad = hiSeats ? students / hiSeats : students > 1 ? 9 : 0;
     const hiEdu = (nR ? hiSum / nR : 0) * inv(hiLoad) * Math.min(1, eduRate / 0.5);
     const patients = this.capacityOf('clinic', 'patients'), clinicLoad = patients ? (pop + seniors * 2) / patients : pop > 1 ? 9 : 0;
     const jobCap = cap.C + cap.I + cap.O;
     const hasOut = [...w.net.nodes.values()].some((n) => n.outside && n.edges.size);
-    const commuterPool = hasOut ? 30 + W * 0.3 : 0;          // people who'd commute in
+    // neighbouring cities you run send their jobless here and offer their vacancies to residents
+    const partners = this.partnerCities || [], pIdle = partners.reduce((s, p) => s + (p.unemployed || 0), 0), pVac = partners.reduce((s, p) => s + (p.jobsFree || 0), 0);
+    const rc = this.regionCommute;   // families of other tiles who work here, and residents working elsewhere
+    const commuterPool = hasOut ? (rc ? 30 + W * 0.15 + rc.in : 30 + W * 0.3 + pIdle * 0.25) : 0;          // people who'd commute in
     const labor = W + commuterPool;
     const fill = jobCap ? Math.min(1, labor / jobCap) : 0;
     const oFill = cap.O ? Math.min(fill, (W * Math.min(1, eduRate + hiEdu * 0.5) + commuterPool * 0.4) / cap.O) : 0;
@@ -603,18 +726,25 @@ export class Sim {
       filled[kind === 'M' ? 'C' : kind] += b.workers;
     }
     const totalFilled = filled.C + filled.I + filled.O;
-    const outJobs = hasOut ? W * 0.12 : 0;                   // residents working beyond the highway
+    const outJobs = hasOut ? (rc ? W * 0.06 + rc.out : W * 0.12 + Math.min(W * 0.1, pVac * 0.3)) : 0;   // residents working beyond the highway
     const commuters = Math.max(0, totalFilled - W);
     const employed = Math.min(W, Math.min(W, totalFilled) + outJobs);
     const unemp = W > 1 ? clamp(1 - employed / W, 0, 1) : 0;
     const avgHappyR = nR ? happyR / nR : 0.6;
-    const pen = (k) => (this.tax[k] - 9) * 4.5;
+    const pen = (k) => (this.tax[k] - 9) * 4.5 + (k === 'R' || k === 'C' ? (this.landTax || 0) * 3 : 0);
+    // goods: shops sell what local industry makes, topped up by imports over roads and freight terminals
+    const terms = this.terminals(), termCap = terms.reduce((s, t) => s + t.cap, 0), has = (k) => terms.some((t) => t.svc === k);
+    const goodsDemand = cap.C * 0.5, localGoods = filled.I * 1.1, usedLocal = Math.min(localGoods, goodsDemand);
+    const imported = Math.min(goodsDemand - usedLocal, (hasOut ? 150 + pop * 0.05 : 0) + termCap * 1.5);
+    const supply = goodsDemand > 1 ? (usedLocal + imported) / goodsDemand : 1;
+    st.goods = { demand: goodsDemand, local: localGoods, usedLocal, imported, supply, exportable: Math.max(0, localGoods - usedLocal), termCap };
     const target = {
       R: 25 + (70 * (jobCap + outJobs - W)) / (W + jobCap + 120) - 45 * Math.max(0, unemp - 0.06) - pen('R') + 30 * (avgHappyR - 0.55),
       C: (80 * (pop * 0.22 - cap.C)) / (pop * 0.22 + cap.C + 40) + 12 - pen('C'),
-      I: (80 * (W * 0.4 + 60 - cap.I)) / (W * 0.4 + 60 + cap.I + 40) - pen('I') - (hasOut ? 0 : 40),
-      O: (80 * (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 - cap.O)) / (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 + cap.O + 30) - pen('O') - 5,
+      I: (80 * (W * 0.4 + 60 - cap.I)) / (W * 0.4 + 60 + cap.I + 40) - pen('I') - (hasOut ? 0 : 40) + (has('harbour') ? 10 : this.shared('harbour') ? 5 : 0) + (has('cargorail') ? 5 : 0),
+      O: (80 * (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 - cap.O)) / (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 + cap.O + 30) - pen('O') - 5 + (has('airport') ? 10 : this.shared('airport') ? 5 : 0),
     };
+    if (this.devPriority && target[this.devPriority] != null) target[this.devPriority] += 10;   // the president's development priority
     for (const k in dem) dem[k] = sb && sb.lockDemand ? sb.demand[k] : clamp(dem[k] * 0.8 + target[k] * 0.2, -100, 100);
     Object.assign(st, { pop, households: hh, hhCap, workers: W, employed, unemp, jobs: cap, filled, commuters, eduRate, happyR: avgHappyR,
       kids, adults, seniors, seats, schoolLoad, hiEdu, hiSeats, hiLoad, patients, clinicLoad, outJobs });
@@ -636,11 +766,14 @@ export class Sim {
       if (b.hh) inc.R += ((b.occ * this.taxFor('R', b)) / 100 * 85 * (0.6 + 0.8 * lv) * (1 - 0.5 * (b.seniors || 0) / Math.max(1, b.occ * HH))) / MONTH_DAYS;
       if (b.jobs) {
         const k = kind === 'M' ? 'C' : kind, prod = b.prod ?? 1;
-        const spec = (b.spec === 'leisure' ? 1.25 : b.spec === 'tech' ? 1.35 : 1) * (k === 'C' && ord.curfew ? 0.92 : 1) * (k === 'I' && ord.noise ? 0.95 : 1);
+        const spec = (b.spec === 'leisure' ? 1.25 : b.spec === 'tech' ? 1.35 : 1) * (k === 'C' && ord.curfew ? 0.92 : 1) * (k === 'I' && ord.noise ? 0.95 : 1) * (k === 'C' ? 0.6 + 0.4 * (st.goods?.supply ?? 1) : 1);   // shops without goods earn less
         const base = (k === 'C' ? 70 * (0.6 + 0.8 * lv) : k === 'O' ? 95 * (0.6 + 0.8 * lv) : 55 * (pol && pol.green ? 0.8 : 1)) * spec;
         inc[k] += (((b.workers || 0) * this.taxFor(k, b)) / 100 * base * prod) / MONTH_DAYS;
       }
     }
+    // a festival triples a landmark's tourism for its weekend (parks earn from concerts)
+    const venue = this.event && w.buildings.get(this.event.venue);
+    if (venue) inc.tourism += ((SERVICES[venue.svc].tourism || 1200) * 3 * Math.min(1, pop / 5000 + 0.3)) / MONTH_DAYS;
     for (const e of w.net.edges.values()) exp.roads += (e.len * ROADS[e.type].upkeep * 2 * (e.layer ? 1.8 : 1)) / MONTH_DAYS;
     for (const n of w.net.nodes.values()) if (n.control === 'signal') exp.junctions += 25 / MONTH_DAYS;
     // utility trade: sell at ₵18/MW and ₵5/water unit a month; imports cost 2.5× that
@@ -648,19 +781,31 @@ export class Sim {
     // prices float with the neighbours' markets (see market())
     inc.trade = (tf.soldP * 18 * mk.power + tf.soldW * 5 * mk.water) / MONTH_DAYS; exp.imports = (tf.boughtP * 45 * mk.power + tf.boughtW * 12.5 * mk.water) / MONTH_DAYS;
     // industry exports goods to the neighbouring cities over the highway
-    if (hasOut) inc.exports = (filled.I * 1.1 * mk.goods) / MONTH_DAYS;
+    // only goods left after supplying local shops are exported; terminals open better markets
+    const bonus = 1 + this.terminals().reduce((s, t, i, a) => (a.findIndex((q) => q.svc === t.svc) === i ? s + (SERVICES[t.svc].exportBonus || 0) : s), 0)
+      + ['harbour', 'airport', 'cargorail'].reduce((s, k) => s + (!has(k) && this.shared(k) ? SERVICES[k].exportBonus / 2 : 0), 0);   // a neighbour's terminal, at half the benefit
+    if (hasOut || this.terminals().length) inc.exports = ((st.goods?.exportable ?? filled.I * 1.1) * mk.goods * bonus) / MONTH_DAYS;
+    inc.deals = (this.dealFlow?.inc || 0) / MONTH_DAYS; exp.deals = (this.dealFlow?.exp || 0) / MONTH_DAYS;
+    inc.tolls = (this.tollIncome || 0) / MONTH_DAYS;                  // toll booths at this tile's portals (set monthly by the region)
+    exp.roads *= this.infra ?? 1;                                     // the president's infrastructure spending
+    // economy: bonds, insurance, preparedness and land tax
+    exp.bonds = this.bondTick();
+    const insured = this.insuredValue();
+    exp.insurance = this.insurance ? (insured * 0.0004 * (1 - 0.2 * Math.min(1, this.preparedness || 0))) / MONTH_DAYS : 0;
+    exp.preparedness = (600 * (this.preparedness || 0)) / MONTH_DAYS;
+    inc.land = 0; if (this.landTax) for (const b of w.buildings.values()) if (!b.svc && !b.abandoned) inc.land += (this.landValueOf(b) * this.landTax) / 100 / 360;
     for (const k in ord) if (ord[k] && ORDINANCES[k]) exp.ordinances += ORDINANCES[k].cost / MONTH_DAYS;
     for (const d of w.districts) if (d?.policy.green) exp.policies += 60 / MONTH_DAYS;
     // bus lines: operating cost per stop, fares from peak riders (~6 per rider per month)
     for (const l of w.lines) {
       const info = this.lineInfo?.get(l.id);
       const mode=transitMode(l);
-      exp.transit += ((mode.upkeep + mode.perStop * l.stops.length) * this.budgetFor('busdepot')) / MONTH_DAYS;
+      exp.transit += ((mode.upkeep + mode.perStop * l.stops.length) * this.budgetFor('busdepot') * (0.35 * 10 / (l.headway || 10) + 0.65 * 10 / (l.offpeak || l.headway || 10))) / MONTH_DAYS;   // more frequent service costs more (peak about a third of the day)
       if (info?.ok && !ord.freeTransit) inc.fares += (info.riders * mode.fare) / MONTH_DAYS;
     }
     exp.roads += w.levees.reduce((n,v)=>n+v,0)*.03/MONTH_DAYS;
     exp.debt = this.debtTick();
-    const income = inc.R + inc.C + inc.I + inc.O + inc.fares + inc.trade + inc.tourism + inc.exports, expense = exp.services + exp.utilities + exp.roads + exp.debt + exp.transit + exp.junctions + exp.imports + exp.policies + exp.ordinances;
+    const income = inc.R + inc.C + inc.I + inc.O + inc.fares + inc.trade + inc.tourism + inc.exports + inc.deals + inc.land + inc.tolls, expense = exp.services + exp.utilities + exp.roads + exp.debt + exp.transit + exp.junctions + exp.imports + exp.policies + exp.ordinances + exp.deals + exp.bonds + exp.insurance + exp.preparedness;
     if (!(sb && sb.infinite)) this.money += income - expense;
     this.month.income += income; this.month.expense += expense;
     st.incomeM = income * MONTH_DAYS; st.expenseM = expense * MONTH_DAYS; st.inc = inc; st.exp = exp;
@@ -669,7 +814,7 @@ export class Sim {
     if (!this.scenarioWon && goals.length && goals.every(([, ok]) => ok)) { this.scenarioWon = true; this.msg('Scenario complete! You can keep expanding.', 'good'); }
     // fires
     for (const b of [...w.buildings.values()]) {
-      if (b.svc || b.abandoned || b.constructionUntil > this.day) continue;
+      if (b.svc || b.abandoned || b.rubble > 0 || b.constructionUntil > this.day) continue;
       if (b.fire > 0) {
         b.fire--;
         if (!b.fire) {
@@ -684,11 +829,11 @@ export class Sim {
       if (this.rng() < p) this.igniteBuilding(b);
     }
 
-    this.healthTick();
+    this.healthTick(); disasterTick(this); this.surgeForecast();
     if (this.scenario && !this.scenarioStart && this.day >= 30) this.scenarioStart = { pop: st.pop, day: this.day };
     if (this.scenario === 'gridlock' && !this.scenarioWon && !this.scenarioFailed && this.day > 720) { this.scenarioFailed = true; this.msg('The two-year deadline has passed. Keep playing, or restart the scenario.', 'bad'); }
     if (this.day % MONTH_DAYS === 0) {
-      this.monthlyNews(); this.growRegion();
+      this.monthlyNews(); this.growRegion(); this.gentrify(); this.onMonth?.();
       this.lastMonth = { ...this.month };
       this.history.push({ day: this.day, pop: Math.round(pop), money: Math.round(this.money), income: Math.round(this.month.income), expense: Math.round(this.month.expense),
         unemp: +unemp.toFixed(3), R: Math.round(this.demand.R), C: Math.round(this.demand.C), I: Math.round(this.demand.I), O: Math.round(this.demand.O), happy: +avgHappyR.toFixed(3) });
@@ -753,6 +898,24 @@ export class Sim {
       np *= this.weather.power; nw *= this.weather.water;
       need.set(b.id, [np, nw]);
       const c = comps.get(b.comp); if (c) { c.dp = (c.dp || 0) + np; c.dw = (c.dw || 0) + nw; }
+    }
+    // utility deals with your neighbouring cities run over a road link on that side
+    const df = this.dealFlow = { inc: 0, exp: 0, rows: [] };
+    const outSides = new Set([...w.net.nodes.values()].filter((n) => n.outside && n.edges.size).map(sideOf));
+    const hub = [...comps.entries()].find(([k]) => g.compOut[k])?.[1];
+    this.utilSurplus = hub ? { power: +(hub.p - (hub.dp || 0)).toFixed(1), water: +(hub.w - (hub.dw || 0)).toFixed(1) } : { power: 0, water: 0 };   // before any deals
+    for (const d of this.deals || []) {
+      const dir = Object.entries(this.tileNeighbours || {}).find(([, t]) => t.key === d.partner)?.[0], linked = !!dir && outSides.has(dir) && !!hub;
+      let q = 0;
+      if (linked) {
+        const f = d.kind === 'power' ? 'p' : 'w', need = d.kind === 'power' ? hub.dp || 0 : hub.dw || 0;
+        if (d.role === 'sell') { q = Math.min(d.amount, Math.max(0, hub[f] - need)); hub[f] -= q; df.inc += q * d.price; }
+        else {   // the seller can only send what it had spare when last played (or projected since)
+          const seller = (this.partnerCities || []).find((p) => p.key === d.partner), spare = seller?.surplus ? Math.max(0, seller.surplus[d.kind]) : d.amount;
+          q = Math.min(d.amount, spare); hub[f] += q; df.exp += q * d.price;
+        }
+      }
+      df.rows.push({ ...d, dir, linked, delivered: q });
     }
     // networks joined to the highway can sell surplus power/water and import shortfalls
     const tr = { soldP: 0, soldW: 0, boughtP: 0, boughtW: 0 };
@@ -843,6 +1006,7 @@ export class Sim {
     if (b.abandoned) prob |= PROB.abandoned;
     if (b.fire) prob |= PROB.fire;
     if (b.sick) prob |= PROB.sick;
+    if (b.rubble > 0) prob |= PROB.rubble;
     b.prob = prob;
     if (b.svc) return;
     const util = (b.power ? 0.35 : 0) + (b.water ? 0.3 : 0) + (b.sewage ? 0.15 : 0) + (b.garbOk ? 0.2 : 0);
@@ -859,7 +1023,7 @@ export class Sim {
     const Cm = () => {
       const cust = Math.min(1, this.at(f.dens, x, z) / 150 + st.pop / 4000);
       appeal = 0.45 * lv + 0.2 * cust + 0.2 * util + 0.15 * (1 - Math.min(1, cong));
-      happy = 0.25 + 0.45 * util + 0.2 * lv + 0.15 * cust - 0.15 * cr - taxPen * 0.01 - 0.15 * Math.max(0, cong - 0.7);
+      happy = 0.25 + 0.45 * util + 0.2 * lv + 0.15 * cust - 0.15 * cr - taxPen * 0.01 - 0.15 * Math.max(0, cong - 0.7) - 0.2 * (1 - (st.goods?.supply ?? 1));
     };
     if (kind === 'R') R();
     else if (kind === 'C') Cm();
@@ -873,6 +1037,7 @@ export class Sim {
       happy = 0.25 + 0.45 * util + 0.2 * lv + 0.15 * edu - 0.12 * cr - taxPen * 0.01 - 0.1 * Math.max(0, cong - 0.7);
     }
     if (b.sick) happy -= 0.2;
+    if (this.shock > 0) happy -= 0.12 * this.shock / 45;   // a city recovering from a disaster is uneasy
     if (b.edge < 0) { appeal = 0; happy = 0; }
     else if (!b.out) happy -= 0.25;
     b.appeal = clamp(appeal, 0, 1);
@@ -910,7 +1075,7 @@ export class Sim {
     for (const b of list) {
       if (b.removed) continue;
       this.evalBuilding(b);
-      if (b.svc || b.locked || b.constructionUntil > this.day) continue;
+      if (b.svc || b.locked || b.rubble > 0 || b.constructionUntil > this.day) continue;
       const Z = ZONES[b.zone], pol = w.policyAt(b), frozen = pol && pol.historic;
       if (b.abandoned) { b.abDays += dt; if (b.abDays > 30) w.removeBuilding(b.id); continue; }
       if (!(sb && sb.noDecline)) {
@@ -940,18 +1105,21 @@ export class Sim {
   }
 
   // ---------------------------------------------------------------- save
-  serialize() { return { day: this.day, money: this.money, tax: this.tax, demand: this.demand, history: this.history, sandbox: this.sandbox, serviceBudgets: this.serviceBudgets, loans: this.loans, loanId: this.loanId, scenario: this.scenario, scenarioWon: this.scenarioWon, debtMonths: this.debtMonths || 0, austerity: !!this.austerity, gameOver: !!this.gameOver, ordinances: this.ordinances, region: this.region, news: this.news.slice(-30), milestone: this.milestone, scenarioStart: this.scenarioStart, scenarioFailed: !!this.scenarioFailed, tutorialFlags: this.tutorialFlags, weatherOverride: this.weatherOverride, startYear: this.startYear, eraPace: this.eraPace, brackets: this.brackets, trade: this.trade }; }
+  serialize() { return { day: this.day, money: this.money, tax: this.tax, demand: this.demand, history: this.history, sandbox: this.sandbox, serviceBudgets: this.serviceBudgets, loans: this.loans, loanId: this.loanId, scenario: this.scenario, scenarioWon: this.scenarioWon, event: this.event || null, shock: this.shock || 0, bonds: this.bonds, bondId: this.bondId, insurance: !!this.insurance, preparedness: this.preparedness || 0, landTax: this.landTax || 0, debtMonths: this.debtMonths || 0, austerity: !!this.austerity, gameOver: !!this.gameOver, ordinances: this.ordinances, region: this.region, news: this.news.slice(-30), milestone: this.milestone, scenarioStart: this.scenarioStart, scenarioFailed: !!this.scenarioFailed, tutorialFlags: this.tutorialFlags, weatherOverride: this.weatherOverride, startYear: this.startYear, eraPace: this.eraPace, brackets: this.brackets, trade: this.trade }; }
   load(d) {
     Object.assign(this, { day: d.day, money: d.money, tax: d.tax, demand: d.demand, history: d.history || [] });
     this.sandbox = d.sandbox ? { ...SANDBOX_DEFAULTS, ...d.sandbox } : null;
     this.serviceBudgets = d.serviceBudgets || {}; this.loans = d.loans || []; this.loanId = d.loanId || 1;
     this.scenario = d.scenario || null; this.scenarioWon = !!d.scenarioWon; this.budgetVersion++;
+    this.event = d.event || null; this.shock = d.shock || 0;
+    this.bonds = d.bonds || []; this.bondId = d.bondId || 1; this.insurance = !!d.insurance; this.preparedness = d.preparedness || 0; this.landTax = d.landTax || 0;
     this.debtMonths = d.debtMonths || 0; this.austerity = !!d.austerity; this.gameOver = !!d.gameOver;
     this.ordinances = { ...(d.ordinances || {}) }; this.w.ordinances = this.ordinances; this.region = d.region || {}; this.news = d.news || []; this.milestone = d.milestone || 0;
     this.scenarioStart = d.scenarioStart || null; this.scenarioFailed = !!d.scenarioFailed; this.tutorialFlags = d.tutorialFlags || {};
     this.weatherOverride = this.sandbox ? d.weatherOverride || null : null;
     this.weather = weatherAt(this.w.seed, this.day, this.weatherOverride); this.wind = this.weather.wind;
-    this.startYear=START_ERAS.includes(d.startYear)?d.startYear:2000;this.eraPace=[1,5,10].includes(d.eraPace)?d.eraPace:1;
+    this.startYear=START_ERAS.includes(d.startYear) || (Number.isInteger(d.startYear) && d.startYear > 1800 && d.startYear < 2400) ? d.startYear : 2000;   // later region cities start in the region's current year
+    this.eraPace=[1,5,10].includes(d.eraPace)?d.eraPace:1;
     this.brackets = { lowDensity: 0, highDensity: 0, smallBiz: 0, largeBiz: 0, ...(d.brackets || {}) };
     this.trade = { sell: true, buy: false, ...(d.trade || {}) };
     this.w.day = d.day;this.updateEra();hazardTick(this,false);
