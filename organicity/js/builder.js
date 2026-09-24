@@ -72,8 +72,22 @@ export function aiBuild(w, sim, opts = {}) {
   // 1. utilities ahead of demand
   const [pS, pD] = st.power || [0, 0], [wS, wD] = st.water || [0, 0], [sS, sD] = st.sewage || [0, 0];
   if ((!has('coal') && !has('wind')) || pD > pS * 0.8) { for (let k = 0; k < 6; k++) if (tryService(w, sim, 'coal', ...away(70 + rng() * 60), 12)) { done.push('power'); break; } }
-  if ((!has('pump') && !has('tower')) || wD > wS * 0.8) { const s = shore(); if ((s && tryService(w, sim, 'pump', s[0], s[1], 14)) || tryService(w, sim, 'tower', ...away(25), 30)) done.push('water'); }
-  if (!has('outlet') || sD > sS * 0.8) { const s = shore(); if (s && tryService(w, sim, 'outlet', s[0], s[1], 32)) done.push('sewage'); }
+  // shoreline services: try real shoreline cells the roads already reach (nearest the centre first);
+  // if none will do, run a road out to the nearest shore so next month can place it
+  const byShore = (key) => {
+    if (!sim.canAfford(SERVICES[key].cost + reserve(key))) return false;
+    const cands = [];
+    for (let z = 3; z < N - 3; z += 3) for (let x = 3; x < N - 3; x += 3) {
+      const c = z * N + x; if (w.water[c] || w.wdist[c] < 1 || w.wdist[c] > 4) continue;
+      if (works.some((b) => Math.hypot(b.cx - x, b.cz - z) < 14)) continue;
+      cands.push([x, z, Math.hypot(x - cx, z - cz)]);
+    }
+    cands.sort((a, b) => a[2] - b[2]);
+    for (const [x, z] of cands.slice(0, 80)) { const p = w.planService(key, x, z); if (p.ok) { w.placeService(key, p); sim.spend(SERVICES[key].cost); works.push({ cx: x, cz: z }); return true; } }
+    shore(); return false;
+  };
+  if ((!has('pump') && !has('tower')) || wD > wS * 0.8) { if (byShore('pump') || tryService(w, sim, 'tower', ...away(25), 30)) done.push('water'); }
+  if (!has('outlet') || sD > sS * 0.8) { if (byShore('outlet')) done.push('sewage'); }
   if (homes.length > 25 && !has('landfill')) { for (let k = 0; k < 4 && !tryService(w, sim, 'landfill', ...away(90 + rng() * 60), 16); k++); done.push('landfill'); }
   // 2. services where homes go without
   // services come as the town can afford them: fire first, then police, a school, a clinic
