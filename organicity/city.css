@@ -170,3 +170,42 @@ button.danger { margin-top: 12px; background: #3a1d1d; border: 2px solid #7a3a3a
   #panel { top: auto; bottom: 70px; left: 8px; right: 8px; width: auto; max-height: 50vh; }
 }
 p.bad { color: #ffb0a4; }
+
+/* ---------------- phases J–M: news, tutorial coach, advisors, photo mode, settings ---------------- */
+:root { --ui-scale: 1; }
+#top, #dock, #fly, #panel, #coach, #news, #photo, #toasts { zoom: var(--ui-scale); }
+#dock { max-height: calc(100vh / var(--ui-scale) - 80px); overflow-y: auto; scrollbar-width: thin; }
+#news { position: fixed; left: 92px; bottom: 8px; max-width: min(640px, calc(100vw - 460px)); z-index: 4; text-align: left; font-size: 12px; padding: 5px 10px;
+  background: var(--bg); border: 2px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+#news b { color: var(--acc); font-weight: 400; margin-right: 6px; }
+#news.bad { border-color: #8a3a32; } #news.warn { border-color: #8a6a2a; } #news.good { border-color: #2f7a48; }
+#fly:not(:empty) ~ #news, body:has(#fly:not(:empty)) #news { bottom: 92px; }
+#coach { position: fixed; top: 70px; left: 92px; width: 300px; z-index: 5; padding: 10px 12px; background: var(--bg); border: 2px solid var(--acc); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.28); }
+#coach small { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+#coach b { display: block; color: var(--acc); font-weight: 600; margin: 2px 0 4px; }
+#coach p { margin: 0 0 6px; font-size: 12px; }
+#coach .dots { display: flex; gap: 3px; }
+#coach .dots i { width: 14px; height: 5px; background: var(--line); }
+#coach .dots i.on { background: var(--pos); } #coach .dots i.now { background: var(--acc); }
+.advisors { display: flex; flex-direction: column; gap: 6px; }
+.adv { border-left: 4px solid var(--line-hi); padding: 4px 8px; background: rgba(0, 0, 0, 0.18); }
+.adv.good { border-color: var(--pos); } .adv.warn { border-color: var(--warn); } .adv.bad { border-color: var(--neg); }
+.adv b { font-weight: 600; } .adv.good b { color: var(--pos); } .adv.warn b { color: var(--warn); } .adv.bad b { color: var(--neg); }
+.adv p { margin: 2px 0 4px; font-size: 12px; }
+.adv button { background: var(--btn); border: 2px solid var(--line); padding: 2px 8px; font-size: 12px; }
+.newslist { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.newslist li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.newslist small { color: var(--dim); margin-right: 4px; }
+.newslist li.bad { color: #ffc0b4; } .newslist li.good { color: #b8f0c8; }
+#panel label.chk b { font-weight: 600; }
+#photo { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 20; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center;
+  padding: 8px 12px; background: var(--bg); border: 2px solid var(--line); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.28); }
+#photo[hidden] { display: none; }
+#photo button { background: var(--btn); border: 2px solid var(--line); padding: 4px 10px; }
+#photo button.primary { border-color: var(--acc); color: var(--acc); }
+body.photo #top, body.photo #dock, body.photo #fly, body.photo #panel, body.photo #toasts, body.photo #tip, body.photo #news, body.photo #coach { display: none !important; }
+body.reduced-motion * { transition: none !important; animation: none !important; }
+@media (max-width: 760px) {
+  #news { left: 8px; max-width: calc(100vw - 16px); bottom: 8px; }
+  #coach { left: 8px; right: 8px; width: auto; top: auto; bottom: 48px; }
+}

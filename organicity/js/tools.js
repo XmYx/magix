@@ -1,3 +1,5 @@
+import { TRANSIT, transitMode } from './transit.js';
+import { routeLines } from './assign.js';
 // Organicity — input: camera controls and the player's tools.
 import { ROADS, SERVICES, ZONES, LAYERS, JUNCTIONS } from './config.js';
 import { bezier, clamp, fmtMoney } from './util.js';
@@ -5,7 +7,7 @@ import { bezier, clamp, fmtMoney } from './util.js';
 export class Tools {
   constructor(world, sim, rend, ui) {
     this.w = world; this.sim = sim; this.r = rend; this.ui = ui;
-    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0 };
+    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, transitMode: 'bus', terrainMode: 'water', platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0 };
     this.lineStops = [];      // bus stops picked for a new line
     this.pts = [];            // road points being drawn
     this.keys = new Set();
@@ -26,6 +28,7 @@ export class Tools {
   setTool(tool, patch = {}) {
     if (tool !== this.s.tool) this.pts = [];
     Object.assign(this.s, patch, { tool });
+    if(tool==='terrain'&&!this.sim.sandbox&&this.s.terrainMode==='water')this.s.terrainMode='levee';
     this.r.clearPreview();
     this.r.setDistricts(tool === 'district');
     this.ui.toolChanged();
@@ -67,7 +70,9 @@ export class Tools {
     if (!down) { this.keys.delete(k); return; }
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.undo(); return; }
     this.keys.add(k);
-    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', 6: 'district', 7: 'bulldoze', l: 'lines', t: this.sim.sandbox ? 'terrain' : null };
+    if (k === 'p') { this.ui.togglePhoto(); return; }
+    if (document.body.classList.contains('photo')) { if (k === 'escape') this.ui.togglePhoto(false); return; }   // photo mode: camera keys only
+    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', 6: 'district', 7: 'bulldoze', l: 'lines', t: 'terrain', y: 'people', n: 'advisors', r: 'region' };
     if (map[k]) { this.ui.pickCategory(map[k]); return; }
     if (k === '8') { this.ui.togglePanel('overlays'); return; }
     if (k === '9') { this.ui.togglePanel('budget'); return; }
@@ -83,8 +88,29 @@ export class Tools {
     if (k === '-') { this.sim.speed = Math.max(1, this.sim.speed / 2); this.ui.hud(true); }
   }
 
+  // ---------------------------------------------------------------- touch: one finger uses the tool,
+  // two fingers pan, pinch to zoom and twist to rotate
+  gestureState() {
+    const [a, b] = [...this.touches.values()];
+    return { dist: Math.hypot(b.x - a.x, b.y - a.y), angle: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  }
+  pinch() {
+    const g = this.gestureState(), o = this.gesture, c = this.r.cam;
+    c.dist = clamp(c.dist * o.dist / Math.max(1, g.dist), 22, 720);
+    let da = g.angle - o.angle; da -= Math.round(da / (2 * Math.PI)) * 2 * Math.PI; c.yaw -= da;
+    const p0 = this.r.groundAt(o.mx, o.my), p1 = this.r.groundAt(g.mx, g.my);
+    if (p0 && p1) { c.x += p0.x - p1.x; c.z += p0.z - p1.z; }
+    this.r.updateCamera(); this.gesture = this.gestureState();
+  }
+  endStroke() { if (this.stroke) { this.stroke = false; this.w.finishTerrain(); this.w.commitTx(this.strokeCost || 0); this.strokeCost = 0; } }
+
   down(e) {
     this.mouse.x = e.clientX; this.mouse.y = e.clientY;
+    if (e.pointerType === 'touch') {
+      (this.touches ||= new Map()).set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size >= 2) { this.endStroke(); this.drag = null; this.gesture = this.gestureState(); return; }
+    }
+    if (this.r.photo && e.button === 0) { this.drag = { type: 'rotate', x: e.clientX, y: e.clientY, moved: 0, button: 0 }; return; }   // photo mode: drag orbits
     if (e.button === 2 || e.button === 1 || (e.button === 0 && e.altKey)) {
       this.drag = { type: e.button === 1 || e.shiftKey ? 'pan' : 'rotate', x: e.clientX, y: e.clientY, moved: 0, button: e.button, g: this.r.groundAt(e.clientX, e.clientY) };
       return;
@@ -92,17 +118,21 @@ export class Tools {
     if (e.button !== 0) return;
     this.drag = { type: 'tool', x: e.clientX, y: e.clientY, moved: 0 };
     const t = this.s.tool;
-    if ((t === 'zone' && !this.s.fill && !this.s.place) || t === 'district' || t === 'terrain') { this.w.beginTx(t === 'zone' ? 'Zoning' : t === 'district' ? 'District paint' : 'Terrain'); this.stroke = true; }
+    if ((t === 'zone' && !this.s.fill && !this.s.place) || t === 'district' || t === 'terrain') { this.w.beginTx(t === 'zone' ? 'Zoning' : t === 'district' ? 'District paint' : 'Terrain'); this.stroke = true; this.strokeCost=0; }
     if (t === 'road' && this.s.upgrade) { this.w.beginTx(`Upgrade to ${ROADS[this.s.road].name.toLowerCase()}`, { net: true }); this.stroke = true; this.strokeCost = 0; }
     this.act(true);
   }
 
   move(e) {
+    if (e.pointerType === 'touch' && this.touches?.has(e.pointerId)) {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.gesture && this.touches.size >= 2) { this.mouse.x = e.clientX; this.mouse.y = e.clientY; this.pinch(); return; }
+    }
     const dx = e.clientX - this.mouse.x, dy = e.clientY - this.mouse.y;
     this.mouse.x = e.clientX; this.mouse.y = e.clientY;
     const d = this.drag, c = this.r.cam;
     if (d) d.moved += Math.abs(dx) + Math.abs(dy);
-    if (d && d.type === 'rotate') { c.yaw -= dx * 0.006; c.pitch = clamp(c.pitch + dy * 0.004, 0.32, 1.48); return; }
+    if (d && d.type === 'rotate') { c.yaw -= dx * 0.006; c.pitch = clamp(c.pitch + dy * 0.004, this.r.photo ? 0.06 : 0.32, 1.48); return; }
     if (d && d.type === 'pan') {
       const g = this.r.groundAt(e.clientX, e.clientY);
       if (g && d.g) { c.x += d.g.x - g.x; c.z += d.g.z - g.z; this.r.updateCamera(); d.g = this.r.groundAt(e.clientX, e.clientY); }
@@ -114,8 +144,12 @@ export class Tools {
   }
 
   up(e) {
+    if (e.pointerType === 'touch' && this.touches) {
+      this.touches.delete(e.pointerId);
+      if (this.gesture) { if (this.touches.size < 2) { this.gesture = null; this.drag = null; } return; }   // a lifted gesture never clicks
+    }
     const d = this.drag; this.drag = null;
-    if (this.stroke) { this.stroke = false; this.w.finishTerrain(); this.w.commitTx(this.strokeCost || 0); this.strokeCost = 0; }
+    this.endStroke();
     if (d && d.type === 'rotate' && d.button === 2 && d.moved < 4) { // right click = cancel
       if (this.s.tool === 'lines' && this.lineStops.length) this.finishLine();
       else if (this.pts.length) { this.pts = []; this.refresh(); } else if (this.s.tool !== 'inspect') this.ui.pickCategory('inspect');
@@ -145,7 +179,12 @@ export class Tools {
   finishLine() {
     const stops = this.lineStops; this.lineStops = [];
     if (stops.length < 2) { this.ui.toast('A line needs at least two stops', 'warn'); return; }
-    this.w.beginTx('Bus line'); const l = this.w.addLine(stops); this.w.commitTx();
+    const mode=this.s.transitMode, buildings=stops.map(id=>this.w.buildings.get(id));
+    const route=routeLines(this.w.net,[{id:0,mode,stops:buildings.map(b=>({edge:b.edge,s:b.s,x:b.cx,z:b.cz}))}])[0];
+    if(!route.ok){this.ui.toast('Stops need a connected route','warn');return;}
+    const cost=Math.round(route.len*TRANSIT[mode].trackCost);
+    if(!this.sim.canAfford(cost)){this.ui.toast(`Tracks cost ₵${cost.toLocaleString()}`,'warn');return;}
+    this.w.beginTx('Transit line'); const l = this.w.addLine(stops,undefined,mode); this.w.commitTx(cost);this.sim.spend(cost);
     this.ui.toast(`${l.name} created with ${stops.length} stops`, 'good'); this.ui.showLines();
   }
 
@@ -207,8 +246,8 @@ export class Tools {
       }
       case 'lines': {
         const b = r.pickBuilding(this.mouse.x, this.mouse.y);
-        if (b && b.svc === 'busstop') r.setHighlight(b);
-        tip = this.lineStops.length ? `${this.lineStops.length} stop${this.lineStops.length > 1 ? 's' : ''} · click more stops, Enter or right-click to finish` : 'Click bus stops in order to create a line';
+        if (b && b.svc === TRANSIT[this.s.transitMode].stop) r.setHighlight(b);
+        tip = this.lineStops.length ? `${this.lineStops.length} stop${this.lineStops.length > 1 ? 's' : ''} · click more stops, Enter or right-click to finish` : `Click ${TRANSIT[this.s.transitMode].name.toLowerCase()} stops in order`;
         break;
       }
       case 'zone': {
@@ -223,7 +262,7 @@ export class Tools {
         break;
       case 'terrain':
         r.setBrush(g.x, g.z, s.brush, s.water ? 0x4a9aff : 0x9ad06a);
-        tip = s.water ? 'Paint water (roads become bridges)' : 'Paint land';
+        tip = s.terrainMode==='levee'?'Build flood levees · ₵12/cell':s.terrainMode==='removeLevee'?'Remove levees':s.water?'Paint water':'Paint land';
         break;
       case 'util': case 'svc': {
         const S = SERVICES[s.svc], plan = this.w.planService(s.svc, g.x, g.z, s.platform);
@@ -293,7 +332,12 @@ export class Tools {
         else w.paintZone(g.x, g.z, s.brush, s.zone);
         break;
       case 'terrain': {
-        w.paintWater(g.x, g.z, s.brush, s.water);
+        if(s.terrainMode==='levee'||s.terrainMode==='removeLevee') {
+          const on=s.terrainMode==='levee'?1:0;
+          const upper=Math.ceil(Math.PI*(s.brush+2)**2)*12;
+          if(on&&!sim.canAfford(upper)){this.ui.toast('Insufficient funds for this levee brush. Use a smaller brush.','warn');break;}
+          const cost=w.paintLevee(g.x,g.z,s.brush,on)*(on?12:0);sim.spend(cost);this.strokeCost=(this.strokeCost||0)+cost;
+        } else if(sim.sandbox) w.paintWater(g.x, g.z, s.brush, s.water);
         const now = performance.now();
         if (now - (this.terrT || 0) > 250) { this.terrT = now; w.finishTerrain(); }
         break;
@@ -309,7 +353,8 @@ export class Tools {
       case 'util': case 'svc': {
         if (!first) return;
         const S = SERVICES[s.svc], plan = w.planService(s.svc, g.x, g.z, s.platform);
-        if (S.landmark && !sim.sandbox && sim.stats.pop < S.landmark) { this.ui.toast(`${S.name} unlocks at ${S.landmark.toLocaleString('en-US')} people`, 'warn'); break; }
+        const need = S.landmark || S.unlock;
+        if (need && !sim.sandbox && sim.stats.pop < need) { this.ui.toast(`${S.name} unlocks at ${need.toLocaleString('en-US')} people`, 'warn'); break; }
         if (!plan.ok) { this.ui.toast(plan.err, 'warn'); break; }
         if (!sim.canAfford(S.cost)) { this.ui.toast('Not enough money', 'warn'); break; }
         w.beginTx(S.name); w.placeService(s.svc, plan); w.commitTx(S.cost);
@@ -329,7 +374,7 @@ export class Tools {
       case 'lines': {
         if (!first) return;
         const b = this.r.pickBuilding(this.mouse.x, this.mouse.y);
-        if (!b || b.svc !== 'busstop') { this.ui.toast('Click a bus stop (Services → Bus stop)', 'info'); break; }
+        if (!b || b.svc !== TRANSIT[this.s.transitMode].stop) { this.ui.toast(`Click a ${TRANSIT[this.s.transitMode].name} stop from Services`, 'info'); break; }
         if (this.lineStops[this.lineStops.length - 1] !== b.id) this.lineStops.push(b.id);
         break;
       }

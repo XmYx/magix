@@ -64,6 +64,11 @@ export const LEVEL_APPEAL = [0, 0, 0.42, 0.54, 0.65, 0.75];
 
 // Service / utility buildings. w = frontage, d = depth (cells). upkeep per month.
 export const SERVICES = {
+  stormdrain: { cat:'util', name:'Storm drain', w:4,d:4,cost:1800,upkeep:90,radius:45,desc:'Powered pumps reduce flooding within 45 units. Requires road access, power and water.' },
+  snowdepot: { cat:'svc', name:'Snowplow depot',w:12,d:9,cost:5500,upkeep:320,radius:180,desc:'Snowplows clear roads on the same network within 180 units. Requires power and water.' },
+  tramstop: { cat:'svc', name:'Tram stop',w:5,d:3,cost:900,upkeep:50,radius:55,desc:'Build a tram line between stops. Tracks follow streets.' },
+  railstation: { cat:'svc', name:'Rail station',w:18,d:10,cost:14000,upkeep:450,radius:85,desc:'Rail lines build dedicated elevated tracks between stations.' },
+  metrostation: { cat:'svc', name:'Metro station',w:7,d:6,cost:18000,upkeep:600,radius:65,desc:'Metro lines build direct tunnels between stations. Use the transit overlay to see trains.' },
   coal:     { cat: 'util', name: 'Coal plant',        w: 16, d: 14, cost: 16000, upkeep: 750, power: 90, pollution: 1.6, noise: 0.8, desc: 'Cheap, strong power. Pollutes heavily.' },
   wind:     { cat: 'util', name: 'Wind turbine',      w: 5,  d: 5,  cost: 3500,  upkeep: 110, power: 10, noise: 0.2, desc: 'Clean power; output varies with wind.' },
   pump:     { cat: 'util', name: 'Water pump',        w: 7,  d: 7,  cost: 4500,  upkeep: 200, water: 140, nearWater: true, desc: 'Must be placed by the shore.' },
@@ -72,13 +77,16 @@ export const SERVICES = {
   landfill: { cat: 'util', name: 'Landfill',          w: 18, d: 16, cost: 6000,  upkeep: 350, garbage: 700, radius: 380, storage: 160000, pollution: 0.5, desc: 'Garbage trucks cover a road-network radius.' },
   fire:     { cat: 'svc',  name: 'Fire station',      w: 10, d: 9,  cost: 7000,  upkeep: 450, radius: 170, desc: 'Prevents buildings burning down.' },
   police:   { cat: 'svc',  name: 'Police station',    w: 9,  d: 9,  cost: 7000,  upkeep: 450, radius: 170, desc: 'Lowers crime.' },
-  clinic:   { cat: 'svc',  name: 'Clinic',            w: 9,  d: 8,  cost: 7500,  upkeep: 500, radius: 160, desc: 'Healthcare raises happiness and appeal.' },
-  school:   { cat: 'svc',  name: 'School',            w: 14, d: 12, cost: 9000,  upkeep: 550, radius: 180, desc: 'Education unlocks office demand.' },
+  clinic:   { cat: 'svc',  name: 'Clinic',            w: 9,  d: 8,  cost: 7500,  upkeep: 500, radius: 160, patients: 1600, desc: 'Healthcare raises happiness and appeal.' },
+  school:   { cat: 'svc',  name: 'School',            w: 14, d: 12, cost: 9000,  upkeep: 550, radius: 180, seats: 700, desc: 'Education unlocks office demand.' },
   parkS:    { cat: 'svc',  name: 'Pocket park',       w: 7,  d: 7,  cost: 1200,  upkeep: 40,  park: 45, desc: 'Fits leftover corners. Local appeal.' },
   parkL:    { cat: 'svc',  name: 'City park',         w: 18, d: 16, cost: 5000,  upkeep: 160, park: 90, desc: 'Big boost to surrounding land value.' },
   depot:    { cat: 'svc',  name: 'Maintenance depot', w: 12, d: 10, cost: 5000,  upkeep: 300, radius: 260, desc: 'Keeps roads in good condition.' },
   busdepot: { cat: 'svc',  name: 'Bus depot',         w: 12, d: 10, cost: 6000,  upkeep: 400, desc: 'Required for bus stops to operate.' },
   busstop:  { cat: 'svc',  name: 'Bus stop',          w: 3,  d: 2,  cost: 300,   upkeep: 30,  radius: 45, desc: 'Better access, fewer car trips.' },
+  // higher education: unlocked by population; seats serve residents across a wide road radius
+  college:  { cat: 'svc',  name: 'College',           w: 18, d: 14, cost: 22000, upkeep: 1100, radius: 320, unlock: 1500, seats: 900,  desc: 'Higher education: more skilled workers and office demand.' },
+  university: { cat: 'svc', name: 'University',       w: 28, d: 22, cost: 60000, upkeep: 2400, radius: 600, unlock: 5000, seats: 2500, park: 50, desc: 'Graduates unlock top offices and tech firms.' },
   // landmarks: one of each, unlocked by population; big appeal radius and tourism income (₵/month)
   plaza:    { cat: 'svc',  name: 'Civic plaza',       w: 16, d: 14, cost: 12000, upkeep: 300, park: 110, landmark: 1000,  tourism: 900,  desc: 'Fountain square that lifts the whole neighbourhood.' },
   museum:   { cat: 'svc',  name: 'Museum',            w: 16, d: 12, cost: 20000, upkeep: 500, park: 80,  landmark: 2500,  tourism: 1800, desc: 'Draws visitors; raises education appeal nearby.' },
@@ -115,13 +123,36 @@ export const OVERLAYS = {
   school:    { name: 'Education', good: true },
   park:      { name: 'Parks', good: true },
   waterpol:  { name: 'Water pollution' },
+  elevation: { name: 'Terrain elevation', good:true },
+  flooding: { name:'Flood depth', good:false },
+  snow: { name:'Snow accumulation', good:false },
   transit:   { name: 'Transit (stops & lines)', good: true },
   desireR:   { name: 'Desirability: housing', good: true },
   desireC:   { name: 'Desirability: shops', good: true },
   desireI:   { name: 'Desirability: industry', good: true },
   desireO:   { name: 'Desirability: offices', good: true },
+  health:    { name: 'Health (care & illness)', good: true },
+  seniors:   { name: 'Demographics: retirees' },
+  higher:    { name: 'Higher education', good: true },
   districts: { name: 'Districts' },
 };
+
+// City-wide ordinances: a monthly cost and effects wired through the simulation.
+export const ORDINANCES = {
+  curfew:     { name: 'Youth curfew',        cost: 400, desc: 'Crime −25%; shops earn 8% less.' },
+  noise:      { name: 'Noise limits',        cost: 250, desc: 'Noise −30%; industry earns 5% less.' },
+  smoke:      { name: 'Smoke detectors',     cost: 300, desc: 'Fires break out 40% less often.' },
+  greenRoofs: { name: 'Green roofs',         cost: 350, desc: 'Air pollution −15%; land value +2 points.' },
+  freeTransit:{ name: 'Free public transit', cost: 0,   desc: 'No bus fares; buses carry 50% more of the trips they serve.' },
+  highrise:   { name: 'High-rise ban',       cost: 0,   desc: 'Buildings stop at 8 floors; land value +3 points in low-rise areas.' },
+  carFree:    { name: 'Car-free centres',    cost: 500, desc: 'Districts marked car-free: less noise and pollution, more walking and transit.' },
+  vaccination:{ name: 'Vaccination drive',   cost: 450, desc: 'Illness outbreaks start and spread half as often.' },
+};
+
+// Neighbouring cities beyond the map edge, one per highway exit (names by seed).
+export const NEIGHBOUR_NAMES = ['Ashford', 'Brightwater', 'Cobalt Bay', 'Dunmere', 'Eastholm', 'Fairhaven', 'Greyport', 'Hollowbrook', 'Ironvale', 'Juniper Falls', 'Kestrel', 'Lowmarsh'];
+export const STREET_NAMES = ['Elm', 'Oak', 'Maple', 'Cedar', 'Birch', 'Willow', 'Harbour', 'Mill', 'Station', 'Church', 'Market', 'Bridge', 'River', 'Park', 'Hill', 'Canal', 'Orchard', 'Quarry', 'Foundry', 'Garden', 'Kings', 'Queens', 'Beacon', 'Lantern'];
+export const STREET_KINDS = { alley: 'Lane', street: 'St', avenue: 'Ave', boulevard: 'Blvd', highway: 'Hwy', oneway: 'St', ramp: 'Ramp' };
 
 export const DISTRICT_COLORS = [
   null, [255, 110, 110], [110, 180, 255], [255, 200, 90], [150, 230, 130], [210, 140, 255],

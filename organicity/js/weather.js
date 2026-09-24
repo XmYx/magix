@@ -9,8 +9,8 @@ export const WEATHER = {
   storm: { label: 'Storm', speed: 0.65, power: 1.15, water: 1, fire: 0.3, wear: 1.5, sky: 0x687987, light: 0.7 },
 };
 export function weatherAt(seed, day, override = null) {
-  const season = ['Winter', 'Spring', 'Summer', 'Autumn'][Math.floor(((day + 30) % 360) / 90)];
-  const rng = mulberry32((seed ^ (Math.floor(day / 5) * 2654435761)) >>> 0);
+  const season = ['Winter', 'Spring', 'Summer', 'Autumn'][Math.floor(((Math.floor(day / 30) * 30 + 30) % 360) / 90)];
+  const rng = mulberry32((seed ^ (Math.floor(day / 30) * 2654435761)) >>> 0);
   const table = season === 'Winter' ? ['clear','snow','snow','fog','rain'] : season === 'Summer' ? ['clear','clear','heat','rain','storm'] : ['clear','rain','rain','fog','storm'];
   const type = override && WEATHER[override] ? override : table[Math.floor(rng() * table.length)];
   const wind = (type === 'storm' ? 0.95 : 0.35) + rng() * (type === 'storm' ? 0.25 : 0.6);

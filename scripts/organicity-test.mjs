@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { hazardTick } from '../organicity/js/terrain.js';
+import { TRANSIT } from '../organicity/js/transit.js';
+import { deckHeight } from '../organicity/js/agents.js';
 // Headless regression tests for Organicity (organicity/js). Runs the land model,
 // road graph, simulation (in-thread core) and save/undo logic without a browser.
 //   node scripts/organicity-test.mjs            run all tests
@@ -6,11 +9,14 @@
 import { World } from '../organicity/js/world.js';
 import { Sim } from '../organicity/js/sim.js';
 import { makeSave, loadSave, migrate, SAVE_VERSION } from '../organicity/js/save.js';
+import { PROB } from '../organicity/js/sim.js';
 import { RoadNet } from '../organicity/js/roads.js';
 import { fastestRoute, commuteRoutes } from '../organicity/js/routes.js';
 import { weatherAt, WEATHER } from '../organicity/js/weather.js';
 import { Core, netSnapshot, sampleField } from '../organicity/js/core.js';
-import { N, ZONES } from '../organicity/js/config.js';
+import { N, ZONES, SERVICES } from '../organicity/js/config.js';
+import { setupScenario, TUTORIAL } from '../organicity/js/scenarios.js';
+import { encodeSave, decodeSave, readShared } from '../organicity/js/share.js';
 import { technology, buildingFloors, massPlan } from '../organicity/js/eras.js';
 import { assignTraffic, routeLines, junctionDelay } from '../organicity/js/assign.js';
 import { Traffic, AGENT_TYPES, AgentSim, TYPE_IDS, POSE_STRIDE } from '../organicity/js/agents.js';
@@ -643,13 +649,232 @@ test('sandbox placement stamps locked buildings on zoned lots', () => {
   w.undo(); w.undo(); assert(!w.buildings.has(r.b.id), 'undo kept the placed building');
 });
 
+// ------------------------------------------------------------------ phase J: people and society
+const grown = (days = 120, opts = {}) => { const { w } = town(); const s = new Sim(w, { worker: false, sandbox: { instant: true, noIllness: true, ...opts } }); run(s, days); return { w, s }; };
+
+test('demographics: cohorts add up, homes age, retirees pay less tax', () => {
+  const { w, s } = grown();
+  const st = s.stats;
+  assert(st.pop > 100 && st.kids > 0 && st.seniors > 0, `no cohorts: ${JSON.stringify({ pop: st.pop, kids: st.kids, seniors: st.seniors })}`);
+  assert(Math.abs(st.kids + st.adults + st.seniors - st.pop) < 1e-6, 'cohorts do not add up');
+  const b = [...w.buildings.values()].find((x) => x.hh);
+  const young = s.demography({ ...b, built: s.day }), old = s.demography({ ...b, built: s.day - 3000 });
+  assert(old.seniors > young.seniors && old.kids < young.kids, 'buildings do not age');
+});
+
+test('education chain: school seats, colleges and universities make graduates', () => {
+  const { w, s } = grown();
+  const noSchool = s.stats.eduRate;
+  assert(s.stats.schoolLoad > 1 && noSchool < 0.2, `no school, yet educated: ${noSchool}`);
+  assert(s.stats.hiEdu === 0, 'graduates without a college');
+  const put = (k, x, z) => { for (let d = 0; d < 40; d += 3) for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const p = w.planService(k, x + dx, z + dz); if (p.ok) return w.placeService(k, p); } return null; };
+  assert(put('school', 200, 250) && put('university', 230, 240), 'could not place school/university');
+  run(s, 30);
+  assert(s.stats.eduRate > noSchool, 'school did not raise education');
+  assert(s.stats.hiEdu > 0 && s.stats.hiSeats === SERVICES.university.seats, `no graduates: ${s.stats.hiEdu}`);
+  const office = [...w.buildings.values()].find((b) => !b.svc) || tower(w, 5);
+  office.level = 4; office.zone = 5;
+  assert(s.levelRequirements(office).some(([l]) => l.startsWith('Graduates')), 'level-5 offices do not need graduates');
+});
+
+test('health: unserved homes fall ill, outbreaks spread, vaccination and clinics help', () => {
+  const { w, s } = grown(120);
+  s.sandbox.noIllness = false; s.stats.pop = Math.max(s.stats.pop, 600);
+  const homes = [...w.buildings.values()].filter((b) => b.hh && b.occ);
+  s.rng = () => 0;                                              // every roll succeeds
+  s.healthTick();
+  assert(homes.every((b) => b.sick > 0), 'no outbreak without clinics');
+  assert(s.stats.sick === 0 || s.stats.sick >= 0, 'sick count missing');
+  s.evalBuilding(homes[0]); assert(homes[0].prob & PROB.sick, 'illness not flagged as a problem');
+  for (const b of homes) b.sick = 0;
+  s.rng = () => 0.00011; s.healthTick(); const plain = homes.filter((b) => b.sick).length;
+  for (const b of homes) b.sick = 0;
+  s.setOrdinance('vaccination', true); s.healthTick(); const vacc = homes.filter((b) => b.sick).length;
+  assert(plain > 0 && vacc < plain, `vaccination did not help: ${plain} vs ${vacc}`);
+  s.sandbox.noIllness = true; for (const b of homes) b.sick = 0; s.rng = () => 0; s.healthTick();
+  assert(!homes.some((b) => b.sick), 'sandbox switch ignored');
+});
+
+test('ordinances: costs, high-rise ban, curfew and free transit', () => {
+  const { w } = town(); const s = new Sim(w, { worker: false, sandbox: { instant: true } });
+  const t = tower(w); for (let k = 0; k < 7; k++) s.advanceEra(); run(s, 60);
+  assert(buildingFloors(t, w) > 8, 'tower too short');
+  s.setOrdinance('highrise', true); assert(buildingFloors(t, w) === 8, 'high-rise ban ignored');
+  s.setOrdinance('highrise', false); assert(buildingFloors(t, w) > 8, 'ban not lifted');
+  s.setOrdinance('curfew', true); s.setOrdinance('freeTransit', true);
+  run(s, 2);
+  assert(Math.abs(s.stats.exp.ordinances * 30 - 400) < 1e-6 && s.stats.inc.fares === 0, `ordinance costs wrong: ${s.stats.exp.ordinances * 30}`);
+  const a = town(), b = town();
+  const sa = new Sim(a.w, { worker: false, sandbox: { instant: true } }), sb = new Sim(b.w, { worker: false, sandbox: { instant: true } });
+  sb.setOrdinance('curfew', true); run(sa, 90); run(sb, 90);
+  const mean = (f) => f.reduce((x, y) => x + y, 0) / f.length;
+  assert(mean(sb.f.crime) < mean(sa.f.crime), `curfew did not cut crime: ${mean(sb.f.crime)} vs ${mean(sa.f.crime)}`);
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false }).sim;
+  assert(back.ordinances.curfew && back.w.ordinances === back.ordinances, 'ordinances lost on reload');
+});
+
+test('car-free centres move trips off the roads; free transit fills buses', () => {
+  const base = corridor(), b0 = drain(assignTraffic(base.net, base.blds, { total: 300, rng: () => 1 }));
+  const cf = corridor(); cf.blds[0].carFree = true; const b1 = drain(assignTraffic(cf.net, cf.blds, { total: 300, rng: () => 1 }));
+  assert(b1.walk > 0 && cf.home.fAB < base.home.fAB, 'car-free trips still drove');
+  assert(b0.walk === 0, 'walking without a car-free centre');
+});
+
+test('news and advisors: street names, headlines, seven advisors', () => {
+  const { w, s } = grown(60);
+  const e = [...w.net.edges.values()].find((x) => x.type === 'street');
+  assert(/^[A-Z][a-z]+ St$/.test(s.streetName(e.id)) && s.streetName(e.id) === s.streetName(e.id), `bad street name ${s.streetName(e.id)}`);
+  s.milestone = 0; s.stats.pop = 1200; s.monthlyNews();
+  assert(s.news.some((n) => n.text.includes('1,000')), 'no milestone headline');
+  const adv = s.advisors();
+  assert(adv.length === 7 && adv.every((a) => a.who && a.text && ['good', 'warn', 'bad'].includes(a.mood)), 'advisors incomplete');
+  assert(adv.filter((a) => a.ov).every((a) => a.ov in { traffic: 1, school: 1, higher: 1, health: 1, clinic: 1, crime: 1, pollution: 1, power: 1, water: 1 }), 'advisor overlay unknown');
+});
+
+test('scenarios: tutorial steps, gridlock and debt cities', () => {
+  const tw = new World(77); tw.newGame(); const ts = new Sim(tw, { worker: false, scenario: 'tutorial' });
+  let prog = ts.scenarioProgress(); assert(prog.length === TUTORIAL.length && !prog[0][1], 'tutorial starts complete');
+  road(tw, [150, 262], [200, 262]); prog = ts.scenarioProgress(); assert(prog[0][1] && !prog[1][1], 'road step not detected');
+  ts.tutorialFlags.overlays = true; assert(ts.scenarioProgress()[8][1], 'overlay flag ignored');
+  const gw = new World(4242); gw.newGame(); const gs = new Sim(gw, { worker: false, scenario: 'gridlock' });
+  setupScenario(gw, gs, 'gridlock');
+  const homes = [...gw.buildings.values()].filter((b) => !b.svc);
+  assert(homes.length > 20 && homes.some((b) => b.occ > 0) && !homes.some((b) => b.locked), `gridlock city not built: ${homes.length}`);
+  assert(!gw.undoStack.length, 'scenario setup left undo history');
+  run(gs, 35);
+  assert(gs.stats.pop > 500 && gs.jamRoads !== null && gs.scenarioStart, `gridlock sim idle: pop ${gs.stats.pop}, jams ${gs.jamRoads}`);
+  const gp = gs.scenarioProgress();
+  assert(gp.length === 4 && !gp[0][1] && gs.worstRoad().ratio > 1, `gridlock is not gridlocked: ${gs.worstRoad()?.ratio}`);
+  const dw = new World(4242); dw.newGame(); const ds = new Sim(dw, { worker: false, scenario: 'debt' });
+  setupScenario(dw, ds, 'debt');
+  assert(ds.money < 0 && ds.loans.length === 1 && ds.budgetFor('fire') === 1.5, 'debt scenario not set up');
+  run(ds, 31); assert(ds.debtMonths >= 1 || ds.money >= 0, 'debt clock not running');
+  console.log(`       gridlock: ${homes.length} buildings, pop ${Math.round(gs.stats.pop)}, worst road ${gs.worstRoad().name} at ${Math.round(gs.worstRoad().ratio * 100)}%`);
+});
+
+// ------------------------------------------------------------------ phase L: region and scale
+test('region: named neighbours per exit, floating prices, goods exports, persistence', () => {
+  const { w, s } = grown(90);
+  const reg = s.regionList();
+  assert(reg.length >= 1 && reg[0].name && reg[0].pop > 10000 && reg[0].connected, 'no neighbour city');
+  const mk = s.market(); for (const k of ['goods', 'power', 'water']) assert(mk[k] >= 0.6 && mk[k] <= 1.6, `price out of range: ${k}`);
+  const shop = [...w.buildings.values()].find((b) => !b.svc && ZONES[b.zone].kind === 'C'); shop.zone = 4;   // the fixture has no industry
+  run(s, 3); assert(s.stats.filled.I > 0 && s.stats.inc.exports > 0, `no goods exports: ${s.stats.filled.I}`);
+  const p0 = reg[0].pop; s.growRegion(); assert(s.regionList()[0].pop > p0, 'neighbour did not grow');
+  const back = loadSave(JSON.parse(JSON.stringify(makeSave(w, s))), { worker: false }).sim;
+  assert(back.regionList()[0].pop === s.regionList()[0].pop && back.news.length > 0, 'region/news lost on reload');
+  const old = makeSave(w, s); old.v = 6; delete old.sim.ordinances; delete old.sim.region;
+  const mig = migrate(JSON.parse(JSON.stringify(old)));
+  assert(mig.v === SAVE_VERSION && mig.sim.ordinances && mig.sim.region, 'v6 save did not migrate');
+});
+
+test('scale: a map-filling city (every lot built) completes a core pass in time', () => {
+  const w = new World(9001); w.newGame();
+  for (let x = 60; x <= 460; x += 26) road(w, [x, 40], [x, 470]);
+  for (let z = 40; z <= 470; z += 26) road(w, [60, z], [460, z]);
+  road(w, [150, 262], [60, 262]);
+  const ids = [1, 3, 6, 2, 4, 5];
+  let k = 0; for (let x = 73; x < 460; x += 26) for (let z = 53; z < 470; z += 26) { if (!w.water[Math.floor(z) * N + Math.floor(x)]) w.fillZone(x, z, ids[k++ % ids.length]); }
+  const s = new Sim(w, { worker: false, sandbox: { instant: true } });
+  for (let i = 0; i < w.zone.length; i += 2) if (w.zone[i] && w.free(i) && w.accEdge[i] >= 0) w.placeGrowable((i % N) + 0.5, Math.floor(i / N) + 0.5, 2);
+  for (const b of w.buildings.values()) if (!b.svc) { s.capacity(b); b.occ = b.hh; b.workers = (b.jobs || 0) * 0.8; }
+  const n = w.buildings.size;
+  assert(n > 1200, `synthetic city too small: ${n}`);
+  s.dailyTick(); assert(s.stats.employed > 0, 'benchmark city has no commuters');
+  const t0 = Date.now(); s.requestCore(0, true, 'bench'); while (s.host.gen) s.host.step(Infinity); const ms = Date.now() - t0;
+  console.log(`       ${n} buildings, ${w.net.edges.size} road segments, ${Math.round(s.stats.pop)} people: core pass ${ms} ms (${Math.round(s.stats.modal?.car || 0)} car trips assigned)`);
+  assert(ms < 20000, `core pass too slow: ${ms} ms`);
+});
+
+// ------------------------------------------------------------------ phase M: sharing
+test('share: compressed links round-trip a city', async () => {
+  const { w, s } = grown(30);
+  const save = makeSave(w, s), code = await encodeSave(save);
+  assert(/^[A-Za-z0-9_-]+$/.test(code) && code.length < JSON.stringify(save).length, 'code not compressed/url-safe');
+  const back = await decodeSave(code), viaLink = await readShared(`https://example.test/organicity/#city=${code}`);
+  assert(JSON.stringify(back) === JSON.stringify(save) && viaLink.v === save.v, 'round trip changed the save');
+  const city = loadSave(back, { worker: false });
+  assert(city.world.buildings.size === w.buildings.size && city.sim.day === s.day, 'shared city differs');
+  assert((await readShared(JSON.stringify(save))).v === save.v, 'plain JSON import failed');
+});
+
+
+test('H: weather holds for thirty days and snow persists after snowfall', () => {
+  const a=weatherAt(4242,0);for(let d=1;d<30;d++)assert(weatherAt(4242,d).type===a.type,'weather changed within a regime');
+  const w=new World();const sim=new Sim(w,{worker:false,sandbox:{}});sim.weather={type:'snow'};
+  for(let d=0;d<10;d++){sim.day=d;hazardTick(sim);}assert(w.hazards.snow>.4,'snow did not accumulate');
+  sim.weather={type:'clear'};hazardTick(sim);assert(w.hazards.snow>.3,'snow disappeared immediately');
+});
+test('H: hills increase construction costs and survive worker snapshots and saves', () => {
+  const flat=new World(42),hill=new World(42,'hills');flat.newGame();hill.newGame();
+  assert(hill.elevation.some(v=>v>3),'no hills');
+  let best=null;
+  for(let z=60;z<400;z+=20){const a={x:170,z},b={x:270,z},c={x:220,z};const q=hill.roadCost(a,c,b,'street');if(q.climb>1){best={a,b,c,q};break;}}
+  assert(best,'no hillside road');assert(best.q.cost>flat.roadCost(best.a,best.c,best.b,'street').cost,'hills cost no extra');
+  hill.buildRoad(hill.net.snap(best.a.x,best.a.z,3),best.c,hill.net.snap(best.b.x,best.b.z,3),'street');
+  const e=[...hill.net.edges.values()].find(e=>e.heights.some(v=>v>0));assert(e,'missing profile');
+  const agent=new AgentSim();agent.handle({type:'net',net:netSnapshot(hill.net)});
+  assert(Math.abs(deckHeight(e,e.len/2)-deckHeight(agent.net.edges.get(e.id),e.len/2))<1e-5,'worker lost elevation');
+  const copy=World.load(hill.serialize());assert(copy.mapPreset==='hills'&&copy.heightAt(220,100)===hill.heightAt(220,100),'terrain changed on save');
+});
+test('H: continuous levees block floodwater, gaps flood and drains reduce depth', () => {
+  const w=new World(),sim=new Sim(w,{worker:false,sandbox:{}});for(let z=0;z<N;z++)w.water[z*N]=1;
+  w.hazards.surge=2;sim.weather={type:'clear'};
+  hazardTick(sim,false);const ci=100*N+10,unprotected=w.flood[ci];assert(unprotected>1,'flood failed to spread');
+  for(let z=0;z<N;z++)w.levees[z*N+5]=1;
+  hazardTick(sim,false);assert(w.flood[ci]===0,'levee did not block water');
+  w.levees[100*N+5]=0;hazardTick(sim,false);assert(w.flood[ci]>0,'levee gap did not leak');
+  const before=w.flood[ci];w.buildings.set(1,{id:1,svc:'stormdrain',cx:10,cz:100,edge:0,power:true,water:true});
+  hazardTick(sim,false);assert(w.flood[ci]<before,'drain did not reduce flood');
+});
+test('H: snowplow coverage restores road speed and levees undo and save', () => {
+  const w=new World();w.newGame();const sim=new Sim(w,{worker:false,sandbox:{}}),e=[...w.net.edges.values()][0];sim.weather={type:'clear'};w.hazards.snow=1;
+  hazardTick(sim,false);const slow=e.hazardSpeed,p=w.net.sampleAt(e,e.len/2),g=w.net.graph();
+  w.buildings.set(1,{id:1,svc:'snowdepot',cx:p.x,cz:p.z,edge:e.id,power:true,water:true,comp:g.comp[g.idx.get(e.a)]});hazardTick(sim,false);assert(e.hazardSpeed>slow,'plows did not clear the road');w.buildings.clear();
+  w.beginTx('Levee');const n=w.paintLevee(50,50,4,1);w.commitTx(n*12);assert(n>0,'levee placement failed');
+  const saved=World.load(w.serialize());assert(saved.levees[50*N+50]===1&&saved.hazards.snow===1,'hazards not saved');w.undo();assert(!w.levees.some(Boolean),'levee undo failed');
+});
+test('I: independent rail and metro tracks connect disconnected road components', () => {
+  const w=new World();road(w,[20,20],[80,20]);road(w,[200,20],[260,20]);const es=[...w.net.edges.values()];
+  const stops=[{edge:es[0].id,s:20,x:40,z:20},{edge:es[1].id,s:20,x:220,z:20}];
+  assert(!routeLines(w.net,[{id:1,mode:'bus',stops}])[0].ok,'bus crossed disconnected roads');
+  for(const mode of ['rail','metro']){const r=routeLines(w.net,[{id:1,mode,stops}])[0];assert(r.ok&&r.track.length===3&&r.len===360,'dedicated track missing');}
+});
+test('I: modal assignment is capacity limited and modes conserve transit totals', () => {
+  const w=new World();road(w,[20,100],[300,100]);const e=[...w.net.edges.values()][0];
+  const blds=[{id:1,cx:40,cz:100,edge:e.id,s:20,occ:10000,kind:'R'},{id:2,cx:240,cz:100,edge:e.id,s:220,workers:10000,kind:'O'}];
+  for(const mode of ['bus','tram','rail','metro']) {
+    const line={id:1,mode,stops:[{x:40,z:100,edge:e.id,s:20},{x:240,z:100,edge:e.id,s:220}]};
+    const gen=assignTraffic(w.net,blds,{total:20000,lines:[line],rng:()=>.2});let r;do{r=gen.next();}while(!r.done);const out=r.value;
+    assert(out[mode]>0,`${mode} had no riders`);assert(out[mode]<=TRANSIT[mode].capacity+1e-6,'over capacity');assert(out.car>0,'overflow did not drive');
+    assert(Math.abs(out.transit-out.bus-out.tram-out.rail-out.metro)<1e-5,'modal total mismatch');
+  }
+});
+test('I: station pruning preserves each mode and saves its mode', () => {
+  const w=new World();w.newGame();const a=w.createBuilding({svc:'tramstop',cells:[100*N+100]}),b=w.createBuilding({svc:'tramstop',cells:[110*N+100]});
+  w.addLine([a.id,b.id],'Tram','tram');w.pruneLines();assert(w.lines.length===1,'tram stops removed by bus-only pruning');
+  const copy=World.load(w.serialize());assert(copy.lines[0].mode==='tram','mode not saved');w.removeBuilding(a.id);w.pruneLines();assert(w.lines.length===0,'broken line retained');
+});
+
+test('I: rail transports trips across disconnected streets', () => {
+  const w=new World();road(w,[20,100],[100,100]);road(w,[200,100],[280,100]);const es=[...w.net.edges.values()];
+  const blds=[{id:1,cx:40,cz:100,edge:es[0].id,s:20,occ:100,kind:'R'},{id:2,cx:220,cz:100,edge:es[1].id,s:20,workers:100,kind:'O'}];
+  const gen=assignTraffic(w.net,blds,{total:100,lines:[{id:1,mode:'rail',stops:[{x:40,z:100},{x:220,z:100}]}],rng:()=>.2});let r;do{r=gen.next();}while(!r.done);
+  assert(r.value.rail>0&&r.value.car===0,'rail did not bridge disconnected streets');
+});
+test('H: lightning dispatches a fire and sandbox can suppress damage', () => {
+  const make=()=>{const w=new World();w.newGame();const b=w.createBuilding({zone:1,cells:[100*N+100],level:1});const s=new Sim(w,{worker:false,sandbox:{noFires:false}});s.weather={type:'storm'};return{w,b,s};};
+  const {w,b,s}=make();for(let d=1;d<=100&&!w.hazards.lightning;d++){s.day=d;hazardTick(s);}assert(w.hazards.lightning&&b.fire,'no lightning fire');
+  const other=make();other.s.sandbox.noFires=true;other.s.day=s.day;hazardTick(other.s);assert(other.w.hazards.lightning&&!other.b.fire,'sandbox fire suppression ignored');
+});
+
 // ------------------------------------------------------------------ runner
 const filter = process.argv[2];
 let failed = 0;
 for (const t of tests) {
   if (filter && !t.name.includes(filter)) continue;
   const t0 = Date.now();
-  try { t.fn(); console.log(`  ok   ${t.name} (${Date.now() - t0} ms)`); }
+  try { await t.fn(); console.log(`  ok   ${t.name} (${Date.now() - t0} ms)`); }
   catch (e) { failed++; console.log(`  FAIL ${t.name}\n       ${e.message}`); }
 }
 console.log(failed ? `\n${failed} failing` : '\nall passing');

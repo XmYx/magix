@@ -2,7 +2,7 @@
 import { FLOORS, ZONES, FLOOR_H } from './config.js';
 import { hash2 } from './util.js';
 export const START_ERAS = [1800, 1900, 2000];
-export const TERRACE_SERVICES = ['parkS', 'parkL', 'plaza', 'clinic', 'school', 'fire', 'police', 'busstop', 'busdepot', 'depot', 'tower', 'wind'];
+export const TERRACE_SERVICES = ['parkS', 'parkL', 'plaza', 'clinic', 'school', 'college', 'fire', 'police', 'busstop', 'busdepot', 'depot', 'tower', 'wind'];
 export function technology(year = 2000) {
   const heightLimit = year < 1900 ? 3 + Math.floor(Math.max(0, year - 1800) / 15)
     : year < 2000 ? 10 + Math.floor((year - 1900) * 0.3) : 40 + Math.floor((year - 2000) * 0.8);
@@ -17,7 +17,7 @@ export function buildingFloors(b, world) {
   const extra = tall && b.level >= 3 ? Math.floor(Math.max(0, year-2000) * (b.level-2) * 0.28) : 0;
   // a stable per-building factor (0.6–1.6×) gives dense blocks a ragged, real-city skyline
   const vary = tall && b.level >= 2 ? 0.6 + hash2(b.id, b.level, 97) : 1;
-  return Math.max(1, Math.min(Math.round((base+extra) * vary), tech.heightLimit, policy?.maxFloors > 0 ? policy.maxFloors : Infinity));
+  return Math.max(1, Math.min(Math.round((base+extra) * vary), tech.heightLimit, policy?.maxFloors > 0 ? policy.maxFloors : Infinity, world.ordinances?.highrise ? 8 : Infinity));
 }
 
 // Automatic aerial trunk links join dense, road-connected hubs. They never grant

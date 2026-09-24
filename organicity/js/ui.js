@@ -1,9 +1,19 @@
+import { TRANSIT, transitMode } from './transit.js';
 // Organicity — DOM interface: HUD, tool dock, panels, tooltips and toasts.
-import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS } from './config.js';
+import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS, ORDINANCES } from './config.js';
 import { fmtMoney, fmtInt, clamp } from './util.js';
 import { TERRACE_SERVICES, buildingFloors, massPlan } from './eras.js';
 import { WEATHER } from './weather.js';
 import { PROB } from './sim.js';
+import { TUTORIAL, SCENARIOS } from './scenarios.js';
+import { encodeSave, shareLink, download } from './share.js';
+import { makeSave } from './save.js';
+
+const SETTINGS_KEY = 'organicity-settings';
+export function loadSettings() {
+  try { return { palette: 'default', reducedMotion: matchMedia?.('(prefers-reduced-motion: reduce)').matches || false, uiScale: 1, lod: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { palette: 'default', reducedMotion: false, uiScale: 1, lod: true }; }
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -22,11 +32,14 @@ const CATS = [
   { id: 'util', key: '4', label: 'Utilities', glyph: 'ϟ' },
   { id: 'svc', key: '5', label: 'Services', glyph: '✚' },
   { id: 'district', key: '6', label: 'Districts', glyph: '◇' },
-  { id: 'lines', key: 'L', label: 'Bus lines', glyph: '⊶' },
+  { id: 'lines', key: 'L', label: 'Transit lines', glyph: '⊶' },
   { id: 'bulldoze', key: '7', label: 'Bulldoze', glyph: '✖' },
   { id: 'overlays', key: '8', label: 'Overlays', glyph: '◐', panel: true },
   { id: 'budget', key: '9', label: 'Budget', glyph: '₵', panel: true },
-  { id: 'terrain', key: 'T', label: 'Terrain', glyph: '≈', sandbox: true },
+  { id: 'people', key: 'Y', label: 'Society', glyph: '☺', panel: true },
+  { id: 'advisors', key: 'N', label: 'Advisors', glyph: '✉', panel: true },
+  { id: 'region', key: 'R', label: 'Region', glyph: '⇄', panel: true },
+  { id: 'terrain', key: 'T', label: 'Terrain', glyph: '≈' },
   { id: 'sandbox', key: '', label: 'Sandbox', glyph: '⚙', panel: true, sandbox: true },
 ];
 
@@ -58,6 +71,9 @@ export class UI {
         <button id="mUndo" title="Undo (Ctrl+Z)">↶ Undo</button>
         <button id="mDay" title="Day/night: cycle, always day, always night"></button>
         <button id="mPix" title="Pixel size">▣ <span></span></button>
+        <button id="mPhoto" title="Photo mode (P)">◘ Photo</button>
+        <button id="mShare" title="Share this city as a link or file">Share</button>
+        <button id="mSet" title="Sound, accessibility and graphics">⚙</button>
         <button id="mSave" title="Save to this browser">Save</button>
         <button id="mNew" title="Start a new city">New</button>
         <button id="mHelp" title="How to play">Help</button>
@@ -73,6 +89,10 @@ export class UI {
     $('mUndo').addEventListener('click', () => this.tools.undo());
     $('mNew').addEventListener('click', () => { if (confirm('Start a new city? Unsaved progress will be lost.')) this.actions.newCity(); });
     $('mHelp').addEventListener('click', () => this.actions.help());
+    $('mPhoto').addEventListener('click', () => this.togglePhoto());
+    $('mShare').addEventListener('click', () => this.togglePanel('share'));
+    $('mSet').addEventListener('click', () => this.togglePanel('settings'));
+    $('news').addEventListener('click', () => this.togglePanel('advisors'));
   }
 
   hud() {
@@ -147,8 +167,8 @@ export class UI {
         break;
       case 'util': case 'svc':
         h = `<div class="row">${Object.entries(SERVICES).filter(([key, S]) => S.cat === s.tool && (!s.platform || TERRACE_SERVICES.includes(key))).map(([k, S]) => {
-          const locked = S.landmark && this.sim.stats.pop < S.landmark && !this.sim.sandbox, built = S.landmark && [...this.w.buildings.values()].some((b) => b.svc === k);
-          return `<button class="${s.svc === k ? 'on' : ''}" data-svc="${k}" title="${esc(S.desc)}${S.landmark ? ` Landmark: unlocks at ${fmtInt(S.landmark)} people; ₵${fmtInt(S.tourism)}/month tourism.` : ''}" ${locked || built ? 'disabled' : ''}>${S.landmark ? '★ ' : ''}${S.name}<small>${locked ? `pop ${fmtInt(S.landmark)}` : built ? 'built' : fmtMoney(S.cost)}</small></button>`;
+          const need = S.landmark || S.unlock, locked = need && this.sim.stats.pop < need && !this.sim.sandbox, built = S.landmark && [...this.w.buildings.values()].some((b) => b.svc === k);
+          return `<button class="${s.svc === k ? 'on' : ''}" data-svc="${k}" title="${esc(S.desc)}${S.landmark ? ` Landmark: unlocks at ${fmtInt(S.landmark)} people; ₵${fmtInt(S.tourism)}/month tourism.` : ''}" ${locked || built ? 'disabled' : ''}>${S.landmark ? '★ ' : ''}${S.name}<small>${locked ? `pop ${fmtInt(need)}` : built ? 'built' : fmtMoney(S.cost)}</small></button>`;
         }).join('')}</div>
           <p class="hint">${esc(SERVICES[s.svc].desc)} Upkeep ${fmtMoney(SERVICES[s.svc].upkeep)}/month. ${s.platform ? `Placing on terrace #${s.platform}. Click inside the deck. <button data-ground="1">Return to ground</button>` : 'Placement snaps to the nearest road.'}</p>`;
         break;
@@ -160,12 +180,12 @@ export class UI {
         break;
       }
       case 'terrain':
-        h = `<div class="row"><button class="${s.water ? 'on' : ''}" data-water="1"><span class="sw" style="background:#4a8ac8"></span>Water</button><button class="${!s.water ? 'on' : ''}" data-water="0"><span class="sw" style="background:#7ab04a"></span>Land</button>${brush}</div>
-          <p class="hint">Sandbox terrain: paint lakes, rivers and coastline, or fill water in. Roads crossing new water become bridges; buildings in the way are removed.</p>`;
+        h = `<div class="row"><button data-terrain-mode="levee" class="${s.terrainMode==='levee'?'on':''}">Levee · ₵12/cell</button><button data-terrain-mode="removeLevee">Remove levee</button>${this.sim.sandbox ? `<button class="${s.water ? 'on' : ''}" data-water="1"><span class="sw" style="background:#4a8ac8"></span>Water</button><button class="${!s.water ? 'on' : ''}" data-water="0"><span class="sw" style="background:#7ab04a"></span>Land</button>` : ''}${brush}</div>
+          <p class="hint">Paint continuous levees on empty land to hold back floods; roads and buildings leave gaps. Levees stand 3 units tall. Storm drains reduce local flood depth. Snowplow depots clear roads. Sandbox also allows water editing.</p>`;
         break;
       case 'lines':
-        h = `<div class="row"><button data-show-lines="1">Manage lines (${this.w.lines.length})</button></div>
-          <p class="hint">Click bus stops in the order buses should visit them, then press Enter or right-click. Lines need a bus depot on the same road network; riders are trips whose home and destination both sit near stops of one line.</p>`;
+        h = `<div class="row">${Object.entries(TRANSIT).map(([k,m])=>`<button data-transit-mode="${k}" class="${s.transitMode===k?'on':''}">${m.name}<small>Tracks ₵${m.trackCost}/unit</small></button>`).join('')}<button data-show-lines="1">Manage lines (${this.w.lines.length})</button></div>
+          <p class="hint">Select a mode, place its stations in Services, then click them in order and press Enter. Buses need a depot; trams follow roads. Rail builds elevated tracks; metro builds tunnels. Track costs are charged on completion. Capacity limits leave excess riders driving.</p>`;
         break;
       case 'bulldoze': h = '<p class="hint">Click a building or road segment to remove it. Services refund 40%. Ctrl+Z undoes.</p>'; break;
       default: h = '<p class="hint">Click buildings, roads or land for details. Right-drag rotates · middle-drag or Shift+right-drag pans · wheel zooms · WASD moves · Q/E turn.</p>';
@@ -180,7 +200,8 @@ export class UI {
     if (d.road) t.set({ road: d.road });
     if (d.curve) t.set({ curve: d.curve === '1' });
     if (d.oneway) t.set({ oneway: !t.s.oneway });
-    if (d.water) t.set({ water: +d.water });
+    if (d.water) t.set({ water: +d.water,terrainMode:'water' });
+    if(d.terrainMode)t.set({terrainMode:d.terrainMode});
     if (d.layer) t.set({ layer: +d.layer });
     if (d.parallel) t.set({ parallel: +d.parallel });
     if (d.upgrade) t.set({ upgrade: !t.s.upgrade });
@@ -188,6 +209,7 @@ export class UI {
     if (d.fill) t.set({ fill: d.fill === '1', place: 0 });
     if (d.place) t.set({ place: t.s.place === +d.place ? 0 : +d.place });
     if (d.svc) t.set({ svc: d.svc });
+    if (d.transitMode) {t.lineStops=[];t.set({transitMode:d.transitMode});}
     if (d.showLines) this.showLines();
     if (d.dist) {
       if (d.dist === 'new') { const nd = this.w.newDistrict(); if (nd) { t.set({ district: nd.id, dErase: false }); this.showDistrict(nd.id); } else this.toast('District limit reached', 'warn'); }
@@ -214,6 +236,12 @@ export class UI {
     if (name === 'overlays') this.openPanel('overlays', 'Info overlays', () => this.overlayHtml());
     if (name === 'sandbox') this.openPanel('sandbox', 'Sandbox', () => this.sandboxHtml());
     if (name === 'lines') this.showLines();
+    if (name === 'people') this.openPanel('people', 'Society & ordinances', () => this.peopleHtml());
+    if (name === 'advisors') this.openPanel('advisors', 'Advisors & news', () => this.advisorsHtml());
+    if (name === 'region') this.openPanel('region', 'Region & trade', () => this.regionHtml());
+    if (name === 'share') this.openPanel('share', 'Share this city', () => this.shareHtml());
+    if (name === 'settings') this.openPanel('settings', 'Settings', () => this.settingsHtml());
+    if (name === 'overlays' || name === 'budget') this.sim.tutorialFlags[name] = true;
   }
   renderPanel(force) {
     if (!this.panelFn) return;
@@ -229,6 +257,16 @@ export class UI {
   }
 
   bindPanel(el) {
+    el.querySelectorAll('[data-ord]').forEach((c) => { c.onchange = () => { this.sim.setOrdinance(c.dataset.ord, c.checked); this.renderPanel(true); }; });
+    el.querySelectorAll('[data-advov]').forEach((b) => { b.onclick = () => { this.r.setOverlay(b.dataset.advov); this.toast(`Overlay: ${OVERLAYS[b.dataset.advov].name}`, 'info'); }; });
+    el.querySelector('[data-share-link]')?.addEventListener('click', async () => {
+      try { const url = shareLink(await encodeSave(makeSave(this.w, this.sim))); await navigator.clipboard.writeText(url); this.toast(`Link copied (${Math.round(url.length / 1024)} KB). Anyone opening it gets a copy of this city.`, 'good'); }
+      catch (e) { this.toast('Could not copy the link: ' + e.message, 'bad'); }
+    });
+    el.querySelector('[data-share-file]')?.addEventListener('click', () => download(`organicity-${this.w.seed}-${this.sim.year}.organicity`, JSON.stringify(makeSave(this.w, this.sim)), 'application/json'));
+    el.querySelectorAll('[data-set]').forEach((c) => { c.onchange = () => { const S = loadSettings(), k = c.dataset.set; S[k] = k === 'palette' ? (c.checked ? 'cb' : 'default') : c.type === 'checkbox' ? c.checked : c.type === 'range' || k === 'uiScale' ? +c.value : c.value; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch { /* ignore */ } this.applySettings(); }; });
+    el.querySelector('[data-vol]')?.addEventListener('input', (e) => { this.audio?.setVolume(+e.target.value / 100); e.target.nextElementSibling.textContent = e.target.value + '%'; });
+    el.querySelector('[data-mute]')?.addEventListener('change', (e) => { if (this.audio && this.audio.muted !== e.target.checked) this.audio.toggleMute(); });
     el.querySelector('[data-era-advance]')?.addEventListener('click',()=>{this.sim.advanceEra();this.hud();this.renderPanel(true);});
     // build a new deck at the chosen floor, or expand an existing deck by id
     const makeDeck = (plan, label) => {
@@ -304,6 +342,7 @@ export class UI {
     q('[data-style]').addEventListener('change', (e) => { P.style = e.target.value; this.touchDistrict(dId); });
     q('[data-green]').addEventListener('change', (e) => { P.green = e.target.checked; });
     q('[data-historic]').addEventListener('change', (e) => { P.historic = e.target.checked; });
+    q('[data-carfree]').addEventListener('change', (e) => { P.carFree = e.target.checked; });
     q('[data-ddel]').addEventListener('click', () => {
       if (!confirm(`Dissolve ${D.name}? Buildings stay; the district and its policies are removed.`)) return;
       for (let i = 0; i < this.w.district.length; i++) if (this.w.district[i] === dId) this.w.district[i] = 0;
@@ -354,8 +393,8 @@ export class UI {
         <tr><td>Residential tax</td><td class="pos">${m(inc.R)}</td></tr><tr><td>Commercial tax</td><td class="pos">${m(inc.C)}</td></tr>
         <tr><td>Industrial tax</td><td class="pos">${m(inc.I)}</td></tr><tr><td>Office tax</td><td class="pos">${m(inc.O)}</td></tr>
         <tr><td>Services upkeep</td><td class="neg">-${m(exp.services)}</td></tr><tr><td>Utilities upkeep</td><td class="neg">-${m(exp.utilities)}</td></tr>
-        <tr><td>Bus fares</td><td class="pos">${m(inc.fares)}</td></tr><tr><td>Tourism</td><td class="pos">${m(inc.tourism)}</td></tr><tr><td>Utility exports</td><td class="pos">${m(inc.trade)}</td></tr>
-        <tr><td>Utility imports</td><td class="neg">-${m(exp.imports)}</td></tr><tr><td>District policies</td><td class="neg">-${m(exp.policies)}</td></tr>
+        <tr><td>Bus fares</td><td class="pos">${m(inc.fares)}</td></tr><tr><td>Tourism</td><td class="pos">${m(inc.tourism)}</td></tr><tr><td>Utility exports</td><td class="pos">${m(inc.trade)}</td></tr><tr><td>Goods exports</td><td class="pos">${m(inc.exports)}</td></tr>
+        <tr><td>Utility imports</td><td class="neg">-${m(exp.imports)}</td></tr><tr><td>District policies</td><td class="neg">-${m(exp.policies)}</td></tr><tr><td>Ordinances</td><td class="neg">-${m(exp.ordinances)}</td></tr>
         <tr><td>Road maintenance</td><td class="neg">-${m(exp.roads)}</td></tr><tr><td>Bus lines</td><td class="neg">-${m(exp.transit)}</td></tr><tr><td>Traffic signals</td><td class="neg">-${m(exp.junctions)}</td></tr><tr><td>Loan payments</td><td class="neg">-${m(exp.debt)}</td></tr>
         <tr class="sum"><td>Net</td><td class="${st.incomeM - st.expenseM < 0 ? 'neg' : 'pos'}">${fmtMoney(st.incomeM - st.expenseM)}</td></tr>
       </table>
@@ -384,6 +423,79 @@ export class UI {
       <p class="dim">From 2050, completed level-3+ buildings with at least 12 floors become sky hubs. Up to ${Math.round(s.sky.share*100)}% of hub residents' trips fly to the hub nearest their destination, while both pads have capacity (taller towers handle more); the rest drive. Skybridges join nearby towers from 2000 and share their service coverage.</p>
       <h3>Simulation</h3>
       <p class="dim">Coverage, land value &amp; traffic run ${s.host.mode === 'worker' ? 'in a Web Worker' : 'on the main thread'} (${s.coreJob.ms.toFixed(1)} ms per pass) · ${s.jobs.map((j) => `${j.name} ${j.ms.toFixed(1)} ms`).join(' · ')} · ${fmtInt(this.w.buildings.size)} buildings · ${fmtInt(this.w.net.edges.size)} road segments</p>`;
+  }
+
+  peopleHtml() {
+    const s = this.sim, st = s.stats, pop = Math.max(1, st.pop), pct = (v) => `${Math.round(v * 100)}%`;
+    const load = (used, cap, label) => cap ? `<tr><td>${label}</td><td>${bar(clamp(1.25 - used / cap, 0, 1))} ${fmtInt(used)} / ${fmtInt(cap)}</td></tr>` : `<tr><td>${label}</td><td class="neg">none built</td></tr>`;
+    return `
+      <h3>Population</h3>
+      <table class="kv">
+        <tr><td>Children</td><td>${fmtInt(st.kids)} · ${pct(st.kids / pop)}</td></tr>
+        <tr><td>Working age</td><td>${fmtInt(st.adults)} · ${pct(st.adults / pop)}</td></tr>
+        <tr><td>Retirees</td><td>${fmtInt(st.seniors)} · ${pct(st.seniors / pop)}</td></tr>
+      </table>
+      <p class="dim">New homes attract young families; neighbourhoods age with their buildings, so older districts need more care and fewer school seats. Retirees pay about half the income tax. Redevelopment brings in new, younger residents.</p>
+      <h3>Education</h3>
+      <table class="kv">
+        ${load(st.kids, st.seats, 'School seats')}
+        ${load(st.adults * 0.1, st.hiSeats, 'College & university seats')}
+        <tr><td>Schooled</td><td>${bar(st.eduRate)} ${pct(st.eduRate)}</td></tr>
+        <tr><td>Graduates</td><td>${bar(st.hiEdu / 0.5)} ${pct(st.hiEdu)}</td></tr>
+      </table>
+      <p class="dim">School → college (unlocks at 1,500 people) → university (5,000). Graduates staff top-level offices (level 5 needs 20%) and tech firms, which need a university nearby.</p>
+      <h3>Health & safety</h3>
+      <table class="kv">
+        ${load(st.pop + st.seniors * 2, st.patients, 'Clinic places (retirees count triple)')}
+        <tr><td>Illness</td><td class="${st.sick ? 'neg' : ''}">${st.sick ? `${st.sick} buildings affected` : 'none'}</td></tr>
+      </table>
+      <p class="dim">Homes without clinic cover, or with overloaded clinics, risk outbreaks that spread to neighbours. Crime follows density; police and schools reduce it (Crime overlay).</p>
+      <h3>Ordinances</h3>
+      ${Object.entries(ORDINANCES).map(([k, o]) => `<label class="chk"><input type="checkbox" data-ord="${k}" ${s.ordinances[k] ? 'checked' : ''}> <b>${o.name}</b> ${o.cost ? `· ₵${fmtInt(o.cost)}/mo` : ''}<br><span class="dim">${o.desc}</span></label>`).join('')}`;
+  }
+
+  advisorsHtml() {
+    const s = this.sim, list = s.advisors(), MOOD = { good: '●', warn: '▲', bad: '■' };
+    return `<div class="advisors">${list.map((a) => `<div class="adv ${a.mood}"><b>${MOOD[a.mood]} ${a.who}</b><p>${esc(a.text)}</p>${a.ov ? `<button data-advov="${a.ov}">Show ${OVERLAYS[a.ov].name.toLowerCase()}</button>` : ''}</div>`).join('')}</div>
+      <h3>City news</h3>
+      <ul class="newslist">${s.news.slice(-14).reverse().map((n) => `<li class="${n.kind}"><small>${n.year} · ${MONTHS[Math.floor((n.day % 360) / MONTH_DAYS)]}</small> ${esc(n.text)}</li>`).join('') || '<li class="dim">No news yet.</li>'}</ul>`;
+  }
+
+  regionHtml() {
+    const s = this.sim, st = s.stats, reg = s.regionList(), mk = s.market(), inc = st.inc || {}, P = reg.reduce((t, r) => t + (r.connected ? r.pop : 0), 0);
+    const price = (v) => `<span class="${v >= 1 ? 'pos' : 'neg'}">${Math.round(v * 100)}%</span>`;
+    return `<h3>Neighbouring cities</h3>
+      <table class="kv">${reg.map((r) => `<tr><td>${esc(r.name)}</td><td>${fmtInt(r.pop)} people${r.connected ? ` · ${fmtInt(P ? (st.commuters * r.pop) / P : 0)} commute in` : ' · <span class="dim">no road link</span>'}</td></tr>`).join('') || '<tr><td colspan="2" class="dim">No highway exits.</td></tr>'}</table>
+      <p class="dim">One neighbour sits beyond each highway exit. They grow over time, faster while trading with you, and bigger neighbours pay more for goods.</p>
+      <h3>Markets (vs. usual price)</h3>
+      <table class="kv">
+        <tr><td>Goods (industry exports)</td><td>${price(mk.goods)} · ${fmtMoney((inc.exports || 0) * MONTH_DAYS)}/mo</td></tr>
+        <tr><td>Electricity</td><td>${price(mk.power)} · sell ₵${Math.round(18 * mk.power)}/MW · buy ₵${Math.round(45 * mk.power)}</td></tr>
+        <tr><td>Water</td><td>${price(mk.water)} · sell ₵${Math.round(5 * mk.water)} · buy ₵${Math.round(12.5 * mk.water)}</td></tr>
+      </table>
+      <p class="dim">Prices swing with the seasons: power is dear in winter, water in heatwaves. Utility trade is set in the Budget.</p>
+      <h3>Commuting</h3>
+      <table class="kv"><tr><td>Workers commuting in</td><td>${fmtInt(st.commuters)}</td></tr><tr><td>Residents working outside</td><td>${fmtInt(st.outJobs || 0)}</td></tr></table>`;
+  }
+
+  shareHtml() {
+    return `<p>Send this city to someone: the whole save travels inside the link or file, so nothing is uploaded.</p>
+      <div class="row"><button class="primary" data-share-link>Copy share link</button><button data-share-file>Download .organicity file</button></div>
+      <p class="dim">To open a shared city, visit its link, or use <b>Import city…</b> on the start screen. Large cities make long links; files work at any size. Use Photo mode (P) for screenshots.</p>`;
+  }
+
+  settingsHtml() {
+    const S = loadSettings(), a = this.audio;
+    return `<h3>Sound</h3>
+      <label class="rng wide">Volume<input type="range" min="0" max="100" value="${Math.round((a?.volume ?? 0.6) * 100)}" data-vol><b>${Math.round((a?.volume ?? 0.6) * 100)}%</b></label>
+      <label class="chk"><input type="checkbox" data-mute ${a?.muted ? 'checked' : ''}> Mute</label>
+      <p class="dim">A generated soundscape: city hum, nearby traffic, rain, sirens, birds in quiet older towns and a synth pad after 2050. Starts after your first click.</p>
+      <h3>Accessibility</h3>
+      <label class="chk"><input type="checkbox" data-set="palette" value="cb" ${S.palette === 'cb' ? 'checked' : ''}> Colour-blind friendly overlays (purple → teal → yellow)</label>
+      <label class="chk"><input type="checkbox" data-set="reducedMotion" ${S.reducedMotion ? 'checked' : ''}> Reduced motion: no rain, smoke or vehicle easing</label>
+      <label>Interface size <select data-set="uiScale">${[0.85, 1, 1.15, 1.3, 1.5].map((v) => `<option value="${v}" ${+S.uiScale === v ? 'selected' : ''}>${Math.round(v * 100)}%</option>`).join('')}</select></label>
+      <h3>Graphics</h3>
+      <label class="chk"><input type="checkbox" data-set="lod" ${S.lod !== false ? 'checked' : ''}> Simplify distant buildings (faster on big cities)</label>`;
   }
 
   sandboxHtml() {
@@ -452,6 +564,8 @@ export class UI {
           <tr><td>Happiness</td><td>${bar(b.happy)}</td></tr>
           <tr><td>Appeal</td><td>${bar(b.appeal)}</td></tr>
           <tr><td>Land value</td><td>${bar(b.lv ?? 0)}</td></tr>
+          ${b.hh ? `<tr><td>Residents</td><td>${fmtInt(b.kids || 0)} children · ${fmtInt(Math.max(0, (b.occ || 0) * 2.6 - (b.kids || 0) - (b.seniors || 0)))} adults · ${fmtInt(b.seniors || 0)} retirees</td></tr>
+          <tr><td>Health</td><td>${b.sick ? '<span class="neg">Illness outbreak</span>' : `${bar(b.health || 0)}`}</td></tr>` : ''}
           <tr><td>Utilities</td><td>power ${yes(b.power)} water ${yes(b.water)} sewer ${yes(b.sewage)} trash ${yes(b.garbOk)}</td></tr>
           <tr><td>To jobs / highway</td><td>${travelTime('job')} / ${travelTime('highway')}</td></tr>
           ${b.cong ? `<tr><td>Street traffic</td><td>${bar(b.cong, false)}</td></tr>` : ''}
@@ -516,7 +630,7 @@ export class UI {
       const ups = Object.entries(ROADS).filter(([k]) => k !== e.type && k !== 'highway');
       return `<table class="kv"><tr><td>Length</td><td>${Math.round(e.len * 1.5)} m</td></tr>
         <tr><td>Peak traffic</td><td>${fmtInt(e.flow)} / ${fmtInt(R.capacity)}</td></tr>
-        <tr><td>Congestion</td><td>${bar(e.cong || 0, false)} ${Math.round((e.cong || 0) * 100)}%</td></tr>
+        <tr><td>Snow / flood depth</td><td>${(e.snow||0).toFixed(2)} / ${(e.flood||0).toFixed(2)}</td></tr><tr><td>Congestion</td><td>${bar(e.cong || 0, false)} ${Math.round((e.cong || 0) * 100)}%</td></tr>
         <tr><td>Condition</td><td>${bar(e.cond)} ${Math.round(e.cond * 100)}%</td></tr>
         <tr><td>Speed</td><td>${Math.round((e.speedF || 1) * 100)}% of limit</td></tr>
         <tr><td>Flow ⇢ / ⇠</td><td>${fmtInt(e.fAB || 0)} / ${fmtInt(e.fBA || 0)}</td></tr>
@@ -545,17 +659,17 @@ export class UI {
   }
 
   showLines() {
-    this.openPanel('lines', 'Bus lines', () => {
+    this.openPanel('lines', 'Transit lines', () => {
       const w = this.w, s = this.sim;
-      if (!w.lines.length) return '<p class="dim">No lines yet. Place bus stops (Services), a bus depot, then use the Bus lines tool (L) to click stops in order.</p>';
+      if (!w.lines.length) return '<p class="dim">No lines yet. Select a mode in Transit lines (L), place its stations from Services, then connect them. Buses also need a depot.</p>';
       const modal = s.stats.modal;
       return `${modal ? `<p class="dim">Transit share of trips: ${Math.round((modal.transit / Math.max(1, modal.car + modal.transit + (modal.air || 0))) * 100)}%${modal.air ? ` · by air: ${Math.round((modal.air / Math.max(1, modal.car + modal.transit + modal.air)) * 100)}%` : ''}</p>` : ''}
-        <table class="kv">${w.lines.map((l) => {
+        <p>${modal ? ['car','bus','tram','rail','metro','air','walk','unserved'].map(k=>`${k}: ${fmtInt(modal[k]||0)}`).join(' · ') : ''}</p><table class="kv">${w.lines.map((l) => {
           const info = s.lineInfo?.get(l.id);
-          const state = !info ? 'waiting for depot' : !info.ok ? 'no route' : `${fmtInt(info.riders)} riders · ${Math.round(info.len * 1.5)} m${info.busLaneShare ? ` · ${Math.round(info.busLaneShare * 100)}% bus lane` : ''}`;
-          return `<tr><td><span class="sw" style="background:#${l.color.toString(16).padStart(6, '0')}"></span> ${esc(l.name)} · ${l.stops.length} stops</td><td>${state} <button data-line-del="${l.id}" title="Remove line">✕</button></td></tr>`;
+          const state = !info ? 'waiting for depot / power' : !info.ok ? 'no route' : `${fmtInt(info.riders)} riders · ${Math.round(info.len * 1.5)} m${info.busLaneShare ? ` · ${Math.round(info.busLaneShare * 100)}% bus lane` : ''}`;
+          return `<tr><td><span class="sw" style="background:#${l.color.toString(16).padStart(6, '0')}"></span> ${esc(l.name)} · ${transitMode(l).name} · ${l.stops.length} stops</td><td>${state} <button data-line-del="${l.id}" title="Remove line">✕</button></td></tr>`;
         }).join('')}</table>
-        <p class="dim">Each line costs ₵150 + ₵45 per stop a month and earns fares from its riders.</p>`;
+        <p class="dim">Monthly line costs: bus ₵150 + 45/stop; tram ₵400 + 70/stop; rail ₵900 + 140/stop; metro ₵1,200 + 180/stop. Stations have separate upkeep. Fares depend on mode.</p>`;
     });
   }
 
@@ -567,7 +681,7 @@ export class UI {
       const f = s.lvFactors(x, z), lv = s.at(s.f.lv, x, z), d = w.districts[w.district[ci]];
       const maxAbs = Math.max(0.05, ...f.map(([, v]) => Math.abs(v)));
       return `<table class="kv"><tr><td>Land value</td><td>${bar(lv)} ${Math.round(lv * 100)}%</td></tr>
-        <tr><td>Zone</td><td>${w.zone[ci] ? ZONES[w.zone[ci]].name : w.water[ci] ? 'Water' : w.road[ci] ? 'Road' : 'Unzoned'}</td></tr>
+        <tr><td>Elevation / flood depth</td><td>${w.heightAt(x,z).toFixed(1)} / ${(w.flood[ci]||0).toFixed(2)}</td></tr><tr><td>Snow / storm surge</td><td>${w.hazards.snow.toFixed(2)} / ${w.hazards.surge.toFixed(2)}</td></tr><tr><td>Zone</td><td>${w.zone[ci] ? ZONES[w.zone[ci]].name : w.water[ci] ? 'Water' : w.road[ci] ? 'Road' : 'Unzoned'}</td></tr>
         <tr><td>Road access</td><td>${w.accEdge[ci] >= 0 ? `${Math.round(w.accDist[ci] * 1.5)} m from kerb` : 'None (too deep or no road)'}</td></tr>
         ${d ? `<tr><td>District</td><td>${esc(d.name)}</td></tr>` : ''}</table>
         <h3>What drives appeal here</h3>
@@ -589,6 +703,7 @@ export class UI {
         <label class="rng wide">Max density level<input type="range" min="1" max="5" value="${P.maxLevel}" data-maxlevel><b>${P.maxLevel}</b></label>
         <label class="rng wide">Height limit (0 = technology ceiling)<input type="range" min="0" max="500" value="${P.maxFloors}" data-maxfloors><b>${P.maxFloors || 'Auto'}</b></label>
         <label class="chk"><input type="checkbox" ${P.historic ? 'checked' : ''} data-historic> Historic: freeze buildings as they are</label>
+        <label class="chk"><input type="checkbox" ${P.carFree ? 'checked' : ''} data-carfree> Car-free centre${this.sim.ordinances.carFree ? '' : ' (needs the car-free ordinance in Society)'}: a third of trips walk or cycle, quieter streets</label>
         <label class="chk"><input type="checkbox" ${P.green ? 'checked' : ''} data-green> Green industry: half the pollution, −20% industrial tax</label>
         <h3>Service priority</h3>
         <h3>Architecture</h3><select data-style>${Object.entries(STYLES).map(([k, v]) => `<option value="${k}" ${(P.style || 'auto') === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
@@ -622,7 +737,44 @@ export class UI {
   update(dt) {
     this.hudT += dt; this.panelT += dt;
     if (this.hudT > 0.25) { this.hudT = 0; this.hud(); }
-    if (this.panelT > 0.5) { this.panelT = 0; if (this.panelName !== 'district' && this.panelName !== 'sandbox') this.renderPanel(false); }
+    if (this.panelT > 0.5) { this.panelT = 0; if (!['district', 'sandbox', 'settings', 'share'].includes(this.panelName)) this.renderPanel(false); }
     for (const m of this.sim.messages) if (m.t > this.seenMsg) { this.seenMsg = m.t; this.toast(m.text, m.kind); }
+    this.newsT = (this.newsT || 0) + dt;
+    if (this.newsT > 1) { this.newsT = 0; this.ticker(); this.coach(); }
+  }
+
+  // ---------------------------------------------------------------- news, tutorial, photo mode, settings
+  ticker() {
+    const n = this.sim.news[this.sim.news.length - 1], el = $('news');
+    el.hidden = !n || document.body.classList.contains('photo');
+    if (n && el.dataset.k !== `${n.day}:${n.text}`) { el.dataset.k = `${n.day}:${n.text}`; el.className = n.kind; el.innerHTML = `<b>${n.year} · ${MONTHS[Math.floor((n.day % 360) / MONTH_DAYS)]}</b> ${esc(n.text)}`; }
+  }
+  coach() {
+    const el = $('coach'), s = this.sim;
+    if (s.scenario !== 'tutorial' || document.body.classList.contains('photo')) { el.hidden = true; return; }
+    const i = TUTORIAL.findIndex((t) => !t.done(s)); el.hidden = false;
+    el.innerHTML = i < 0 ? `<b>Tutorial complete!</b><p>You know the basics. Try the Advisors (N) when something goes wrong, and Society (Y) for education, health and ordinances.</p>`
+      : `<small>Step ${i + 1} of ${TUTORIAL.length}</small><b>${esc(TUTORIAL[i].label)}</b><p>${esc(TUTORIAL[i].hint)}</p><div class="dots">${TUTORIAL.map((t, k) => `<i class="${k < i ? 'on' : k === i ? 'now' : ''}"></i>`).join('')}</div>`;
+  }
+  togglePhoto(on = !document.body.classList.contains('photo')) {
+    document.body.classList.toggle('photo', on); this.r.photo = on; const el = $('photo');
+    if (!on) { this.r.photoTod = null; el.hidden = true; return; }
+    this.closePanel();
+    el.hidden = false;
+    el.innerHTML = `<label>Time of day <input type="range" min="0" max="100" value="${Math.round((this.r.tod ?? 0.3) * 100)}" data-tod></label>
+      <label class="chk"><input type="checkbox" data-live checked> Live clock</label>
+      <button data-shot class="primary">Save PNG</button><button data-exit>Exit (P)</button>
+      <span class="dim">WASD move · Q/E turn · right-drag to tilt low</span>`;
+    const tod = el.querySelector('[data-tod]'), live = el.querySelector('[data-live]');
+    tod.oninput = () => { live.checked = false; this.r.photoTod = +tod.value / 100; };
+    live.onchange = () => { this.r.photoTod = live.checked ? null : +tod.value / 100; };
+    el.querySelector('[data-shot]').onclick = () => { el.hidden = true; download(`organicity-${this.sim.year}-${Date.now() % 100000}.png`, this.r.capture()); el.hidden = false; this.toast('Screenshot saved.', 'good'); };
+    el.querySelector('[data-exit]').onclick = () => this.togglePhoto(false);
+  }
+  applySettings() {
+    const S = loadSettings();
+    this.r.applySettings(S);
+    document.documentElement.style.setProperty('--ui-scale', String(S.uiScale || 1));
+    document.body.classList.toggle('reduced-motion', !!S.reducedMotion);
   }
 }

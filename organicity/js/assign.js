@@ -6,18 +6,20 @@
 // Bus lines take a share of trips whose ends both sit near stops of the same line.
 // A weighted sample of the assigned routes is returned for the visible vehicles.
 import { ROADS, JUNCTIONS } from './config.js';
+import { transitMode, trackLength } from './transit.js';
 import { RoadNet } from './roads.js';
 
 // Rebuild a road network from core.js netSnapshot() data (used by both workers).
 export function netFromSnapshot(snap) {
   const net = new RoadNet();
   for (const [id, x, z, o, ctl] of snap.nodes) net.addNode(x, z, !!o, id).control = ctl || 'auto';
-  for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane, fab, fba] of snap.edges) {
+  for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane, fab, fba, heights, hazardSpeed, speedF] of snap.edges) {
     const e = net.addEdge(net.nodes.get(a), net.nodes.get(b), { x: cx, z: cz }, type, cond, id);
-    e.oneway = ow; e.layer = layer || 0; e.busLane = !!lane;
+    e.heights=heights; e.snapshotSpeed=speedF; e.hazardSpeed=hazardSpeed ?? 1; e.oneway = ow; e.layer = layer || 0; e.busLane = !!lane;
     e.fAB = fab ?? flow / 2; e.fBA = fba ?? flow / 2;
   }
   updateCosts(net);
+  for(const e of net.edges.values())if(e.snapshotSpeed!=null){e.speedF=e.snapshotSpeed;e.cost=e.len/(ROADS[e.type].speed*e.speedF);}
   return net;
 }
 
@@ -43,7 +45,7 @@ export function updateCosts(net, weatherSpeed = 1) {
   for (const e of net.edges.values()) {
     e.flow = (e.fAB || 0) + (e.fBA || 0);
     e.cong = Math.max(e.fAB || 0, e.fBA || 0) / dirCapacity(e);
-    e.speedF = Math.max(0.2, 1 / (1 + 0.8 * Math.pow(e.cong, 4))) * (0.65 + 0.35 * (e.cond ?? 1)) * weatherSpeed;
+    e.speedF = Math.max(0.2, 1 / (1 + 0.8 * Math.pow(e.cong, 4))) * (0.65 + 0.35 * (e.cond ?? 1)) * weatherSpeed * (e.hazardSpeed ?? 1);
     e.cost = e.len / (ROADS[e.type].speed * e.speedF);
   }
   for (const n of net.nodes.values()) {
@@ -90,29 +92,36 @@ function clusters(net, blds) {
     if (b.svc || b.ab || b.construction || b.edge < 0 || !net.edges.has(b.edge)) continue;
     const key = `${Math.floor(b.cx / CLUSTER)},${Math.floor(b.cz / CLUSTER)}`;
     let c = map.get(key);
-    if (!c) map.set(key, (c = { key, prod: 0, jobs: 0, shops: 0, ind: 0, anchor: null, best: -1, sky: 0, x: 0, z: 0, n: 0 }));
+    if (!c) map.set(key, (c = { key, prod: 0, jobs: 0, shops: 0, ind: 0, anchor: null, best: -1, sky: 0, carFree: 0, x: 0, z: 0, n: 0 }));
     c.prod += b.occ || 0; c.jobs += b.workers || 0;
     if (b.kind === 'C' || b.kind === 'M') c.shops += (b.workers || 0) + 1;
     if (b.kind === 'I') c.ind += (b.workers || 0) + 1;
     if (b.sky) c.sky += b.occ || 0;
+    if (b.carFree) c.carFree++;
     c.x += b.cx; c.z += b.cz; c.n++;
     const wgt = (b.occ || 0) + (b.workers || 0) + 0.1;
     if (wgt > c.best) { c.best = wgt; c.anchor = b; }
   }
-  for (const c of map.values()) { c.x /= c.n; c.z /= c.n; }
+  for (const c of map.values()) { c.x /= c.n; c.z /= c.n; c.carFree /= c.n; }
   return [...map.values()];
 }
 
 // lines: [{ id, stops: [{ edge, s, x, z }], busLaneShare }]
-function lineServing(lines, a, b) {
+function lineServing(lines, a, b, boost = 1, carTime = 30) {
   let best = null;
   for (const l of lines) {
-    let ia = -1, ib = -1;
+    const mode=transitMode(l); let ia = -1, ib = -1;
     l.stops.forEach((st, i) => {
-      if (ia < 0 && Math.hypot(st.x - a.x, st.z - a.z) <= STOP_WALK) ia = i;
-      if (Math.hypot(st.x - b.x, st.z - b.z) <= STOP_WALK) ib = i;
+      if (ia < 0 && Math.hypot(st.x - a.x, st.z - a.z) <= mode.walk) ia = i;
+      if (Math.hypot(st.x - b.x, st.z - b.z) <= mode.walk) ib = i;
     });
-    if (ia >= 0 && ib >= 0 && ia !== ib) { const share = 0.3 + 0.15 * (l.busLaneShare || 0); if (!best || share > best.share) best = { line: l, share }; }
+    if (ia >= 0 && ib >= 0 && ia !== ib) {
+      let ride=0;for(let i=ia;i!==ib;i=(i+1)%l.stops.length){const p=l.stops[i],q=l.stops[(i+1)%l.stops.length];ride+=l.legs?.[i] ?? Math.hypot(p.x-q.x,p.z-q.z);}
+      const walk=(Math.hypot(l.stops[ia].x-a.x,l.stops[ia].z-a.z)+Math.hypot(l.stops[ib].x-b.x,l.stops[ib].z-b.z))/1.4;
+      const time=walk+6+ride/(mode.speed*(l.speedF||1));
+      const share=Math.min(.8,Math.max(.08,carTime/(carTime+time))*(.75+.15*(l.busLaneShare||0))*boost);
+      if(!best||time<best.time)best={line:l,share,time};
+    }
   }
   return best;
 }
@@ -125,10 +134,10 @@ function nearHub(hubs, p) {
   return best;
 }
 
-// opts: { total, commuters, weatherSpeed, skyShare, hubs: [{ id, x, z, cap }], lines, rng }
+// opts: { total, commuters, weatherSpeed, skyShare, hubs: [{ id, x, z, cap }], lines, transitBoost, rng }
 export function* assignTraffic(net, blds, opts) {
   const fAB = new Map(), fBA = new Map(), riders = new Map(), samples = [], airOD = new Map(), hubLoad = new Map();
-  const out = { fAB, fBA, riders, samples, airOD, hubLoad, car: 0, transit: 0, air: 0 };
+  const out = { fAB, fBA, riders, samples, airOD, hubLoad, car: 0, transit: 0, bus: 0, tram: 0, rail: 0, metro: 0, air: 0, walk: 0, unserved: 0 };
   const hubs = opts.hubs || [];
   const cl = clusters(net, blds);
   const origins = cl.filter((c) => c.prod > 0), jobs = cl.filter((c) => c.jobs > 0.5), shops = cl.filter((c) => c.shops > 0), ind = cl.filter((c) => c.ind > 0);
@@ -166,18 +175,21 @@ export function* assignTraffic(net, blds, opts) {
         const amounts = []; let norm = 0;
         for (const d of dests) {
           if (d === o && dests.length > 1) continue;
-          const t = net.costTo(res, net.edges.get(d.anchor.edge), d.anchor.s);
-          if (!isFinite(t)) continue;
+          let t = net.costTo(res, net.edges.get(d.anchor.edge), d.anchor.s);
+          if (!isFinite(t)) {const alternative=lineServing(lines,o,d,opts.transitBoost||1,60);if(!alternative)continue;t=alternative.time;}
           const wgt = weightOf(d) * Math.exp(-t / decay); amounts.push([d, wgt]); norm += wgt;
         }
         if (!norm) continue;
         const trips = budget * share * (o.prod / P);
         for (const [d, wgt] of amounts) {
           let amount = trips * wgt / norm;
-          const bus = lines.length && lineServing(lines, o, d);
-          if (bus) { const moved = amount * bus.share; amount -= moved; out.transit += moved; riders.set(bus.line.id, (riders.get(bus.line.id) || 0) + moved); }
+          // car-free centres: a third of the trips touching them walk or cycle instead
+          const cf = 0.35 * Math.max(o.carFree, d.carFree || 0); if (cf) { out.walk += amount * cf; amount -= amount * cf; }
+          const carTime=net.costTo(res,net.edges.get(d.anchor.edge),d.anchor.s);
+          const bus = lines.length && lineServing(lines.filter(l=>(riders.get(l.id)||0)<transitMode(l).capacity), o, d, opts.transitBoost || 1, isFinite(carTime)?carTime:60);
+          if (bus) { const moved = Math.min(amount * (isFinite(carTime)?bus.share:1),Math.max(0,transitMode(bus.line).capacity-(riders.get(bus.line.id)||0))); amount -= moved; out.transit += moved; out[bus.line.mode || 'bus'] += moved; riders.set(bus.line.id, (riders.get(bus.line.id) || 0) + moved); }
           const air = amount * (1 - sky), flown = air > 1e-4 ? fly(o, d, air) : 0;
-          load(res, o, d, amount - flown, 'car');
+          if(isFinite(carTime))load(res, o, d, amount - flown, 'car');else out.unserved+=amount-flown;
         }
       }
       yield;
@@ -214,7 +226,11 @@ export function* assignTraffic(net, blds, opts) {
 export function routeLines(net, lines) {
   const out = [];
   for (const l of lines) {
-    const segs = []; let len = 0, ok = l.stops.length >= 2;
+    if(l.mode==='rail'||l.mode==='metro') {
+      const ok=l.stops.length>=2, track=ok?[...l.stops,l.stops[0]]:[];
+      out.push({id:l.id,mode:l.mode,ok,track,segs:[],len:trackLength(l.stops),busLaneShare:0});continue;
+    }
+    const segs = [], legs=[]; let len = 0, ok = l.stops.length >= 2;
     for (let i = 0; ok && i < l.stops.length; i++) {
       const a = l.stops[i], b = l.stops[(i + 1) % l.stops.length];
       const ae = net.edges.get(a.edge), be = net.edges.get(b.edge);
@@ -223,10 +239,11 @@ export function routeLines(net, lines) {
       if (ae.id === be.id && (!ae.oneway || Math.sign(b.s - a.s) === ae.oneway)) leg = [{ edge: ae.id, from: a.s, to: b.s }];
       else leg = walk(net, net.dijkstra(net.sourcesAt(ae, a.s), 'time', Infinity, true), a, b, 0, new Map(), new Map(), true);
       if (!leg) { ok = false; break; }
+      legs.push(leg.reduce((n,s)=>n+Math.abs(s.to-s.from),0));
       for (const s of leg) { segs.push(s); len += Math.abs(s.to - s.from); }
     }
     let lane = 0; for (const s of segs) if (net.edges.get(s.edge)?.busLane) lane += Math.abs(s.to - s.from);
-    out.push({ id: l.id, ok, segs: ok ? segs : [], len, busLaneShare: len ? lane / len : 0 });
+    out.push({ id: l.id, mode:l.mode || 'bus', legs, ok, segs: ok ? segs : [], len, busLaneShare: len ? lane / len : 0 });
   }
   return out;
 }

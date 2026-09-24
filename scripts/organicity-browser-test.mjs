@@ -1,0 +1,23 @@
+// Start a local HTTP server at the repository root before running.
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+page.on('pageerror',e=>errors.push(e.message));
+await page.goto(process.env.CITY_URL || 'http://localhost:8777/organicity/');
+await page.locator('#optScenario').selectOption('gridlock');await page.locator('#introGo').click();
+await page.waitForFunction(()=>!!window.city);
+await page.waitForTimeout(5000);
+console.log(await page.evaluate(()=>Object.keys(city)));
+const first=await page.evaluate(()=>{const r=city.rend||city.renderer;return {raw:r?.agentHost.latest?.n,drawn:r?.lastDrawn?[...r.lastDrawn]:[],day:city.sim.day}});
+await page.waitForTimeout(2000);
+const result=await page.evaluate(first=>{const r=city.rend||city.renderer;let moved=0;for(const [id,p] of first.drawn){const q=r.lastDrawn?.get(id);if(q&&Math.hypot(p[0]-q[0],p[2]-q[2])>.2)moved++;}return{moved,vehicles:r.agentHost.latest?.n,day:city.sim.day}},first);
+console.log(JSON.stringify({first:{raw:first.raw,day:first.day},result,errors}));
+await page.screenshot({path:'/tmp/organicity-hi-traffic.png'});
+if(!result.moved)throw Error('No rendered vehicles moved');
+await page.evaluate(()=>{city.sim.paused=true;city.tools.setTool('lines');});
+for(const mode of ['bus','tram','rail','metro'])await page.locator(`[data-transit-mode="${mode}"]`).click();
+await page.evaluate(()=>city.tools.setTool('terrain'));
+await page.locator('[data-terrain-mode="levee"]').click();
+await page.screenshot({path:'/tmp/organicity-hi-tools.png'});
+if(errors.length)throw Error(errors.join('\n'));
+await browser.close();

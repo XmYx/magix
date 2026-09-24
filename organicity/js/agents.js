@@ -12,6 +12,8 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 export const AGENT_TYPES = {
   car:     { len: 2.2, speed: 1,    signals: true },
   truck:   { len: 3.8, speed: 0.8,  signals: true },
+  tram:    { len: 7.5, speed: 1, signals: true },
+  snowplow:{ len: 3.8, speed: .65, signals: true },
   bus:     { len: 4.6, speed: 0.85, signals: true, lane: 'bus' },
   fire:    { len: 3.6, speed: 1.35, signals: false, flash: true },
   garbage: { len: 3.4, speed: 0.75, signals: true },
@@ -21,9 +23,11 @@ const GAP = 1.2, ACCEL = 7, SPILL = 3.5, SIGNAL_PERIOD = 7;
 
 // height of the deck above ground at arc s (ramps ease in over RAMP_LEN)
 export function deckHeight(e, s) {
-  const L = e.layer || 0; if (!L) return 0;
+  let base=0;
+  if(e.heights?.length) { let k=0;while(k<e.n-1&&e.cum[k+1]<s)k++; const t=clamp((s-e.cum[k])/(e.cum[k+1]-e.cum[k]||1),0,1);base=e.heights[k]*(1-t)+e.heights[k+1]*t; }
+  const L = e.layer || 0; if (!L) return base;
   const t = clamp(Math.min(s, e.len - s) / RAMP_LEN, 0, 1);
-  return LAYERS[L].y * t * t * (3 - 2 * t);
+  return base + LAYERS[L].y * t * t * (3 - 2 * t);
 }
 
 export class Traffic {
@@ -144,7 +148,7 @@ export class AgentSim {
       for (const l of m.lines) {
         if (this.lines.get(l.id) === l.sig || !l.segs?.length) continue;
         const n = Math.max(1, Math.min(6, Math.round(l.len / 140)));
-        for (let k = 0; k < n; k++) { const b = T.spawn(l.segs, 'bus', { loop: true, col: l.color, line: l.id }); b.i = Math.floor((k / n) * l.segs.length); b.s = l.segs[b.i].from; }
+        for (let k = 0; k < n; k++) { const b = T.spawn(l.segs, l.mode==='tram'?'tram':'bus', { loop: true, col: l.color, line: l.id }); b.i = Math.floor((k / n) * l.segs.length); b.s = l.segs[b.i].from; }
         this.lines.set(l.id, l.sig);
       }
     }

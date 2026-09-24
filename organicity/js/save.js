@@ -3,11 +3,18 @@
 import { World } from './world.js';
 import { Sim } from './sim.js';
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 8;
 export const SAVE_KEY = 'organicity-save';
 
 // MIGRATIONS[n] upgrades a version-n save to version n+1.
 const MIGRATIONS = {
+  7: s => {s.world.mapPreset ||= 'river';s.world.hazards ||= {snow:0,surge:0};for(const l of s.world.lines || [])l.mode ||= 'bus';return s;},
+  // v7: ordinances, neighbouring cities, news feed, debt state, car-free districts
+  6: (s) => {
+    Object.assign(s.sim, { ordinances: s.sim.ordinances || {}, region: s.sim.region || {}, news: s.sim.news || [], milestone: s.sim.milestone || 0, debtMonths: s.sim.debtMonths || 0, austerity: !!s.sim.austerity, gameOver: !!s.sim.gameOver });
+    for (const d of s.world.districts || []) if (d && d.policy) d.policy.carFree = !!d.policy.carFree;
+    return s;
+  },
   // v6: junction control (node field 4), grade separation + bus lanes (edge fields 8–9), bus lines
   5: (s) => {
     s.world.nodes = s.world.nodes.map((n) => (n.length >= 5 ? n : [...n, 'auto']));

@@ -5,6 +5,8 @@
 // so plot boundaries run perpendicular to curved streets and meet at the
 // bisector of angled junctions — wedges, triangles and slivers fall out naturally.
 import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS } from './config.js';
+import { generateHeights, roadProfile } from './terrain.js';
+import { transitMode } from './transit.js';
 import { RoadNet } from './roads.js';
 import { buildingFloors, technology, TERRACE_SERVICES } from './eras.js';
 import { fbm, hash2, mulberry32, maskDistance, clamp, rleEncode, rleDecode } from './util.js';
@@ -15,9 +17,10 @@ const SYL = ['ash', 'bel', 'cor', 'dun', 'el', 'fen', 'gar', 'hol', 'ive', 'kel'
 const SUF = [' Heights', ' Park', ' Quarter', ' Row', ' Gardens', ' Point', ' End', ' Hill', ' Docks', ' Commons'];
 
 export class World {
-  constructor(seed = 1234) {
+  constructor(seed = 1234, mapPreset = 'river') {
     this.seed = seed; this.year = 2000; this.platforms = new Map(); this.platformId = 1; this.platformVersion = 0;
     const S = N * N;
+    this.mapPreset = mapPreset; this.elevation = new Float32Array(S); this.levees = new Uint8Array(S); this.flood = new Float32Array(S); this.hazards = { snow: 0, surge: 0 };
     this.water = new Uint8Array(S);
     this.wdist = new Float32Array(S);
     this.road = new Uint8Array(S);
@@ -50,6 +53,8 @@ export class World {
   inside(x, z) { return x >= 0 && z >= 0 && x < N && z < N; }
   cellAt(x, z) { const cx = Math.floor(x), cz = Math.floor(z); return this.inside(cx, cz) ? cz * N + cx : -1; }
 
+  heightAt(x,z) { const i=this.cellAt(Math.min(N-1,Math.max(0,x)),Math.min(N-1,Math.max(0,z))); return this.water[i]?0:this.elevation[i] || 0; }
+
   markGround(x0, z0, x1, z1) {
     x0 = clamp(Math.floor(x0), 0, N); z0 = clamp(Math.floor(z0), 0, N); x1 = clamp(Math.ceil(x1), 0, N); z1 = clamp(Math.ceil(z1), 0, N);
     const g = this.dirty.ground;
@@ -68,10 +73,12 @@ export class World {
         let w = x > seaX || Math.abs(x - rx) < rw;
         const lx = x - N * 0.22, lz = z - N * 0.82;
         if (Math.hypot(lx * 1.3, lz) < 26 + fbm(x * 0.03, z * 0.03, s + 3) * 34) w = true;
+        if(this.mapPreset==='coast')w=x>seaX-90;
+        if(this.mapPreset==='islands' && x>170)w=fbm(x*.012,z*.012,s+54)<.48;
         W[z * N + x] = w ? 1 : 0;
       }
     }
-    this.recomputeWaterDistance();
+    this.recomputeWaterDistance(); generateHeights(this);
     for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
       const i = z * N + x; if (W[i] || this.wdist[i] < 2) continue;
       const f = fbm(x * 0.018, z * 0.018, s + 9);
@@ -106,11 +113,20 @@ export class World {
     return n;
   }
 
+  paintLevee(x,z,r,on) {
+    let n=0;
+    for(let zz=Math.max(0,Math.floor(z-r));zz<Math.min(N,z+r);zz++)for(let xx=Math.max(0,Math.floor(x-r));xx<Math.min(N,x+r);xx++) {
+      const i=zz*N+xx;if(Math.hypot(xx+.5-x,zz+.5-z)>r||this.water[i]||this.road[i]||this.bld[i]||this.levees[i]===on)continue;
+      if(this.tx&&!this.tx.levees.has(i))this.tx.levees.set(i,this.levees[i]);this.levees[i]=on;n++;
+    }
+    if(n){this.leveeVersion=(this.leveeVersion||0)+1;this.markGround(x-r,z-r,x+r+1,z+r+1);}return n;
+  }
+
   // Recompute everything derived from the water mask (after a brush stroke).
   finishTerrain() {
     if (!this.pendingTerrain) return;
     this.pendingTerrain = false;
-    this.recomputeWaterDistance();
+    this.recomputeWaterDistance();roadProfile(this);this.net.version++;
     this.rasterRegion(0, 0, N - 1, N - 1);
     for (const b of this.buildings.values()) this.refreshAccess(b);
     this.terrainVersion++; this.zoneVersion++;
@@ -152,7 +168,7 @@ export class World {
           const qx = ax + dx * t - px, qz = az + dz * t - pz, d = Math.sqrt(qx * qx + qz * qz);
           const i = z * N + x;
           if (d <= hw + 2.6) this.tree[i] = 0; // verge — keeps canopies off the asphalt
-          if (d <= rr) { road[i] = 1; if (bld[i]) kill.add(bld[i]); continue; }
+          if (d <= rr) { road[i] = 1; if(this.levees[i]){if(this.tx&&!this.tx.levees.has(i))this.tx.levees.set(i,1);this.levees[i]=0;this.leveeVersion=(this.leveeVersion||0)+1;} if (bld[i]) kill.add(bld[i]); continue; }
           if (noAcc || water[i]) continue;
           const kd = d - hw;
           if (kd <= DEPTH && kd < accDist[i]) {
@@ -171,6 +187,7 @@ export class World {
   }
 
   onRoadsChanged(bb) {
+    roadProfile(this);
     const m = 8 + DEPTH + 2;
     const r = this.rasterRegion(bb[0] - m, bb[1] - m, bb[2] + m, bb[3] + m);
     for (const b of this.buildings.values()) {
@@ -184,16 +201,17 @@ export class World {
 
   roadCost(sA, c, sB, type, layer = 0) {
     const len = this.net.curveLength(sA, c, sB);
-    let wet = 0; const steps = Math.max(2, Math.ceil(len));
+    let wet = 0, climb = 0, previous = this.heightAt(sA.x,sA.z); const steps = Math.max(2, Math.ceil(len));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps, mt = 1 - t;
       const x = mt * mt * sA.x + 2 * mt * t * c.x + t * t * sB.x, z = mt * mt * sA.z + 2 * mt * t * c.z + t * t * sB.z;
+      const height=this.heightAt(x,z);climb+=Math.abs(height-previous);previous=height;
       const ci = this.cellAt(x, z); if (ci >= 0 && this.water[ci]) wet++;
     }
     const wetLen = (wet / (steps + 1)) * len;
     const mult = LAYERS[layer]?.cost ?? 1;
     // elevated & tunnel roads already span water, so no extra bridge premium
-    return { cost: Math.round(ROADS[type].cost * (layer ? len * mult : len - wetLen + wetLen * BRIDGE_COST_MULT)), len, wetLen: layer ? 0 : wetLen };
+    return { cost: Math.round(ROADS[type].cost * (climb * 6 + (layer ? len * mult : len - wetLen + wetLen * BRIDGE_COST_MULT))), climb, len, wetLen: layer ? 0 : wetLen };
   }
 
   buildRoad(sA, c, sB, type, oneway = 0, layer = 0) {
@@ -234,9 +252,9 @@ export class World {
   }
 
   // ------------------------------------------------------------------ bus lines
-  addLine(stops, name) {
+  addLine(stops, name, mode = 'bus') {
     const palette = [0xe84a3a, 0x3a8ae8, 0x2ab86a, 0xe8b030, 0xa050e8, 0xe86aa8, 0x30c8c8];
-    const l = { id: this.lineId++, name: name || `Line ${this.lineId - 1}`, color: palette[(this.lineId - 2) % palette.length], stops: [...stops] };
+    const l = { mode, id: this.lineId++, name: name || `Line ${this.lineId - 1}`, color: palette[(this.lineId - 2) % palette.length], stops: [...stops] };
     this.lines.push(l); this.lineVersion++;
     return l;
   }
@@ -244,7 +262,7 @@ export class World {
   // drop stops that were demolished; lines with fewer than two stops disappear
   pruneLines() {
     let changed = false;
-    for (const l of this.lines) { const k = l.stops.filter((id) => this.buildings.get(id)?.svc === 'busstop'); if (k.length !== l.stops.length) { l.stops = k; changed = true; } }
+    for (const l of this.lines) { const k = l.stops.filter((id) => this.buildings.get(id)?.svc === transitMode(l).stop); if (k.length !== l.stops.length) { l.stops = k; changed = true; } }
     const n = this.lines.length; this.lines = this.lines.filter((l) => l.stops.length >= 2);
     if (changed || n !== this.lines.length) this.lineVersion++;
   }
@@ -269,7 +287,7 @@ export class World {
       const h = this.net.nearestEdge(b.cx, b.cz, DEPTH + 12, (e) => !ROADS[e.type].noAccess);
       if (h) { be = h.e.id; bs = h.s; side = h.side; }
     }
-    b.edge = be; b.s = bs; b.side = side;
+    b.baseY = this.heightAt(b.cx,b.cz); b.edge = be; b.s = bs; b.side = side;
   }
 
   computeDerived(b, keepCenter = false) {
@@ -610,7 +628,7 @@ export class World {
     const id = this.districts.length; if (id >= DISTRICT_COLORS.length) return null;
     const r = this.rng;
     const nm = SYL[(r() * SYL.length) | 0] + SYL[(r() * SYL.length) | 0] + SUF[(r() * SUF.length) | 0];
-    const d = { id, name: nm[0].toUpperCase() + nm.slice(1), policy: { tax: { R: 0, C: 0, I: 0, O: 0 }, maxLevel: 5, maxFloors: 0, priority: 'balanced', green: false, historic: false } };
+    const d = { id, name: nm[0].toUpperCase() + nm.slice(1), policy: { tax: { R: 0, C: 0, I: 0, O: 0 }, maxLevel: 5, maxFloors: 0, priority: 'balanced', green: false, historic: false, carFree: false } };
     this.districts.push(d);
     return d;
   }
@@ -637,14 +655,14 @@ export class World {
   // (as a compact snapshot), zone / district / water cells, buildings removed and
   // created. Simulation changes run with txMute set and are never recorded.
   beginTx(label, { net = false } = {}) {
-    this.tx = { label, platforms: JSON.stringify([...this.platforms.values()]), lines: JSON.stringify(this.lines), zone: new Map(), district: new Map(), water: new Map(), removed: new Map(), created: new Set(), net: net ? this.netState() : null, money: 0 };
+    this.tx = { label, platforms: JSON.stringify([...this.platforms.values()]), lines: JSON.stringify(this.lines), zone: new Map(), district: new Map(), water: new Map(), levees: new Map(), removed: new Map(), created: new Set(), net: net ? this.netState() : null, money: 0 };
   }
   commitTx(money = 0) {
     const t = this.tx; this.tx = null;
     if (!t) return null;
     t.money = money;
     const netChanged = t.net && t.net.version !== this.net.version;
-    if (t.platforms === JSON.stringify([...this.platforms.values()]) && t.lines === JSON.stringify(this.lines) && !netChanged && !t.zone.size && !t.district.size && !t.water.size && !t.removed.size && !t.created.size) return null;
+    if (t.platforms === JSON.stringify([...this.platforms.values()]) && t.lines === JSON.stringify(this.lines) && !netChanged && !t.zone.size && !t.district.size && !t.water.size && !t.levees.size && !t.removed.size && !t.created.size) return null;
     this.undoStack.push(t);
     if (this.undoStack.length > 40) this.undoStack.shift();
     return t;
@@ -683,6 +701,7 @@ export class World {
     const t = this.undoStack.pop(); if (!t) return null;
     const prevMute = this.txMute; this.txMute = true;
     for (const id of t.created) this.removeBuilding(id);
+    if(t.levees?.size){for(const [i,v] of t.levees)this.levees[i]=v;this.leveeVersion=(this.leveeVersion||0)+1;this.markGround(0,0,N,N);}
     if (t.water.size) { for (const [i, v] of t.water) this.water[i] = v; this.pendingTerrain = true; }
     if (t.net) this.restoreNet(t.net);
     if (t.water.size) this.finishTerrain();
@@ -726,7 +745,7 @@ export class World {
   // ------------------------------------------------------------------ save / load
   serialize() {
     return {
-      seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
+      mapPreset: this.mapPreset, levees: rleEncode(this.levees), hazards: this.hazards, seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
       nodes: [...this.net.nodes.values()].map((n) => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.outside ? 1 : 0, n.control || 'auto']),
       edges: [...this.net.edges.values()].map((e) => [e.id, e.a, e.b, +e.c.x.toFixed(2), +e.c.z.toFixed(2), e.type, +e.cond.toFixed(3), e.oneway || 0, e.layer || 0, e.busLane ? 1 : 0]),
       lines: this.lines, lineId: this.lineId,
@@ -738,9 +757,11 @@ export class World {
   }
 
   static load(d) {
-    const w = new World(d.seed);
+    const w = new World(d.seed, d.mapPreset || 'river');
     w.year=d.year || 2000;w.platforms=new Map((d.platforms || []).map(p=>[p.id,p]));w.platformId=d.platformId || 1;
     w.genTerrain();
+    if(d.levees)w.levees=rleDecode(d.levees,Uint8Array,N*N);
+    if(d.hazards)w.hazards={...w.hazards,...d.hazards};
     if (d.water) {
       w.water = rleDecode(d.water, Uint8Array, N * N);
       for (let i = 0; i < N * N; i++) if (w.water[i]) w.tree[i] = 0;
@@ -751,6 +772,7 @@ export class World {
       const e = w.net.addEdge(w.net.nodes.get(a), w.net.nodes.get(b), { x: cx, z: cz }, type, cond, id);
       e.oneway = ow || 0; e.layer = layer || 0; e.busLane = !!lane;
     }
+    roadProfile(w);
     w.lines = d.lines || []; w.lineId = d.lineId || 1;
     w.rasterRegion(0, 0, N - 1, N - 1);
     w.zone = rleDecode(d.zone, Uint8Array, N * N);

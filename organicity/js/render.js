@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { N, ZONES, SERVICES, ROADS, DISTRICT_COLORS } from './config.js';
-import { CHN } from './world.js';
+import { CH, CHN } from './world.js';
 import { genBuilding, rgb, hex } from './procgen.js';
 import { hash2, clamp, fbm } from './util.js';
 import { technology, buildingFloors } from './eras.js';
@@ -214,6 +214,7 @@ export class Renderer {
   }
   groundAt(cx, cy, height = 0) {
     const ray = this.rayAt(cx, cy);
+    if (!height && this.ground) { const rc=new THREE.Raycaster();rc.ray.copy(ray);const hit=rc.intersectObject(this.ground)[0];if(hit)return {x:hit.point.x,z:hit.point.z}; }
     if (ray.direction.y > -1e-4) return null;
     const t = (height - ray.origin.y) / ray.direction.y;
     if(t<0)return null;
@@ -260,9 +261,9 @@ export class Renderer {
     const w = this.w, S = this.groundS, st = N / S, pos = this.ground.geometry.attributes.position;
     for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) {
       const wd = w.wdist[clamp(Math.floor(j * st), 0, N - 1) * N + clamp(Math.floor(i * st), 0, N - 1)];
-      pos.setY(j * (S + 1) + i, wd < 0 ? Math.max(-3.2, wd * 0.5) - 0.4 : wd < 1.5 ? (-0.4 * (1.5 - wd)) / 1.5 : 0);
+      pos.setY(j * (S + 1) + i, w.heightAt(i*st,j*st) + (wd < 0 ? Math.max(-3.2, wd * 0.5) - 0.4 : wd < 1.5 ? (-0.4 * (1.5 - wd)) / 1.5 : 0));
     }
-    pos.needsUpdate = true; this.ground.geometry.computeVertexNormals();
+    pos.needsUpdate = true; this.ground.geometry.computeVertexNormals();this.ground.geometry.computeBoundingSphere();
     for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
       const i = z * N + x, wd = w.wdist[i], h = hash2(x, z, 5), f = fbm(x * 0.03, z * 0.03, 77, 3);
       let c;
@@ -307,10 +308,16 @@ export class Renderer {
       case 'garbage': return b ? (b.svc ? null : b.garbOk ? 1 : 0) : s.at(s.cov.landfill, x, z) > 0.02 ? 0.75 : null;
       case 'park': return s.at(s.cov.park, x, z);
       case 'waterpol': return s.f.waterPol && this.w.wdist[this.w.cellAt(x, z)] < 30 ? s.at(s.f.waterPol, x, z) : null;
+      case 'elevation': return this.w.heightAt(x,z)/25;
+      case 'flooding': return (this.w.flood[this.w.cellAt(x,z)]||0)/2;
+      case 'snow': {const hit=this.w.net.nearestEdge(x,z,12);return hit?hit.e.snow||0:this.w.hazards.snow;}
       case 'transit': return s.at(s.cov.busstop, x, z);
       case 'desireR': case 'desireC': case 'desireI': case 'desireO': return b ? null : s.desirability(o.slice(-1), x, z);
       case 'power': return b ? (b.power ? 1 : 0) : null;
       case 'water': return b ? (b.water && b.sewage ? 1 : b.water || b.sewage ? 0.5 : 0) : null;
+      case 'health': return b ? (b.svc || !b.hh ? null : b.sick ? 0 : clamp(b.health ?? 0, 0, 1)) : s.at(s.cov.clinic, x, z);
+      case 'seniors': return b ? (b.svc || !b.hh ? null : clamp((b.seniors || 0) / Math.max(1, (b.occ || 0) * 2.6) / 0.45, 0, 1)) : null;
+      case 'higher': return Math.max(0.6 * s.at(s.cov.college, x, z), s.at(s.cov.university, x, z));
       default: return null;
     }
   }
@@ -335,9 +342,7 @@ export class Renderer {
         const v = this.overlayValue(x + 0.5, z + 0.5, b), l = (c[0] + c[1] + c[2]) / 3;
         if (v === null) c = [l * 0.7 + 30, l * 0.7 + 30, l * 0.7 + 30];
         else {
-          const t = clamp(good ? v : 1 - v, 0, 1);
-          const rc = t < 0.5 ? mix([214, 64, 52], [236, 204, 66], t * 2) : mix([236, 204, 66], [66, 184, 92], (t - 0.5) * 2);
-          c = mix([l, l, l], rc, 0.78);
+          c = mix([l, l, l], this.ramp(clamp(good ? v : 1 - v, 0, 1)), 0.78);
         }
       }
       if (showD) {
@@ -347,7 +352,7 @@ export class Renderer {
           c = mix(c, DISTRICT_COLORS[d], edge ? 0.9 : 0.28);
         }
       }
-      if (this.sim.weather.type === 'snow' && this.overlay === 'none' && !w.water[i]) c = mix(c,[230,239,245],w.road[i]?0.25:0.8);
+      if (w.hazards.snow>.01 && this.overlay === 'none' && !w.water[i]) {const edge=w.net.edges.get(w.accEdge[i]);c=mix(c,[230,239,245],w.road[i]?Math.min(.55,(edge?.snow||0)*.5):Math.min(.85,w.hazards.snow));}
       const o = i * 4; g[o] = c[0]; g[o + 1] = c[1]; g[o + 2] = c[2]; g[o + 3] = 255;
     }
     this.gtex.needsUpdate = true;
@@ -418,13 +423,14 @@ export class Renderer {
       }
     };
     const disc = (x, z, r, y, col) => {
+      y+=this.w.heightAt(x,z);
       const seg = 16;
       for (let i = 0; i < seg; i++) {
         const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
         tri([x, y, z], [x + Math.cos(a1) * r, y, z + Math.sin(a1) * r], [x + Math.cos(a0) * r, y, z + Math.sin(a0) * r], col);
       }
     };
-    const fan = (x, z, pts, y, col) => { // convex junction polygon around a node
+    const fan = (x, z, pts, y, col) => { y+=this.w.heightAt(x,z); // convex junction polygon around a node
       pts.sort((a, b) => Math.atan2(a[1] - z, a[0] - x) - Math.atan2(b[1] - z, b[0] - x));
       for (let i = 0; i < pts.length; i++) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -598,8 +604,19 @@ export class Renderer {
     }
     const old = this.chunks[ch];
     if (old) { for (const m of old.children) m.geometry.dispose(); this.scene.remove(old); }
+    if (this.lodBoxes?.[ch]) { this.lodBoxes[ch].geometry.dispose(); this.scene.remove(this.lodBoxes[ch]); this.lodBoxes[ch] = null; }
     this.chunks[ch] = null;
     if (!hasAny) return;
+    // far-away stand-in: one lit box per building, swapped in by updateLod()
+    const boxes = [];
+    for (const b of list) if ((b.top || 0) > 0.5) {
+      const S = b.svc ? [170, 168, 160] : ZONES[b.zone].color, y0 = b.baseY || 0;
+      boxes.push(coloredBox((b.x1 - b.x0) * 0.8, b.top - y0, (b.z1 - b.z0) * 0.8, (b.x0 + b.x1) / 2, y0 + (b.top - y0) / 2, (b.z0 + b.z1) / 2, (Math.round(S[0] * 0.5 + 90) << 16) | (Math.round(S[1] * 0.5 + 90) << 8) | Math.round(S[2] * 0.5 + 90)));
+    }
+    if (boxes.length) {
+      const m = new THREE.Mesh(mergeGeometries(boxes), this.lodMat ||= new THREE.MeshLambertMaterial({ vertexColors: true }));
+      m.visible = false; this.scene.add(m); (this.lodBoxes ||= [])[ch] = m;
+    }
     const grp = new THREE.Group();
     for (const k in acc) {
       let n = 0; for (const s of acc[k]) n += s.p.length;
@@ -618,6 +635,17 @@ export class Renderer {
       grp.add(m);
     }
     this.chunks[ch] = grp; this.scene.add(grp); this.tintPending.add(ch);
+  }
+
+  // Chunks far from the camera target (relative to zoom) draw as boxes instead of full detail.
+  updateLod() {
+    const c = this.cam, far = Math.max(260, c.dist * 1.6);
+    for (let ch = 0; ch < this.chunks.length; ch++) {
+      const g = this.chunks[ch]; if (!g) continue;
+      const cx = (ch % CHN + 0.5) * CH, cz = (Math.floor(ch / CHN) + 0.5) * CH;
+      const lo = this.lod && this.lodBoxes?.[ch] && Math.hypot(cx - c.x, cz - c.z) > far;
+      g.visible = !lo; if (this.lodBoxes?.[ch]) this.lodBoxes[ch].visible = !!lo;
+    }
   }
 
   syncBuildings(budget = 4) {
@@ -654,7 +682,7 @@ export class Renderer {
       const m = new THREE.InstancedMesh(this.treeGeo, this.treeMat, list.length);
       list.forEach(([x, z, sc], k) => {
         const ix = Math.floor(x * 7), iz = Math.floor(z * 7), h = hash2(ix, iz, 10);
-        q.setFromAxisAngle(Y, hash2(ix, iz, 8) * 1.57); s.set(sc, sc * (0.85 + hash2(ix, iz, 9) * 0.4), sc); p.set(x, 0, z);
+        q.setFromAxisAngle(Y, hash2(ix, iz, 8) * 1.57); s.set(sc, sc * (0.85 + hash2(ix, iz, 9) * 0.4), sc); p.set(x, w.heightAt(x,z), z);
         M.compose(p, q, s); m.setMatrixAt(k, M);
         c.setRGB(0.22 + h * 0.14, 0.45 + h * 0.18, 0.16 + h * 0.06); m.setColorAt(k, c);
       });
@@ -678,7 +706,9 @@ export class Renderer {
     const fire = mergeGeometries([coloredBox(1.15, 1.1, 3.4, 0, 0.8, 0, 0xffffff), coloredBox(0.9, 0.2, 2.2, 0, 1.45, -0.4, 0xd8d8d0), coloredBox(0.8, 0.2, 0.3, 0, 1.45, 1.1, 0xffffff)]);
     const garbage = mergeGeometries([coloredBox(1.1, 0.9, 0.9, 0, 0.7, 1.2, 0xffffff), coloredBox(1.2, 1.4, 2.3, 0, 0.95, -0.5, 0x6a7a5a)]);
     const police = mergeGeometries([coloredBox(0.95, 0.45, 1.9, 0, 0.42, 0, 0xffffff), coloredBox(0.8, 0.38, 1.0, 0, 0.83, -0.1, 0x2a3440), coloredBox(0.7, 0.14, 0.3, 0, 1.08, -0.1, 0xffffff)]);
-    const geo = { car, truck, bus, fire, garbage, police }, cap = { car: 1100, truck: 260, bus: 80, fire: 24, garbage: 40, police: 30 };
+    const tram=mergeGeometries([coloredBox(1.3,1.5,6.5,0,1,0,0xffffff),coloredBox(1.32,.6,5.7,0,1.3,0,0x243a46)]);
+    const snowplow=mergeGeometries([coloredBox(1.2,1.2,2.8,0,.9,0,0xf2a126),coloredBox(2,.7,.4,0,.4,1.7,0xd3e4ea)]);
+    const geo = { car, truck, bus, fire, garbage, police, tram, snowplow }, cap = { tram:80,snowplow:40, car: 1100, truck: 260, bus: 80, fire: 24, garbage: 40, police: 30 };
     this.vtypes = {};
     for (const k in geo) {
       const mesh = new THREE.InstancedMesh(geo[k], mat, cap[k]);
@@ -712,7 +742,7 @@ export class Renderer {
       const lines = [];
       for (const l of this.w.lines) {
         const info = sim.lineInfo?.get(l.id);
-        if (info?.ok && info.segs.length) lines.push({ id: l.id, segs: info.segs, len: info.len, color: l.color, sig: info.segs.map((g) => `${g.edge}:${g.from.toFixed(1)}:${g.to.toFixed(1)}`).join('|') });
+        if (info?.ok && info.segs.length) lines.push({ id: l.id, mode:l.mode, segs: info.segs, len: info.len, color: l.color, sig: info.segs.map((g) => `${g.edge}:${g.from.toFixed(1)}:${g.to.toFixed(1)}`).join('|') });
       }
       H.post({ type: 'lines', lines });
     }
@@ -722,7 +752,7 @@ export class Renderer {
     if (this.serviceT > 3) {
       this.serviceT = 0;
       const blds = [...this.w.buildings.values()];
-      for (const [svc, kind, want, col] of [['landfill', 'garbage', (b) => !b.svc && (b.garb || 0) > 20, 0xd8d8c8], ['police', 'police', (b) => !b.svc && b.edge >= 0, 0xf2f4f8]]) {
+      for (const [svc, kind, want, col] of [['snowdepot','snowplow',b=>!b.svc&&this.w.hazards.snow>.05,0xf2a126],['landfill', 'garbage', (b) => !b.svc && (b.garb || 0) > 20, 0xd8d8c8], ['police', 'police', (b) => !b.svc && b.edge >= 0, 0xf2f4f8]]) {
         const depots = blds.filter((b) => b.svc === svc && !b.abandoned && b.edge >= 0);
         if (!depots.length || (this.poseCounts?.[kind] || 0) >= Math.min(8, depots.length * 3)) continue;
         const from = depots[(Math.random() * depots.length) | 0], cands = blds.filter((b) => want(b) && b.comp === from.comp);
@@ -736,8 +766,16 @@ export class Renderer {
     if (spawns.length) H.post({ type: 'spawn', list: spawns });
     H.step(step);
     const res = H.latest; if (!res) return;
-    if (res !== this.drawnPoses) {                       // rebuild instances only when a new pose set arrives
-      this.drawnPoses = res; this.sigClock.clock = res.clock;
+    // Interpolate raw consecutive snapshots. Using lastDrawn here freezes cars
+    // when every frame receives a new snapshot and resets the blend to zero.
+    if (res !== this.drawnPoses) {
+      const prev = new Map(), B0 = this.drawnPoses?.buf;
+      if (B0) for (let i = 0; i < this.drawnPoses.n; i++) { const o = i * POSE_STRIDE; prev.set(B0[o + 7], [B0[o], B0[o + 1], B0[o + 2], B0[o + 3]]); }
+      this.poseGap = clamp(this.time - (this.poseAt ?? this.time), 0.03, 0.5); this.poseAt = this.time;
+      this.drawnPoses = res; this.prevPoses = prev; this.sigClock.clock = res.clock;
+    }
+    {
+      const blend = this.reducedMotion ? 1 : clamp((this.time - this.poseAt) / (this.poseGap || 0.1), 0, 1), drawn = new Map();
       for (const k in this.vtypes) this.vtypes[k].n = 0;
       const counts = {};
       const M = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
@@ -747,12 +785,19 @@ export class Renderer {
         counts[type] = (counts[type] || 0) + 1;
         if (!V || V.n >= V.mesh.instanceMatrix.count) continue;
         const hover = flyer && type === 'car' ? 2.8 + Math.sin(this.time + B[o + 7]) * 0.3 : 0;
-        p.set(B[o], 0.12 + B[o + 1] + hover, B[o + 2]); q.setFromAxisAngle(Y, B[o + 3]); M.compose(p, q, sc);
+        const id = B[o + 7], was = this.prevPoses?.get(id);
+        let x = B[o], y = B[o + 1], z = B[o + 2], h = B[o + 3];
+        if (was && Math.hypot(was[0] - x, was[2] - z) < 25) {
+          x = was[0] + (x - was[0]) * blend; y = was[1] + (y - was[1]) * blend; z = was[2] + (z - was[2]) * blend;
+          let dh = h - was[3]; dh -= Math.round(dh / (2 * Math.PI)) * 2 * Math.PI; h = was[3] + dh * blend;
+        }
+        drawn.set(id, [x, y, z, h]);
+        p.set(x, 0.12 + y + hover, z); q.setFromAxisAngle(Y, h); M.compose(p, q, sc);
         V.mesh.setMatrixAt(V.n, M);
         c.setHex(B[o + 6] ? (type === 'fire' ? (flash ? 0xff2a2a : B[o + 5]) : (flash ? 0x2a6aff : 0xff2a2a)) : B[o + 5]);
         V.mesh.setColorAt(V.n, c); V.n++;
       }
-      this.poseCounts = counts;
+      this.poseCounts = counts; this.lastDrawn = drawn;
       for (const k in this.vtypes) { const m = this.vtypes[k].mesh; m.count = this.vtypes[k].n; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     }
     if (this.signalHeads) for (const h of this.signalHeads) {
@@ -772,7 +817,7 @@ export class Renderer {
   }
 
   updateParticles(dt) {
-    const speed = this.sim.paused ? 0 : 1, P = this.parts;
+    const speed = this.sim.paused || this.reducedMotion ? 0 : 1, P = this.parts;
     if (speed) for (const [bid, cache] of this.bgeo) {
       if (!cache.gen.emit.length || cache.ab || !this.w.buildings.has(bid)) continue;
       for (const [x, y, z] of cache.gen.emit) if (Math.random() < dt * 2.2 && P.length < 500) P.push({ x, y, z, vx: 0.6 + Math.random() * 0.4, vy: 1.6 + Math.random(), vz: 0.3, age: 0, life: 3 + Math.random() * 2 });
@@ -862,20 +907,21 @@ export class Renderer {
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1, nx = (-dz / l) * hw, nz = (dx / l) * hw, y = 0.4;
       const L0 = [a.x + nx, y, a.z + nz], R0 = [a.x - nx, y, a.z - nz], L1 = [b.x + nx, y, b.z + nz], R1 = [b.x - nx, y, b.z - nz];
+      for(const p of [R0,L0,R1,L1])p[1]+=this.w.heightAt(p[0],p[2]);
       P.push(...R0, ...L0, ...R1, ...R1, ...L0, ...L1);
     }
     this.prevRoad.geometry.dispose();
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
     this.prevRoad.geometry = g; this.prevRoad.material = ok ? this.prevMatOk : this.prevMatBad; this.prevRoad.visible = true;
   }
-  setSnap(p) { if (!p) { this.snapDot.visible = false; return; } this.snapDot.position.set(p.x, 0.5, p.z); this.snapDot.visible = true; }
+  setSnap(p) { if (!p) { this.snapDot.visible = false; return; } this.snapDot.position.set(p.x, this.w.heightAt(p.x,p.z)+0.5, p.z); this.snapDot.visible = true; }
   setBrush(x, z, r, color = 0xffffff) {
-    this.brush.position.set(x, 0.5, z); this.brush.scale.set(r, 1, r); this.brush.material.color.setHex(color); this.brush.visible = true;
+    this.brush.position.set(x, this.w.heightAt(x,z)+0.5, z); this.brush.scale.set(r, 1, r); this.brush.material.color.setHex(color); this.brush.visible = true;
   }
   setGhost(plan, S, ok) {
     if (!plan || plan.cx === undefined) { this.ghost.visible = false; return; }
     this.ghost.scale.set(S.w, 3, S.d);
-    this.ghost.position.set(plan.cx, (plan.y || 0)+1.5, plan.cz);
+    this.ghost.position.set(plan.cx, (plan.y ?? this.w.heightAt(plan.cx,plan.cz))+1.5, plan.cz);
     this.ghost.rotation.set(0, Math.atan2(plan.tx, plan.tz) - Math.PI / 2, 0);
     this.ghost.material = ok ? this.prevMatOk : this.prevMatBad; this.ghost.visible = true;
   }
@@ -908,13 +954,13 @@ export class Renderer {
             else {
               const value = this.overlayValue(b.cx,b.cz,b);
               const t = value == null ? null : clamp(this.OVGOOD[this.overlay] ? value : 1-value,0,1);
-              color = lin(t == null ? [145,145,145] : t < 0.5 ? mix([214,64,52],[236,204,66],t*2) : mix([236,204,66],[66,184,92],(t-0.5)*2));
+              color = lin(t == null ? [145,145,145] : this.ramp(t));
             }
           }
           for (let i = span.start; i < span.end; i += 3) {
             if (color) attr.array.set(color,i);
-            else if (this.sim.weather.type === 'snow' && normals[i+1] > 0.6) {
-              for (let c=0;c<3;c++) attr.array[i+c] = attr.array[i+c]*0.2 + 0.72;
+            else if (this.w.hazards.snow>.05 && normals[i+1] > 0.6) {
+              for (let c=0;c<3;c++) attr.array[i+c] = attr.array[i+c]*(1-Math.min(.8,this.w.hazards.snow)) + .9*Math.min(.8,this.w.hazards.snow);
             }
           }
         }
@@ -954,13 +1000,35 @@ export class Renderer {
     this.routeGroup=group;this.scene.add(group);
   }
 
+  // overlay colour ramp, bad → good: red–yellow–green, or a colour-blind-safe purple–teal–yellow
+  ramp(t) {
+    return this.palette === 'cb' ? (t < 0.5 ? mix([68, 1, 84], [33, 145, 140], t * 2) : mix([33, 145, 140], [253, 231, 37], (t - 0.5) * 2))
+      : t < 0.5 ? mix([214, 64, 52], [236, 204, 66], t * 2) : mix([236, 204, 66], [66, 184, 92], (t - 0.5) * 2);
+  }
+  // accessibility & presentation settings: { palette: 'default'|'cb', reducedMotion, lod }
+  applySettings(o) {
+    const pal = o.palette === 'cb' ? 'cb' : 'default';
+    if (pal !== this.palette) { this.palette = pal; this.w.markGround(0, 0, N, N); this.tintKey = null; }
+    this.reducedMotion = !!o.reducedMotion; this.lod = o.lod !== false;
+  }
+
+  // PNG of the current view (rendered now, so the drawing buffer is still intact)
+  // upscaled with nearest-neighbour so the pixel art stays crisp at screen size
+  capture() {
+    this.r.render(this.scene, this.camera);
+    const src = this.r.domElement, k = Math.max(1, this.pixel), out = document.createElement('canvas');
+    out.width = src.width * k; out.height = src.height * k;
+    const g = out.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(src, 0, 0, out.width, out.height);
+    return out.toDataURL('image/png');
+  }
+
   setDayMode(m) { this.dayMode = m; try { localStorage.setItem('organicity-daynight', m); } catch { /* ignore */ } }
 
   // Day/night: a visual clock (3 min per day at 1×) dims the sun, rotates it,
   // and lights windows, streetlights and neon as the city goes dark.
   updateDayNight(dt) {
     if (!this.sim.paused) this.tod = (this.tod + dt * Math.min(this.sim.speed, 4) / 180) % 1;
-    const t = this.dayMode === 'day' ? 0.3 : this.dayMode === 'night' ? 0.8 : this.tod;
+    const t = this.photoTod != null ? this.photoTod : this.dayMode === 'day' ? 0.3 : this.dayMode === 'night' ? 0.8 : this.tod;
     const elev = Math.sin(t * Math.PI * 2), target = clamp((0.2 - elev) / 0.4, 0, 1);
     this.night += (target - this.night) * Math.min(1, dt * 3);
     const n = this.night, c = this.cam;
@@ -973,19 +1041,44 @@ export class Renderer {
     this.hemi.color.setRGB(0.91 - 0.5 * n, 0.95 - 0.45 * n, 1);
   }
 
+  updateHazards() {
+    const w=this.w,key=`${this.sim.day}:${w.leveeVersion||0}:${Math.floor(this.cam.x/40)}:${Math.floor(this.cam.z/40)}`;
+    if(key===this.hazardKey)return;this.hazardKey=key;
+    if(this.hazardDay!==this.sim.day){this.hazardDay=this.sim.day;if(['none','flooding','snow'].includes(this.overlay))w.markGround(0,0,N,N);}
+    if(!this.hazardGroup) {
+      this.hazardGroup=new THREE.Group();this.scene.add(this.hazardGroup);
+      this.floodMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(4,.12,4),new THREE.MeshLambertMaterial({color:0x4d9eb8,transparent:true,opacity:.65}),16384);
+      this.leveeMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,3,1),new THREE.MeshLambertMaterial({color:0x9a9675}),30000);
+      this.floodMesh.frustumCulled=this.leveeMesh.frustumCulled=false;this.hazardGroup.add(this.floodMesh,this.leveeMesh);
+    }
+    const m=new THREE.Matrix4();let f=0,l=0;
+    for(let z=Math.max(0,Math.floor(this.cam.z-200));z<Math.min(N,this.cam.z+200);z++)for(let x=Math.max(0,Math.floor(this.cam.x-200));x<Math.min(N,this.cam.x+200);x++) {
+      const i=z*N+x;
+      if(w.levees[i]&&l<30000){m.makeTranslation(x+.5,w.heightAt(x,z)+1.5,z+.5);this.leveeMesh.setMatrixAt(l++,m);}
+      if(x%4===0&&z%4===0&&!w.water[i]&&w.flood[i]>.05&&f<16384){m.makeTranslation(x+2,w.heightAt(x,z)+w.flood[i],z+2);this.floodMesh.setMatrixAt(f++,m);}
+    }
+    this.floodMesh.count=f;this.leveeMesh.count=l;this.floodMesh.instanceMatrix.needsUpdate=this.leveeMesh.instanceMatrix.needsUpdate=true;
+    const strike=w.hazards.lightning;
+    if(this.bolt){this.scene.remove(this.bolt);this.bolt.geometry.dispose();this.bolt.material.dispose();this.bolt=null;}
+    if(strike?.day===this.sim.day&&!this.reducedMotion) {
+      const y=w.heightAt(strike.x,strike.z);this.bolt=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(strike.x,y+90,strike.z),new THREE.Vector3(strike.x+5,y+48,strike.z),new THREE.Vector3(strike.x-3,y+44,strike.z),new THREE.Vector3(strike.x,y,strike.z)]),new THREE.LineBasicMaterial({color:0xffffc7}));this.scene.add(this.bolt);
+    }
+  }
+
   updateWeather(dt) {
+    this.updateHazards();
     if (this.weatherType !== this.sim.weather.type) { this.weatherType=this.sim.weather.type; this.w.markGround(0,0,N,N); }
     const w=this.sim.weather, snow=w.type==='snow', wet=snow || w.type==='rain' || w.type==='storm';
     this.scene.background.setHex(w.sky);this.scene.fog.color.setHex(w.sky);this.sun.intensity=w.light;
     if(this.sim.tech.style==='cyberpunk'){this.scene.background.lerp(new THREE.Color(0x252340),0.65);this.scene.fog.color.copy(this.scene.background);this.sun.intensity*=0.65;}
     if (w.type==='fog') { this.scene.fog.near=this.cam.dist*0.35;this.scene.fog.far=this.cam.dist*2+100; }
-    this.ground.material.color.setHex(snow ? 0xe1e9ef : wet ? 0xa4b5bd : 0xffffff);
+    this.ground.material.color.setHex(this.w.hazards.snow>.05 ? 0xe1e9ef : wet ? 0xa4b5bd : 0xffffff);
     if (!this.precipitation) {
       const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(600*6),3));
       this.precipitation=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0xc8e3ff,transparent:true,opacity:0.65,depthWrite:false}));
       this.precipitation.frustumCulled=false;this.scene.add(this.precipitation);this.weatherClock=0;
     }
-    this.precipitation.visible=wet;if(!wet)return;
+    this.precipitation.visible=wet && !this.reducedMotion;if(!wet || this.reducedMotion)return;
     if(!this.sim.paused)this.weatherClock+=dt;
     const a=this.precipitation.geometry.attributes.position;
     this.precipitation.material.color.setHex(snow?0xffffff:0xb8dfff);
@@ -1088,19 +1181,39 @@ export class Renderer {
   // bus line routes, drawn above the roads while planning transit
   updateLines() {
     const show = this.overlay === 'transit' || this.uiTransit;
-    const key = show ? `${this.sim.lineInfoVersion}:${this.w.lineVersion}:${this.w.net.version}` : 'off';
+    const key = `${show}:${this.sim.lineInfoVersion}:${this.w.lineVersion}:${this.w.net.version}`;
+    this.trainClock=(this.trainClock||0)+(this.sim.paused?0:this.lastTrainDt||0);
+    for(const t of this.trains||[]) {let s=(this.trainClock*t.speed)%t.len;let k=0;while(k<t.points.length-2&&s>t.lengths[k])s-=t.lengths[k++];const a=t.points[k],b=t.points[k+1],f=s/(t.lengths[k]||1);t.mesh.position.copy(a).lerp(b,f);t.mesh.position.y+=1.15;t.mesh.rotation.y=Math.atan2(b.x-a.x,b.z-a.z);}
     if (key === this.linesKey) return;
     this.linesKey = key;
     if (this.lineGroup) { this.lineGroup.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); this.scene.remove(this.lineGroup); this.lineGroup = null; }
-    if (!show) return;
+    this.trains=[];
     const net = this.w.net, g = new THREE.Group();
     this.w.lines.forEach((l, i) => {
       const info = this.sim.lineInfo?.get(l.id); if (!info?.ok) return;
-      const pts = [];
+      if(!show && (!l.mode || l.mode==='bus'||l.mode==='metro'))return;
+      let pts = (info.track||[]).map(p=>new THREE.Vector3(p.x,this.w.heightAt(p.x,p.z)+(l.mode==='rail'?8:1.6),p.z));
+      if(l.mode==='rail'&&pts.length) {
+        let top=8;for(let j=1;j<pts.length;j++){const a=pts[j-1],b=pts[j],steps=Math.ceil(a.distanceTo(b)/4);for(let k=0;k<=steps;k++)top=Math.max(top,this.w.heightAt(a.x+(b.x-a.x)*k/steps,a.z+(b.z-a.z)*k/steps)+8);}
+        pts.forEach(p=>p.y=top);
+      }
       for (const seg of info.segs) {
         const e = net.edges.get(seg.edge); if (!e) continue;
         const n = Math.max(2, Math.ceil(Math.abs(seg.to - seg.from) / 3));
         for (let k = 0; k <= n; k++) { const s = seg.from + (seg.to - seg.from) * (k / n), p = net.sampleAt(e, s); pts.push(new THREE.Vector3(p.x, 1.6 + deckHeight(e, s) + i * 0.3, p.z)); }
+      }
+      if((l.mode==='rail'||l.mode==='metro')&&pts.length>1) {
+        const lengths=pts.slice(1).map((p,k)=>p.distanceTo(pts[k]));
+        const mesh=new THREE.Mesh(new THREE.BoxGeometry(2,1.8,9),new THREE.MeshLambertMaterial({color:l.color,depthTest:l.mode!=='metro'}));mesh.position.copy(pts[0]);mesh.position.y+=1.15;g.add(mesh);
+        this.trains.push({mesh,points:pts,lengths,len:lengths.reduce((a,b)=>a+b,0),speed:l.mode==='rail'?24:18});
+        if(l.mode==='rail')for(let k=1;k<pts.length;k++) {
+          const a=pts[k-1],b=pts[k],len=a.distanceTo(b),deck=new THREE.Mesh(new THREE.BoxGeometry(3.5,.5,len),new THREE.MeshLambertMaterial({color:0x777f89}));deck.position.copy(a).add(b).multiplyScalar(.5);deck.lookAt(b);g.add(deck);
+          for(let d=0;d<len;d+=24){const p=a.clone().lerp(b,d/len),base=this.w.heightAt(p.x,p.z),h=p.y-base;const pier=new THREE.Mesh(new THREE.BoxGeometry(1.2,h,1.2),new THREE.MeshLambertMaterial({color:0x9ba1a3}));pier.position.set(p.x,base+h/2,p.z);g.add(pier);}
+        }
+      }
+      if(l.mode==='tram')for(const side of [-.6,.6]) {
+        const rail=pts.map((p,k)=>{const next=pts[Math.min(k+1,pts.length-1)],prev=pts[Math.max(0,k-1)],dx=next.x-prev.x,dz=next.z-prev.z,d=Math.hypot(dx,dz)||1;return new THREE.Vector3(p.x+dz/d*side,p.y-1.3,p.z-dx/d*side);});
+        g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rail),new THREE.LineBasicMaterial({color:0xb7c5c9})));
       }
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
       g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: l.color, depthTest: false, transparent: true })));
@@ -1114,12 +1227,12 @@ export class Renderer {
   setDistricts(on) { if (this.showDistricts === on) return; this.showDistricts = on; this.w.markGround(0, 0, N, N); }
 
   frame(dt) {
-    this.time += dt;
+    this.time += dt; this.lastTrainDt=dt*Math.min(this.sim.speed,3);
     const w = this.w;
     if (this.terrainVer !== w.terrainVersion) this.refreshTerrain();
     if (this.roadVer !== w.net.version || this.roadEra !== this.sim.tech.style) this.buildRoads();
     if (this.flowVer !== this.sim.flowVersion && (this.overlay === 'traffic' || this.flowVer === -1)) this.colorTraffic();
-    this.syncBuildings();
+    this.syncBuildings(); this.updateLod();
     this.updateBuildingTints(); this.updateRoute();
     if (w.dirty.trees) { this.treeT = (this.treeT || 0) + dt; if (this.treeT > 0.3 || !this.treeMesh) { this.rebuildTrees(); w.dirty.trees = false; this.treeT = 0; } }
     const ov = this.overlay !== 'none' && this.overlay !== 'districts' && this.overlay !== 'traffic';
@@ -1136,4 +1249,4 @@ export class Renderer {
     this.r.render(this.scene, this.camera);
   }
 }
-Renderer.prototype.OVGOOD = { transit: true, desireR: true, desireC: true, desireI: true, desireO: true, level: true, happiness: true, age: true, landvalue: true, access: true, power: true, water: true, garbage: true, fire: true, police: true, clinic: true, school: true, park: true };
+Renderer.prototype.OVGOOD = { elevation:true, transit: true, desireR: true, desireC: true, desireI: true, desireO: true, level: true, happiness: true, age: true, landvalue: true, access: true, power: true, water: true, garbage: true, fire: true, police: true, clinic: true, school: true, park: true, health: true, higher: true };

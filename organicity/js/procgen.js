@@ -416,6 +416,21 @@ function genService(P, b, r) {
       B('plain', -hw * 0.25, hd * 0.45, 0, hw * 0.55, hd * 0.35, 0.06, 0x4aa04a); B('plain', -hw * 0.25, hd * 0.45, 0.05, 0.08, hd * 0.35, 0.03, 0xf0f0f0);
       B('plain', -hw * 0.9, hd * 0.85, 0, 0.07, 0.07, 6, 0xdddddd);
       break;
+    case 'college':   // a brick hall with a clock turret and a lawn
+      B('res', 0, -hd * 0.35, 0, hw * 0.8, hd * 0.35, 7, 0xa85a42, 0x6a3a30);
+      B('res', -hw * 0.6, hd * 0.2, 0, hw * 0.25, hd * 0.3, 5.5, 0xb86a4a, 0x6a3a30);
+      B('plain', 0, -hd * 0.35, 7, 1.4, 1.4, 4, 0xc8a878, 0x5a4a3a); B('plain', 0, -hd * 0.35 + 1.45, 9, 0.7, 0.05, 0.7, 0xf0f0e0);
+      B('plain', hw * 0.3, hd * 0.45, 0, hw * 0.5, hd * 0.4, 0.06, 0x4aa04a);
+      T(hw * 0.6, hd * 0.6, 1.1); T(hw * 0.05, hd * 0.65, 1);
+      break;
+    case 'university':   // a quad: hall with a dome, two wings, library tower and green
+      B('res', 0, -hd * 0.55, 0, hw * 0.75, hd * 0.25, 9, 0xe8dcc0, 0x8a8478);
+      C(0, -hd * 0.55, 9, 3.2, 2.6, 12, 0x6a9a8a, 0x5a8a7a);
+      B('res', -hw * 0.75, 0.2, 0, hw * 0.18, hd * 0.5, 7.5, 0xe0d4b8, 0x8a8478); B('res', hw * 0.75, 0.2, 0, hw * 0.18, hd * 0.5, 7.5, 0xe0d4b8, 0x8a8478);
+      B('res', hw * 0.45, hd * 0.65, 0, 2.2, 2.2, 16, 0xd8ccb0, 0x7a5a48);
+      B('plain', 0, hd * 0.15, 0, hw * 0.5, hd * 0.4, 0.06, 0x4aa04a); B('plain', 0, hd * 0.15, 0.05, 0.4, hd * 0.4, 0.03, 0xd8c89a);
+      for (const [u, v] of [[-hw * 0.35, hd * 0.4], [hw * 0.2, 0], [-hw * 0.2, -hd * 0.1]]) T(u, v, 1.2);
+      break;
     case 'parkS':
       B('plain', 0, 0, 0, 0.6, hd * 0.95, 0.05, 0xd8c89a); B('plain', 0, 0, 0, hw * 0.95, 0.6, 0.05, 0xd8c89a);
       T(-hw * 0.5, -hd * 0.5, 1.1); T(hw * 0.5, hd * 0.45, 1.2); T(hw * 0.55, -hd * 0.5, 0.9); T(-hw * 0.45, hd * 0.5, 1);
@@ -460,6 +475,20 @@ function genService(P, b, r) {
     case 'spire':
       C(0, 0, 0, 3.5, 2, 12, 0xc8ccd0); C(0, 0, 2, 1.2, 40, 8, 0xd8dde2); C(0, 0, 42, 3.2, 3, 12, 0x5a8ab8, 0x2a4a6a); C(0, 0, 45, 0.25, 14, 6, 0xeeeeee);
       break;
+    case 'stormdrain':
+      B('plain',0,0,0,hw,hd,.25,0x78858a);
+      for(let u=-1.5;u<=1.5;u+=.5)B('plain',u,0,.26,.08,1.4,.08,0x263943);
+      B('plain',1,1,.3,.4,.4,1.2,0x43a9b9);break;
+    case 'snowdepot':
+      B('ind',0,-1,0,hw*.9,hd*.6,4,0xe9aa45,0x626b74);
+      for(const u of [-3,0,3]) {B('plain',u,2,0,.6,1.3,1.4,0xeaa02e);B('plain',u,3.4,0,1,.2,.5,0xd4e3e7);}break;
+    case 'railstation':
+      B('plain',0,0,0,hw,hd,1,0x77828d);B('com',0,-1,1,hw*.7,hd*.5,5,0xc3b294,0x40516d);
+      B('plain',0,2,7,hw,.7,.3,0x708691);break;
+    case 'metrostation':
+      B('plain',0,0,0,hw,hd,.3,0x797f87);B('plain',0,0,.3,hw*.65,hd*.7,.15,0x263743);
+      B('plain',-hw*.7,0,0,.15,.15,3.5,0x778c99);B('plain',-hw*.7,0,3,.6,.2,.6,0x4ca6e8);break;
+    case 'tramstop':
     case 'busstop':
       B('plain', 0, -0.3, 2.1, 1.3, 0.6, 0.12, 0x3a6ac8); B('plain', 0, -0.8, 0, 1.2, 0.05, 2.1, 0xa8d0e8);
       B('plain', -1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777); B('plain', 1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777);
