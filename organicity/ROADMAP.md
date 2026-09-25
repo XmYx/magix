@@ -17,15 +17,15 @@ peer-to-peer multiplayer.
   (`save.js`), and fields added since v10 are optional. Saved games (whole regions)
   live in IndexedDB and export to `.organicity-game` files.
 - **Tests:**
-  - `node scripts/organicity-test.mjs`: 126 headless tests covering simulation,
+  - `node scripts/organicity-test.mjs`: 130 headless tests covering simulation,
     saves, map sizes, region, economy, residents and elections, infrastructure, the
     tile worker pool, translations, the release setup, multiplayer protocol,
     signalling and the gallery server.
   - Playwright browser scripts: `scripts/organicity-browser-test.mjs` and
-    `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` and `scripts/organicity-acad-browser-test.mjs`. They need a server on port 8777;
+    `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` and `scripts/organicity-gallery-browser-test.mjs`. They need a server on port 8777;
     `CITY_URL` overrides the address.
   - CI (`.github/workflows/organicity-desktop.yml`) runs the headless tests and all
-    four Playwright scripts, then builds the three platforms and smoke-tests the Linux
+    five Playwright scripts, then builds the three platforms and smoke-tests the Linux
     app (`ORGANICITY_SMOKE=1`).
 
 ---
@@ -315,8 +315,10 @@ peer-to-peer multiplayer.
   - Off until you give a gallery server in Settings.
   - The Share panel submits the city (its share code, a screenshot and its
     population), after you tick a consent box.
-  - The start screen's **Browse gallery** opens approved cities and lets you report
-    them.
+  - The start screen's **Browse gallery** searches approved cities by title or author,
+    filters by map size and century, and sorts newest or most liked. You can like,
+    open, report or copy a direct entry link. Links show their gallery source before opening.
+  - Likes toggle once per hashed network address; the salt persists across server restarts.
   - The server, `scripts/organicity-gallery.mjs`, has no dependencies. It queues
     submissions for a moderator (`GALLERY_ADMIN_TOKEN`, page at `/admin`), limits
     sizes and rates, keeps only salted hashes of addresses, and hides an entry after
@@ -375,8 +377,9 @@ peer-to-peer multiplayer.
 - **Roads:** lift bridges open on a fixed timetable rather than for each passing
   boat. Parking is a citywide balance, not per block.
 - **Multiplayer:**
-  - One tile per player per session; switching tiles leaves the session, and you
-    rejoin with the same name.
+  - Tile switching still reloads the page. Guests resume using their saved token;
+    hosts reopen the same access code. Seamless switching remains to be done.
+  - Dropped guest connections retry automatically; manual-code sessions need a manual rejoin.
   - No co-op on the same tile, and no host migration: the session ends if the host
     leaves.
   - Each player's regional economy is their own projection.
@@ -401,12 +404,13 @@ peer-to-peer multiplayer.
 Listed in the suggested order. Each phase can ship on its own, keeps saves
 migratable, and adds headless tests (and browser checks where it shows on screen).
 
-### AB — Multiplayer depth (high value; builds directly on AA)
+### AB — Multiplayer depth — partially delivered
 1. **Play any of your tiles in-session.** Switch cities without reloading the page,
    so the peer connection survives. It needs a boot path that tears down and
    rebuilds the world, simulation and renderer in place.
 2. **Reconnect and host hand-over.**
-   - Guests reconnect automatically after a dropped connection.
+   - **Delivered:** guests reconnect automatically after a dropped connection,
+     with saved tokens protecting their identity; rejoin from the start screen.
    - The host can pass hosting to another player, with the region snapshot and AI
      saves sent over.
 3. **One regional economy.** The host runs the families and migration model for
@@ -416,11 +420,11 @@ migratable, and adds headless tests (and browser checks where it shows on screen
    as commands in a lockstep order. The owner's simulation stays authoritative, and
    visitors see a streamed view.
 5. **Session tools.**
-   - Lobby listing on the signalling relay (access codes are delivered).
+   - **Delivered:** open-game lobby listing on the self-hosted signalling relay.
+     Public PeerJS games use access codes.
    - Spectators.
-   - Rules for a session: sandbox, start year, win condition such as first to 50k
-     people or the best treasury after 10 years.
-   - A final scoreboard.
+   - **Delivered:** session sandbox/start-year rules and population or treasury races.
+   - **Delivered:** a final scoreboard; free play continues after the result.
 6. **Diplomacy.** Toll-free agreements between players, shared transit lines across
    portals, and joint services.
 
@@ -520,8 +524,11 @@ already reported working.
 3. **Neighbours in full:** stream each nearby building's own procedural model from
    the tile worker (not only archetypes), and let background cities run vehicles
    at a coarse rate.
-4. **Gallery depth:** likes and sorting, search by map size or era, links from a
-   gallery entry into the game, and a hosted instance with sign-in for moderators.
+4. **Gallery depth — partially delivered:** likes, newest/top sorting, title/author
+   search, map-size/century filters and direct entry links are implemented and tested
+   through the browser. Desktop link copying asks for the web game address.
+   Remaining: a hosted instance and individual moderator sign-in. Moderation still
+   uses the existing shared token; hosting is not provisioned by this repository.
 5. **Release polish:** delta updates, release notes shown in the app, and a Flatpak
    or Snap for Linux stores.
 
@@ -551,3 +558,5 @@ already reported working.
 | AE / AG | 768 and 1024 tiles, core pass profiled at 5,000 buildings, instanced neighbour details streamed up close, a tile worker pool and play while minimised; French, Spanish and Arabic with a live phrase layer and right-to-left layout, signed and auto-updating desktop releases with browser tests in CI, and an opt-in moderated gallery | v10 · 122 |
 | Multiplayer access codes | Players join with one code from the host through a signalling relay (public PeerJS or self-hosted), trickled ICE, TURN logins, clear failure messages | v10 · 123 |
 | Aviation / regional camera | Municipal airfields, animated airport flights, wide-zoom clouds, full-region camera exploration, active-tile editing bounds; exact `desktop-v` release tag | v10 · 126 |
+
+| AH gallery / roadmap reconciliation | Gallery search, filters, sorting, likes persistent across restarts, direct entry links and browser CI; larger-map founding stubs corrected; existing AB reconnect, lobby and rules documented | v10 · 130 |

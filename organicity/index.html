@@ -68,7 +68,16 @@
         <button id="introBack" hidden>Cancel</button>
       </div>
       <div id="introList" class="games" hidden></div>
-      <div id="galleryList" class="games" hidden></div>
+      <div id="galleryBrowser" hidden>
+        <form id="galleryFilters" class="row">
+          <input name="q" aria-label="Search gallery" placeholder="City or author" maxlength="60">
+          <select name="size" aria-label="Map size"><option value="">Any map size</option><option>512</option><option>768</option><option>1024</option></select>
+          <select name="era" aria-label="Era"><option value="">Any era</option><option value="1800">1800s</option><option value="1900">1900s</option><option value="2000">2000s</option><option value="2100">2100s</option><option value="2200">2200s</option><option value="2300">2300s</option></select>
+          <select name="sort" aria-label="Sort cities"><option value="new">Newest</option><option value="top">Most liked</option></select>
+          <button type="submit">Search</button>
+        </form>
+        <div id="galleryList" class="games" aria-live="polite"></div>
+      </div>
       <div id="mpJoin" hidden>
         <b>Join a multiplayer region</b>
         <label>Your name <input id="mpName" type="text" maxlength="24" autocomplete="off"></label>

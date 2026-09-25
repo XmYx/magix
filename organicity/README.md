@@ -48,11 +48,11 @@ git push origin desktop-v
 | Region | A 5×5 world map: buy tiles, found, rename and switch between cities. Every tile's land is pregenerated in the background and drawn around your city, joined seamlessly (optionally with full pixel texture and woods). Other governors really build their cities tile by tile, and you can take one over or hand yours to an AI. Coasts and hills continue across tile edges, roads meet at border exits, regional trips are routed through exits, other cities keep growing in the background on a pool of workers, nearby tiles show roofs, towers, chimneys and awnings up close, services are shared with neighbours, and AI neighbours grow and shrink |
 | Play modes | Free play, sandbox, a guided tutorial and scenarios ("Fix the gridlock", "Balance the books", population goals) |
 | Platform | Installable and playable offline, a light performance profile for phones, content packs (district styles, landmarks, buildables and scenarios), English, Hungarian, German, French, Spanish and Arabic interface (right to left for Arabic) |
-| Gallery | Opt-in: give a gallery server in Settings to submit a city with a screenshot from the Share panel, and browse, open or report approved cities from the start screen. The zero-dependency server `scripts/organicity-gallery.mjs` queues submissions for moderation (`GALLERY_ADMIN_TOKEN=… node scripts/organicity-gallery.mjs`, admin page at `/admin`) |
+| Gallery | Opt-in: give a gallery server in Settings to submit a city with a screenshot from the Share panel, and browse, search by title/author, filter by map size/century, sort newest/most liked, like, open or report approved cities from the start screen. Copy entry links for friends; in desktop, provide the web game address for the link. The zero-dependency server `scripts/organicity-gallery.mjs` queues submissions for moderation (`GALLERY_ADMIN_TOKEN=… node scripts/organicity-gallery.mjs`, admin page at `/admin`) |
 | Regional economy | Tile presidents (you and AI), families with incomes, rents and savings, housing and job markets, portals with toll booths between tiles, commuting and migration across tiles, annual statistics and 10-year presidential terms with comparison charts |
 | Building | Every buildable has an icon rendered from its real model; hovering it shows a card with the model turning in 3D and all its numbers |
 | Saved games | Save, load, overwrite, rename, delete, export and import whole regions in the game (IndexedDB); Ctrl+S quick-saves, and an autosave is kept every five minutes; single-city files and share links remain |
-| Multiplayer | Peer-to-peer (WebRTC): a host opens their region; friends join from the start screen, each gets land and builds their city at the same time. Everyone sees each other's cities next door; there's chat, money and monthly commodity or utility contracts (either party can end one), land claims, AI cities bought at their value, standings, and the host can remove players. The host gets a short access code (ABCD-EFGH) to give friends, who type it on the start screen. The browsers find each other through a signalling relay (the public PeerJS relay by default, or a self-hosted `scripts/organicity-signal.mjs`) and then play directly. STUN and TURN servers (with logins) are settable for strict networks, and codes can still be swapped by hand with no relay |
+| Multiplayer | Peer-to-peer (WebRTC): a host opens their region; friends join from the start screen, each gets land and builds their city at the same time. Everyone sees each other's cities next door; there's chat, money and monthly commodity or utility contracts (either party can end one), land claims, AI cities bought at their value, standings, and the host can remove players. The host gets a short access code (ABCD-EFGH) to give friends, who type it on the start screen. The browsers find each other through a signalling relay (the public PeerJS relay by default, or a self-hosted `scripts/organicity-signal.mjs`) and then play directly. STUN and TURN servers (with logins) are settable for strict networks, and codes can still be swapped by hand with no relay. Dropped guest connections retry with saved identity tokens; self-hosted relays list open games; hosts set sandbox/year rules and population or treasury races with a final scoreboard |
 | Presentation | Region-wide camera panning, zoom out to see the whole region with a cloud layer, pedestrians on the pavements, optional ordered dithering and light glow (bloom), advisors and news, overlays, day and night, positional industry, train and crowd sounds, flowing rivers and boats, mountain snow lines and rock textures, photo mode with PNG export, camera tours and silent WebM video export, touch controls, colour-blind palette, UI scale, reduced motion, share links and files |
 
 Keys: `1`–`7` tools · `8` overlays · `9` budget · `L` transit lines · `T` terrain ·
@@ -109,14 +109,22 @@ migrate step by step (see `save.js`).
 ## Tests
 
 ```bash
-node scripts/organicity-test.mjs            # 126 headless tests
+node scripts/organicity-test.mjs            # 130 headless tests
 node scripts/organicity-test.mjs grading    # run tests whose name matches
 ```
 
 The browser regression scripts are `scripts/organicity-browser-test.mjs` and
-`scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` and `scripts/organicity-acad-browser-test.mjs`. They need Playwright and a server
+`scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` and `scripts/organicity-gallery-browser-test.mjs`. They need Playwright and a server
 on port 8777; `CITY_URL` overrides the address. Run the photo test with
 `PHOTO_DESKTOP=1` to check the Electron app and its native video download instead
 (requires the desktop dependencies).
 
 See [ROADMAP.md](ROADMAP.md) for current status, known limits and next steps.
+
+Gallery operators: keep `visitor-salt` alongside `entries.json` when backing up
+the gallery data directory. It keeps like/unlike identity stable across restarts
+without storing raw addresses. Likes are per network address, so people sharing
+a connection also share one vote. Hosting and individual moderator accounts
+remain future work.
+Only set `GALLERY_TRUST_PROXY=1` behind a trusted reverse proxy that replaces
+forwarded address headers; by default the server uses the connection address.

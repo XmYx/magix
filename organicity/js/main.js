@@ -23,7 +23,7 @@ import { viewSnapshot, unb64 } from './tileview.js';
 import { newPresident } from './presidents.js';
 import { fastestRoute } from './routes.js';
 import { t, LANGS, getLang, setLang, watchDom } from './i18n.js';
-import { galleryUrl, listCities, fetchCity, shotUrl, reportCity } from './gallery.js';
+import { galleryUrl, listCities, fetchCity, shotUrl, reportCity, likeCity, cityLink, readGalleryLink } from './gallery.js';
 
 // content packs register their styles and landmarks before any city is built
 const packsReady = loadPacks();
@@ -82,7 +82,7 @@ async function boot(opts) {
   if (opts.mode === 'found') {
     for (const st of world.edgeStubs) {
       const edge = st.side === 'west' ? [0.5, st.pos] : st.side === 'east' ? [N - 0.5, st.pos] : st.side === 'north' ? [st.pos, 0.5] : [st.pos, N - 0.5];
-      const inward = st.side === 'west' ? [34, st.pos] : st.side === 'east' ? [478, st.pos] : st.side === 'north' ? [st.pos, 34] : [st.pos, 478];
+      const inward = st.side === 'west' ? [34, st.pos] : st.side === 'east' ? [N - 34, st.pos] : st.side === 'north' ? [st.pos, 34] : [st.pos, N - 34];
       const res = world.buildRoad(world.net.snap(edge[0], edge[1], 3), null, world.net.snap(inward[0], inward[1], 3), 'street', 0);
       if (!res.edges.length) continue;
     }
@@ -131,8 +131,8 @@ async function boot(opts) {
     // in multiplayer the session resumes by itself after the switch: a guest rejoins with its token,
     // a host opens the region again under the same code (guests reconnect meanwhile)
     if (mp?.active) next = { ...next, resume: mp.role === 'host' ? { rehost: { name: mp.me.name, color: mp.me.color, listed: !!mp.listed } } : { rejoin: true } };
-    mp?.leave();
     try { await persist(); } catch (e) { ui.toast('Could not store this city: ' + e.message, 'bad'); return; }
+    mp?.leave();
     sessionStorage.setItem(BOOT_KEY, JSON.stringify(next)); location.reload();
   };
   // saved games: the whole region, kept in the browser's (or the desktop app's) own database
@@ -303,18 +303,24 @@ $('importFile').onchange = async (e) => { const f = e.target.files[0]; if (f) im
 
 // the opt-in gallery: cities other players shared, approved by a moderator (gallery.js)
 if (galleryUrl()) $('introGallery').hidden = false;
-$('introGallery').onclick = async () => {
-  const el = $('galleryList'), url = galleryUrl(); el.hidden = !el.hidden; if (el.hidden) return;
+let galleryRequest = 0;
+async function refreshGallery() {
+  const el = $('galleryList'), url = galleryUrl(), request = ++galleryRequest;
   el.innerHTML = '<p class="dim">Loading the gallery…</p>';
   try {
-    const list = await listCities(url);
-    el.innerHTML = list.length ? list.map((c) => `<div class="game"><img src="${esc(shotUrl(url, c.id))}" alt="" loading="lazy"><div><b>${esc(c.title)}</b><small>by ${esc(c.author)} · ${(c.stats?.pop || 0).toLocaleString('en-US')} people · ${c.stats?.year || ''}${c.stats?.size > 512 ? ` · ${c.stats.size} map` : ''}</small></div><div class="row"><button class="primary" data-gal-open="${esc(c.id)}">Open</button><button data-gal-report="${esc(c.id)}">Report</button></div></div>`).join('') : '<p class="dim">No cities in the gallery yet.</p>';
-  } catch (e) { el.innerHTML = `<p class="dim">The gallery could not be reached: ${esc(e.message)}</p>`; }
-};
+    const list = await listCities(url, Object.fromEntries(new FormData($('galleryFilters'))));
+    if (request !== galleryRequest) return;
+    el.innerHTML = list.length ? list.map((c) => `<div class="game"><img src="${esc(shotUrl(url, c.id))}" alt="" loading="lazy"><div><b>${esc(c.title)}</b><small>by ${esc(c.author)} · ${esc((c.stats?.pop || 0).toLocaleString('en-US'))} people · ${esc(c.stats?.year || '')} · ${esc(c.stats?.size || 512)} map</small></div><div class="row"><button class="primary" data-gal-open="${esc(c.id)}">Open</button><button data-gal-like="${esc(c.id)}">♥ ${esc(c.likes || 0)}</button><button data-gal-link="${esc(c.id)}">Copy link</button><button data-gal-report="${esc(c.id)}">Report</button></div></div>`).join('') : '<p class="dim">No cities match your search.</p>';
+  } catch (e) { if (request === galleryRequest) el.innerHTML = `<p class="dim">The gallery could not be reached: ${esc(e.message)}</p>`; }
+}
+$('introGallery').onclick = () => { $('galleryBrowser').hidden = !$('galleryBrowser').hidden; if (!$('galleryBrowser').hidden) refreshGallery(); };
+$('galleryFilters').onsubmit = (e) => { e.preventDefault(); refreshGallery(); };
 $('galleryList').onclick = async (e) => {
   const b = e.target.closest('button'); if (!b) return; const url = galleryUrl();
   try {
-    if (b.dataset.galOpen) { b.disabled = true; importCity((await fetchCity(url, b.dataset.galOpen)).code); }
+    if (b.dataset.galOpen) { b.disabled = true; await importCity((await fetchCity(url, b.dataset.galOpen)).code); b.disabled = false; }
+    if (b.dataset.galLike) { b.disabled = true; const r = await likeCity(url, b.dataset.galLike); b.textContent = `♥ ${r.likes}`; b.setAttribute('aria-pressed', String(r.liked)); b.disabled = false; }
+    if (b.dataset.galLink) { const base = location.protocol === 'app:' ? prompt('Web address where your friends play Organicity (ending in /organicity/):') : location.href; if (!base) return; const link = cityLink(url, b.dataset.galLink, base); try { await navigator.clipboard.writeText(link); b.textContent = 'Copied'; } catch { prompt('Copy this city link:', link); } }
     if (b.dataset.galReport) { const why = prompt('What is wrong with this city? A moderator will look at it.'); if (why != null) { await reportCity(url, b.dataset.galReport, why); b.textContent = 'Reported'; b.disabled = true; } }
   } catch (err) { alert(err.message); b.disabled = false; }
 };
@@ -322,6 +328,23 @@ $('galleryList').onclick = async (e) => {
 let pending = null;
 try { pending = JSON.parse(sessionStorage.getItem(BOOT_KEY) || 'null'); } catch { pending = null; }
 sessionStorage.removeItem(BOOT_KEY);
+function showGalleryLink() {
+  const galleryEntry = readGalleryLink(location.hash);
+  if (!galleryEntry) return;
+  $('intro').hidden = false;
+  // Show the source before fetching a city from a shared link.
+  const button = $('introGallery');
+  button.hidden = false;
+  button.textContent = `Open city from ${new URL(galleryEntry.url).host}`;
+  button.onclick = async () => {
+    button.disabled = true;
+    try { await importCity((await fetchCity(galleryEntry.url, galleryEntry.id)).code); }
+    catch (e) { alert('Could not open the gallery city: ' + e.message); }
+    finally { button.disabled = false; }
+  };
+}
+showGalleryLink();
+addEventListener('hashchange', showGalleryLink);
 if (location.hash.startsWith('#city=')) {
   const code = location.hash; history.replaceState(null, '', location.pathname + location.search);
   importCity(code);

@@ -17,7 +17,23 @@ async function call(url, path, opts = {}) {
   if (!res.ok) throw new Error(data.error || `The gallery answered ${res.status}`);
   return data;
 }
-export const listCities = (url = galleryUrl()) => call(url, '/api/gallery');
+export const listCities = (url = galleryUrl(), filters = {}) => {
+  const q = new URLSearchParams();
+  for (const k of ['q', 'size', 'era', 'sort']) if (filters[k]) q.set(k, filters[k]);
+  return call(url, '/api/gallery?' + q);
+};
+export const likeCity = (url, id) => call(url, `/api/gallery/${encodeURIComponent(id)}/like`, { method: 'POST' });
+export function cityLink(url, id, base = location.href) {
+  const link = new URL(base);
+  if (!['http:', 'https:'].includes(link.protocol)) throw new Error('Use the web game address for a shareable link.');
+  link.hash = new URLSearchParams({ gallery: url, entry: id }).toString();
+  return link.href;
+}
+export function readGalleryLink(hash) {
+  const q = new URLSearchParams(hash.replace(/^#/, '')), url = q.get('gallery'), id = q.get('entry');
+  if (!url || !/^[0-9a-f]{12}$/.test(id || '')) return null;
+  try { const u = new URL(url); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return null; return { url: url.replace(/\/+$/, ''), id }; } catch { return null; }
+}
 export const fetchCity = (url, id) => call(url, `/api/gallery/${encodeURIComponent(id)}`);
 export const shotUrl = (url, id) => `${url}/api/gallery/${encodeURIComponent(id)}/shot.png`;
 export const reportCity = (url, id, reason) => call(url, `/api/gallery/${encodeURIComponent(id)}/report`, { method: 'POST', body: JSON.stringify({ reason }) });

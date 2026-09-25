@@ -29,13 +29,15 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 export const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, n);
 const num = (v, max) => { const x = Math.round(+v); return Number.isFinite(x) ? Math.max(0, Math.min(max, x)) : 0; };
 
-export function createGallery({ dir = 'gallery-data', token = process.env.GALLERY_ADMIN_TOKEN || '', limits = {} } = {}) {
+export function createGallery({ dir = 'gallery-data', token = process.env.GALLERY_ADMIN_TOKEN || '', limits = {}, trustProxy = false } = {}) {
   const L = { ...LIMITS, ...limits }, files = join(dir, 'files'), db = join(dir, 'entries.json');
   mkdirSync(files, { recursive: true });
   let entries = existsSync(db) ? JSON.parse(readFileSync(db, 'utf8')) : [];
   const save = () => { writeFileSync(db + '.tmp', JSON.stringify(entries, null, 1)); renameSync(db + '.tmp', db); };
-  const salt = randomBytes(16);   // reporters and submitters are remembered by a salted hash, never their address
-  const who = (req) => createHash('sha256').update(salt).update(String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '').digest('hex').slice(0, 16);
+  const saltFile = join(dir, 'visitor-salt');
+  if (!existsSync(saltFile)) writeFileSync(saltFile, randomBytes(32), { mode: 0o600 });
+  const salt = readFileSync(saltFile);   // reporters and submitters are remembered by a salted hash, never their address
+  const who = (req) => createHash('sha256').update(salt).update((trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '') || req.socket.remoteAddress || '').digest('hex').slice(0, 16);
   const hits = new Map();   // rate limits: key → times in the last hour
   const limited = (key, n) => { const now = Date.now(), t = (hits.get(key) || []).filter((x) => now - x < 3600e3); if (t.length >= n) { hits.set(key, t); return true; } t.push(now); hits.set(key, t); return false; };
   const isAdmin = (req) => { if (!token) return false; const a = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, '')), b = Buffer.from(token); return a.length === b.length && timingSafeEqual(a, b); };
@@ -131,5 +133,5 @@ $('#go').onclick=load;
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const port = +(process.argv[2] || process.env.PORT || 8788);
   if (!process.env.GALLERY_ADMIN_TOKEN) console.warn('GALLERY_ADMIN_TOKEN is not set: submissions queue up, but nobody can approve them.');
-  createGallery().server.listen(port, () => console.log(`Organicity gallery on http://localhost:${port} (moderation at /admin)`));
+  createGallery({ trustProxy: process.env.GALLERY_TRUST_PROXY === '1' }).server.listen(port, () => console.log(`Organicity gallery on http://localhost:${port} (moderation at /admin)`));
 }

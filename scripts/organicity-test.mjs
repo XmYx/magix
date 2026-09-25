@@ -2075,7 +2075,7 @@ test('AG3: desktop builds sign, notarise and update from GitHub releases', () =>
 test('AG4: gallery server queues, moderates, lists, serves and hides reported cities', async () => {
   const { createGallery, clean } = await import('./organicity-gallery.mjs');
   const { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os'), { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'gal-')), g = createGallery({ dir, token: 'sekrit', limits: { hideAfter: 2 } });
+  const dir = mkdtempSync(join(tmpdir(), 'gal-')), g = createGallery({ dir, token: 'sekrit', trustProxy: true, limits: { hideAfter: 2 } });
   await new Promise((ok) => g.server.listen(0, ok));
   const base = `http://127.0.0.1:${g.server.address().port}`, req = async (p, o = {}) => { const r = await fetch(base + p, o); return { status: r.status, body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.arrayBuffer() }; };
   const post = (p, body, h = {}) => req(p, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(body) });
@@ -2102,6 +2102,40 @@ test('AG4: gallery server queues, moderates, lists, serves and hides reported ci
     assert((await req(`/api/admin/${id}`, { method: 'DELETE', headers: { authorization: 'Bearer sekrit' } })).status === 200 && g.entries().length === 0, 'delete');
     assert(clean('a\u0000b<c>  d', 10) === 'abc d', 'clean');
   } finally { g.server.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AH gallery: filters, likes, restart persistence and entry links', async () => {
+  const { createGallery } = await import('./organicity-gallery.mjs');
+  const { listCities, likeCity, cityLink, readGalleryLink } = await import('../organicity/js/gallery.js');
+  const { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(tmpdir() + '/gallery-depth-');
+  let g = createGallery({ dir, token: 'test' });
+  const start = async () => { await new Promise(ok => g.server.listen(0, '127.0.0.1', ok)); return `http://127.0.0.1:${g.server.address().port}`; };
+  let base = await start();
+  const post = async (path, body, admin = false) => (await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(admin ? {authorization: 'Bearer test'} : {}) }, body: JSON.stringify(body) })).json();
+  try {
+    const shot = 'data:image/png;base64,iVBORw0KGgo=';
+    const a = await post('/api/gallery', {title:'Alpine town',author:'Ada',code:'abc',shot,consent:true,stats:{size:768,year:1905}});
+    const b = await post('/api/gallery', {title:'Harbour',author:'Ben',code:'abc',shot,consent:true,stats:{size:1024,year:2005}});
+    await post(`/api/admin/${a.id}/approve`, {}, true); await post(`/api/admin/${b.id}/approve`, {}, true);
+    assert((await listCities(base,{q:'ADA',size:768,era:1900}))[0]?.id === a.id, 'combined filters');
+    assert(!(await listCities(base,{size:512})).length, 'size filter');
+    assert(!(await listCities(base,{q:'Alpine',era:2000})).length, 'era filter');
+    assert((await likeCity(base,a.id)).liked, 'like');
+    assert((await listCities(base,{sort:'top'}))[0].id === a.id, 'top sort');
+    const spoof = await (await fetch(base+`/api/gallery/${a.id}/like`,{method:'POST',headers:{'x-forwarded-for':'192.0.2.1'}})).json();
+    assert(!spoof.liked && spoof.likes===0,'untrusted forwarded header bypassed visitor identity');
+    await likeCity(base,a.id);
+    await new Promise(ok => g.server.close(ok)); g = createGallery({dir,token:'test'}); base = await start();
+    const undo = await likeCity(base,a.id); assert(!undo.liked && undo.likes === 0, 'same visitor duplicated after restart');
+    const link = cityLink(base, a.id, 'https://example.com/organicity/#old');
+    const parsed = readGalleryLink(new URL(link).hash); assert(parsed.url === base && parsed.id === a.id, 'link round trip');
+    assert(!readGalleryLink('#gallery=javascript:alert(1)&entry='+a.id), 'unsafe link');
+    assert(!readGalleryLink('#gallery=https://user:pass@example.com&entry='+a.id), 'credential link');
+    await post(`/api/admin/${a.id}/hide`, {}, true);
+    assert(!(await listCities(base,{q:'Alpine'})).length, 'hidden entry in search');
+    assert((await fetch(base+`/api/gallery/${a.id}/like`,{method:'POST'})).status===404,'hidden like');
+  } finally { await new Promise(ok => g.server.close(ok)); rmSync(dir,{recursive:true,force:true}); }
 });
 
 test('aviation: regional camera bounds follow the active tile and map size', async () => {
