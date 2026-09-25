@@ -22,15 +22,15 @@ makes the app found a city, report errors and quit. The icon comes from
 | Area | Highlights |
 |---|---|
 | Land | River, hills, coast and island presets. Roads and lots grade the terrain, and steep roads get tunnels and viaducts. A terraforming brush (raise, lower, level, smooth), levees, and sandbox water painting |
-| Roads | Free-form curves, one-ways, stop signs, signals and roundabouts, three elevated levels (6, 12 and 18 m) that hold their height from joint to joint (PgUp/PgDn), tunnels and ramps, bridges over water (piers, railings, suspension towers on long spans), bus lanes, parallel twins, an upgrade brush |
+| Roads | Free-form curves, one-ways, stop signs, signals and roundabouts, three elevated levels (6, 12 and 18 m) that hold their height from joint to joint (PgUp/PgDn), tunnels and ramps, bridges over water in five styles (automatic, beam, arch, suspension, lift bridges that open for boats), bus lanes, parallel twins, an upgrade brush; maintenance crews repair worn roads, and parking lots change how many people drive |
 | Growth | Road-Voronoi lots, levels 1–5, lot merging and splitting, leisure, tech and forestry specializations, district policies and styles |
 | Eras | Start in 1800, 1900 or 2000. Height limits rise to cyberpunk skylines with annexes, cantilevers, skybridges, sky hubs and air traffic. Terraces attach at any floor |
 | Traffic | Deterministic assignment with congestion and junction delays. Visible vehicles run in their own worker |
 | Transit | Bus, tram, rail and metro lines with stations, mode choice, peak and off-peak timetables, journeys with several transfers; rush hours on the streets |
 | Freight | A goods chain from industry to shops; cargo rail, harbour and airport terminals; visible trucks carry commodities between plants and out of town |
 | Resources & industry | Seeded forest, coal, stone, iron and ore deposits (resources overlay). Lumber camps, mines and quarries work them out; a sawmill, paper mill, furniture works, cement works, steelworks, smelter and machinery plant process them; a commodity exchange and warehouses run the market, priced by a regional market with contracts from AI governors. Districts can be industrial parks or mining districts, and plants can fit scrubbers. Plants need road, power, water, workers and a way out. Local coal, goods, building materials and machinery lower costs and raise output |
-| Utilities | Roads carry power, water and sewage. Power lines (on pylons), water pipes and drains join separate networks, up to their capacity (substations raise it). Water pressure needs towers uphill. Drains clear rain ponds, and an optional strict grid makes every building need all three nearby. An underground editor shows pipes on one flat level with their coverage, and has a bulldozer that leaves the city untouched |
-| Society | Follow any resident through their day; age groups, school → college → university, clinics and outbreaks, crime, eight ordinances, car-free centres |
+| Utilities | Roads carry power, water and sewage. Power lines (on pylons), water pipes and drains join separate networks, up to their capacity (substations raise it). Water pressure needs towers uphill. Drains clear rain ponds, and an optional strict grid makes every building need all three nearby. Runs can be straight, curved or routed along streets; high-voltage lines with transformer stations and trunk mains carry far more; water treatment and two levels of sewage treatment cut pollution. An underground editor shows pipes on one flat level with their coverage, and has a bulldozer that leaves the city untouched |
+| Society | Residents with daily schedules to their real school, college, workplace or park; family stories in the news; approval and ten-year elections you can lose; follow any resident through their day; age groups, school → college → university, clinics and outbreaks, crime, eight ordinances, car-free centres |
 | Economy | Taxes and brackets, service funding, bonds with a credit rating, bankruptcy and bailouts, utility trade and deals, exports, tourism, disaster insurance and preparedness, land tax and gentrification |
 | Weather & hazards | Seasons and 30-day regimes, rain bands and storm cells sweeping across the tile, rain ponding in hollows, storm forecasts, flooding, snow and plows, lightning, earthquakes, tornadoes, industrial accidents, festivals, seasonal trees |
 | Region | A 5×5 world map: buy tiles, found, rename and switch between cities. Every tile's land is pregenerated in the background and drawn around your city, joined seamlessly (optionally with full pixel texture and woods). Other governors really build their cities tile by tile, and you can take one over or hand yours to an AI. Coasts and hills continue across tile edges, roads meet at border exits, regional trips are routed through exits, other cities keep growing in the background, services are shared with neighbours, and AI neighbours grow and shrink |
@@ -94,12 +94,12 @@ migrate step by step (see `save.js`).
 ## Tests
 
 ```bash
-node scripts/organicity-test.mjs            # 108 headless simulation tests
+node scripts/organicity-test.mjs            # 115 headless simulation tests
 node scripts/organicity-test.mjs grading    # run tests whose name matches
 ```
 
 The browser regression scripts are `scripts/organicity-browser-test.mjs` and
-`scripts/organicity-features-browser-test.mjs` and `scripts/organicity-photo-browser-test.mjs`. They need Playwright and a server
+`scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` and `scripts/organicity-acad-browser-test.mjs`. They need Playwright and a server
 on port 8777; `CITY_URL` overrides the address. Run the photo test with
 `PHOTO_DESKTOP=1` to check the Electron app and its native video download instead
 (requires the desktop dependencies).

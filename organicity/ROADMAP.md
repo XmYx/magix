@@ -9,17 +9,19 @@ peer-to-peer multiplayer.
 
 - **Delivered phases:** A–T, the regional economy, U0 (governors build real cities),
   Y (utility networks, resources and a visible region), Z (infrastructure, industry
-  and the visible region), AA (building, saving, desktop and multiplayer), AF
-  (presentation), and AG2 (richer content packs). A short history is at the end
+  and the visible region), AA (building, saving, desktop and multiplayer), AC
+  (living citizens), AD (infrastructure depth), AF (presentation), and AG2 (richer
+  content packs). A short history is at the end
   of this file.
 - **Saves:** single-city saves are at v10. Older saves migrate step by step
   (`save.js`), and fields added since v10 are optional. Saved games (whole regions)
   live in IndexedDB and export to `.organicity-game` files.
 - **Tests:**
-  - `node scripts/organicity-test.mjs`: 108 headless tests covering simulation,
-    saves, region, economy, multiplayer protocol and signalling.
+  - `node scripts/organicity-test.mjs`: 115 headless tests covering simulation,
+    saves, region, economy, residents and elections, infrastructure, multiplayer
+    protocol and signalling.
   - Playwright browser scripts: `scripts/organicity-browser-test.mjs` and
-    `scripts/organicity-features-browser-test.mjs`, and `scripts/organicity-photo-browser-test.mjs`. They need a server on port 8777;
+    `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` and `scripts/organicity-acad-browser-test.mjs`. They need a server on port 8777;
     `CITY_URL` overrides the address.
   - The desktop app has a smoke test (`ORGANICITY_SMOKE=1`) that runs in CI.
 
@@ -72,6 +74,12 @@ peer-to-peer multiplayer.
 - **Bridges:** ground roads over water climb from the banks to a deck.
   - Piers, railings, and towers with cables on spans over 70 m.
   - A joint in mid-river sits on the deck.
+  - Styles: automatic, beam, arch, suspension or lift bridge, each with a cost and a
+    span limit. Lift bridges open for boats, and road traffic waits.
+- **Upkeep and parking:**
+  - Maintenance crews drive out from depots and repair the most worn roads.
+  - Parking lots add spaces; where parking is scarce, more work trips walk or take
+    transit.
 - **Junctions:** uncontrolled, all-way stop, traffic lights or roundabout, each
   with its own delay and capacity.
 - **Traffic:**
@@ -120,6 +128,11 @@ peer-to-peer multiplayer.
     need a tower.
   - The optional strict grid needs every building to have a line of each kind
     within reach.
+  - Tiers: high-voltage lines (480 MW) with transformer stations, trunk mains and
+    interceptor drains (640 units).
+  - Runs are drawn straight, curved, or routed along the streets.
+  - Treatment: water treatment removes pumped-in contamination; secondary and
+    advanced sewage plants cut discharge pollution by 75% and 95%.
 - **Underground editor:**
   - Pipes and drains lie on one flat level below the lowest ground.
   - The city turns see-through, and coverage shows as blue (water) and brown (drains).
@@ -142,9 +155,14 @@ peer-to-peer multiplayer.
   - Education feeds top-level offices.
   - Clinic load and illness outbreaks; crime.
   - Eight ordinances.
-  - Follow any resident through their day, with a diary and a following camera.
+  - A sample of residents with daily schedules to their actual school, college,
+    workplace or park, walking or driving their real routes. Follow any of them,
+    with a diary and a following camera.
+  - Approval and elections: approval shows in the President panel, and each
+    ten-year term ends in an election that needs 50%.
 - **Advisors and news:** seven advisors, each linking to the overlay that shows
-  their problem, and a news feed that names the streets.
+  their problem, and a news feed that names the streets and tells families' stories
+  (who moved, and why).
 
 ### Transit and freight
 - **Transit:** bus, tram, rail (elevated track) and metro (underground).
@@ -290,13 +308,16 @@ peer-to-peer multiplayer.
   - Other tiles are drawn from 128×128 snapshots: boxes rather than procedural
     buildings.
 - **Residents:**
+  - Schedules cover a sample of residents, not the whole population.
   - One resident at a time can be followed, on the visual clock rather than the
     economy's.
-  - Pedestrians are sampled errands, not every resident.
+  - Elections judge only your own tile.
 - **Hazards:** flooding is a daily propagation model, not a fluid solver. Snow is
   aggregate, cleared by coverage.
-- **Utilities:** lines and pipes are straight runs. Capacity is per run, with no
-  pressure network or high-voltage tier.
+- **Utilities:** capacity is per run and per tier; there is no hydraulic pressure
+  network.
+- **Roads:** lift bridges open on a fixed timetable rather than for each passing
+  boat. Parking is a citywide balance, not per block.
 - **Multiplayer:**
   - One tile per player per session; switching tiles leaves the session, and you
     rejoin with the same name.
@@ -339,25 +360,44 @@ migratable, and adds headless tests (and browser checks where it shows on screen
 6. **Diplomacy.** Toll-free agreements between players, shared transit lines across
    portals, and joint services.
 
-### AC — Living citizens (from the old U list)
-1. Sampled residents with daily schedules. Children go to their actual school and
-   students to college; trips come from the traffic assignment and drive the
-   pedestrians and cars you see.
-2. Personal stories in the news, for example a family that moved away because of
-   the commute or a toll.
-3. An approval rating and elections for your own tile: residents can vote you out,
-   a game-over condition in goal mode.
+### AC — Living citizens — delivered
+1. **Delivered — Residents with schedules.** A sample of residents is assigned real
+   destinations along the traffic network: children to a school with free seats,
+   students to a college or university, adults to a workplace, retirees to a park.
+   Each gets an outbound and a return route and a departure time. Short or
+   car-free trips, and trips where parking is scarce, are walked. The followed
+   resident and the pedestrians use these same routes.
+2. **Delivered — Personal stories.** The news reports families who move in, move away
+   or change homes, and the reason: a better job, a shorter commute, a lower toll
+   or cheaper rent.
+3. **Delivered — Approval and elections.** Approval is weighted by residents and comes
+   from happiness, health, utilities, jobs, commute length and tolls. It shows in
+   the President panel. At each ten-year term end you face an election and need
+   50% to stay in office. Losing ends an unfinished goal game; free play and
+   sandbox continue.
 
-### AD — Infrastructure depth
-1. **Utility tiers:** bigger mains and high-voltage lines with transformer
-   stations; water treatment tied to pumped-water pollution; sewage treatment
-   levels.
-2. **Curved and routed runs:** lines and pipes drawn with the road tool's curves,
-   following a road automatically.
-3. **Road upkeep:** maintenance vehicles that repair road condition as they drive.
-4. **Parking:** parking demand and lots that change the car share.
-5. **Bridge styles:** choose beam, arch or suspension, with costs and span limits;
-   movable bridges for shipping lanes.
+### AD — Infrastructure depth — delivered
+1. **Delivered — Utility tiers.**
+   - High-voltage lines carry 480 MW, and trunk mains and interceptor drains carry
+     640 units.
+   - Transformer stations join high-voltage runs to the local grid and add 480 MW.
+   - Water treatment removes 80% of the contamination pumped into its grid.
+   - Secondary and advanced sewage plants treat 500 and 900 units, with 75% and 95%
+     less pollution in the discharge.
+2. **Delivered — Curved and routed runs.** Lines and pipes can be drawn straight,
+   curved like roads, or routed automatically along streets (ignoring one-way rules).
+3. **Delivered — Road upkeep.** Maintenance depots send crews along real routes to the
+   most worn roads, repairing them as they drive. Depot funding sets the speed.
+4. **Delivered — Parking.** Parking demand comes from residents and workers. Kerbs
+   cover half of it, and parking lots add 100 spaces each. Where parking is scarce,
+   more work trips walk or take transit.
+5. **Delivered — Bridge styles.** Automatic, beam (60 m span), arch (140 m),
+   suspension (400 m) or lift bridge (90 m), each with its own cost and span limit.
+   Lift bridges open for boats half an hour in every six, and road traffic waits.
+
+Also fixed in this phase: the Ubuntu desktop build failed at the `.deb` step for want
+of a project homepage. `desktop/package.json` now sets `homepage`, and all three
+platform builds complete.
 
 ### AE — Scale and performance
 1. **Bigger tiles:** 768 or 1024, with chunked fields and rendering.
@@ -410,3 +450,4 @@ migratable, and adds headless tests (and browser checks where it shows on screen
 | Z | Freight trucks, depletion and reclamation, regional commodity market, utility capacity and pressure, pedestrians with errands, richer neighbours, industrial policy, smarter governors, underground editor, crisp signs, cars on slopes | 99 |
 | AA | Icons and 3D hover cards, road levels and bridges, desktop packages, saved games, peer-to-peer multiplayer (chat, trade, contracts, claims, standings, removing players, buying AI cities at their value) | 105 |
 | AF / AG2 | Flowing water and boats, mountain and seasonal ground textures, positional audio, richer packs and modding guide; photo camera tours and WebM export | v10 · 108 |
+| AC / AD | Residents with schedules, family stories, approval and elections; utility tiers, transformers and treatment, curved and routed runs, maintenance crews, parking, bridge styles and lift bridges; Ubuntu `.deb` packaging fixed | v10 · 115 |
