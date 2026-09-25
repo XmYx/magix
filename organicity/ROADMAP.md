@@ -2,12 +2,15 @@
 
 ## Where we are
 
-Every phase through T is playable, plus the regional economy (portals, families, rents, tolls and presidents). Phases: A–G, H (terrain and water), I (mass transit),
+Every phase through T is playable, plus the regional economy (portals, families, rents, tolls and presidents),
+live governors (U0) and infrastructure and resources (Y). Phases: A–G, H (terrain and water), I (mass transit),
 J (people and society), K (disasters and events), L (region and scale),
 M (presentation), N (a connected region), O (terrain tools), P (transit and
-freight), Q (economy), R (simulation fidelity), S (platform) and T (deeper region
-play). Saves are at v10; older saves migrate automatically.
-Tests: `node scripts/organicity-test.mjs` (89 headless tests), plus the two
+freight), Q (economy), R (simulation fidelity), S (platform), T (deeper region
+play), U0 (governors build real cities) and Y (utility networks, resources and
+industry, a visible region). Saves are at v10; older saves migrate automatically
+(new fields are optional).
+Tests: `node scripts/organicity-test.mjs` (105 headless tests), plus the two
 Playwright scripts described at the end of this file.
 
 What a city has today:
@@ -54,8 +57,40 @@ What a city has today:
   - Families live, work, commute and migrate between tiles.
   - AI presidents compete with you, and every ten years a term ends with a
     comparison of all presidents.
-- **Presentation:** advisors, news, tutorial and scenarios, sound, photo mode,
+- **Governors and a visible region:**
+  - Other governors build real cities: an AI builder lays out streets and zoning,
+    utilities and services in phases, with a cash reserve, and works resource deposits.
+  - Cities within two tiles run at full simulation in a background worker.
+  - Every tile's land is pregenerated in the background, continuing its neighbours'
+    coasts, rivers and hills. A city founded there later grows on that same land.
+  - All 24 other tiles are drawn around your city, stitched onto its edges, with the
+    weather's tint. Full texture (in Settings) draws their lots, roads, shores and
+    woods pixel by pixel.
+  - Take over an AI city as its governor, or hand one of yours to an AI.
+- **Utility networks:** roads still carry power, water and sewage. Power lines (on
+  pylons), water pipes and drains join separate road networks into one grid per
+  utility, so a plant out of town can feed it. Drains take rain ponds away. The
+  optional strict grid needs every building to have all three within reach. There
+  is an underground view. Lines cost per metre and have upkeep.
+- **Resources and industry:**
+  - Seeded deposits (forest, coal, stone, iron and ore) show on the resources overlay.
+  - Lumber camps, mines and quarries must sit on a deposit and slowly work it out;
+    forests regrow.
+  - Seven processors: sawmill, paper mill, furniture works, cement works,
+    steelworks, smelter and machinery plant.
+  - The market:
+    - Leftovers sell at drifting prices if they can leave town.
+    - The commodity exchange pays better and imports missing inputs.
+    - Warehouses hold stock while prices are low.
+  - Plants need road, power, water and workers.
+  - Local coal cuts coal plant upkeep, furniture and paper stock the shops, cement
+    and steel cut road upkeep, and machinery lifts industrial output.
+  - Trucks carry the loads.
+- **Presentation:** pedestrians on the pavements, optional ordered dithering and
+  light glow (bloom), advisors, news, tutorial and scenarios, sound, photo mode,
   touch controls, accessibility settings, and share links and files.
+- **Gentler hazards:** storm surges are rare and shallow, and rain makes puddles,
+  not lakes. The zoning brush only paints empty land (Shift repaints).
 
 Known limits:
 
@@ -69,13 +104,122 @@ Known limits:
 - Families are households. Their number in the played city follows the city's
   occupancy: the city's own growth brings newcomers from outside the region.
   Moves between buildings and tiles are family decisions.
-- AI cities have no map: their housing and jobs are 24 and 16 synthetic blocks,
-  handled in aggregate. Cities of yours that you've never played since the
-  economy started have no housing stock yet.
-- Only the played tile has traffic. Neighbouring tiles run families, housing, jobs
-  and treasury monthly without vehicles.
+- AI cities more than two tiles away have no map yet: their housing and jobs are
+  synthetic blocks, handled in aggregate, drawn as a skyline on their pregenerated land.
+- Only the played tile has traffic and pedestrians. Background cities simulate
+  without vehicles, and the host runs one tile job at a time (about a second each for
+  land, a few seconds for a city month) while the game is in view.
+- Tile views are 128×128 snapshots: other tiles show boxes for buildings, not
+  procedural models.
+- Utility lines are straight runs with unlimited capacity; resource trade stays
+  within the city's market (no commodity trade between tiles yet).
 
 ## Next steps
+
+### Z — Enhancements to infrastructure, industry and the visible region (delivered)
+- **Z1. Freight you can see.**
+  - Trucks, coloured by commodity, run from working plants to the next plant, a
+    terminal or the highway.
+  - Industry sales add freight at the regional exits.
+- **Z2. Depletion and reclamation.**
+  - Warnings as a seam runs out.
+  - Worked-out pits and mines can be reclaimed into a lake, and lumber camps into
+    replanted woods (undoable).
+- **Z3. Regional commodity market.**
+  - Every other city's last-month sales are supply; its purchases and its people's
+    appetite are demand.
+  - Scarce commodities fetch up to ×1.45, gluts down to ×0.7.
+  - Rival exchanges trim your exchange's premium.
+  - Imported inputs are cheaper when a neighbour sells them.
+  - The industry report has a Region column.
+- **Z4. Utility capacity.**
+  - Each run carries a limited load: 80 MW per power line, 160 units per pipe or drain.
+  - A network imports only what its lines carry, and a substation adds 240 MW.
+  - Overloaded runs show red in the underground view, and the advisor tells you.
+  - Pumps lift water 18 units above themselves and towers 30; homes higher up go dry.
+  - Unpowered buildings go dark at night.
+- **Z5. People with purpose.**
+  - Pedestrians walk from real homes along the fastest route: to stops at rush hour,
+    school in the morning, shops by day and parks in the afternoon.
+  - They crowd a festival venue while one is on.
+- **Z6. Richer neighbours.**
+  - Adjacent tiles' buildings get facades with windows that light up at night.
+  - Cars drive their streets.
+  - Woods next door change with the seasons.
+- **Z7. Industrial policy.**
+  - District industry policies:
+    - industrial park: +15% processing, +10% factory productivity;
+    - mining district: +25% extraction, faster depletion, more pollution.
+  - Per-plant scrubbers: −65% pollution for +40% upkeep.
+  - Mines and mills raise demand for worker housing.
+- **Z8. Smarter governors.**
+  - AI cities follow fuller chains (up to machinery, exchange and warehouse).
+  - They lay power lines and pipes from plants on separate networks, and build
+    substations and water towers when needed.
+  - They offer you monthly commodity contracts, accepted and ended in the industry
+    report.
+
+Also in this pass:
+- **Underground layer.** Pipes and drains lie on one flat level below the lowest
+  ground on the map. In the underground view:
+  - the city is shown as ghosts, with trees and pedestrians hidden;
+  - clicks land on the pipe level;
+  - blue and brown ground shows what the water pipes and drains reach;
+  - the underground bulldozer removes runs without touching roads or buildings.
+- **Signs and glow.** Floating problem signs are drawn after post-processing, so no
+  glow or dither touches them. Street lamps are softer, and bloom has a higher
+  threshold.
+- **Cars on slopes.** Vehicles pitch with the ground along their heading, smoothed
+  and capped at ±0.45 rad.
+
+### AA — Building, saving, desktop and multiplayer (delivered)
+- **Icons and hover cards.** Every buildable has an icon rendered from its real model:
+  services, utilities, industry, roads at each level, zones, lines and pipes. Hovering
+  shows a card with the model turning in 3D, plus all its numbers (costs, outputs,
+  coverage, inputs, pollution, unlocks).
+- **Road levels and bridges.**
+  - Three elevated levels, chosen with PgUp/PgDn.
+  - Chained elevated roads hold their height through joints, ramping only where they
+    meet another level or end.
+  - Decks run level between their ends, with pillars down to the ground.
+  - Ground roads over water become bridges that climb from the banks. They get piers,
+    railings, and towers with cables on spans over 70 m.
+  - Joints mid-river sit on the deck.
+- **Desktop packages.** An Electron app serves the game from `app://` with bundled
+  three.js, fully offline. It builds AppImage/deb/tar.gz, dmg/zip and nsis/portable,
+  with a GitHub workflow and a smoke test.
+- **Saved games.**
+  - Whole regions are saved in IndexedDB, with a panel to save, load, overwrite, rename,
+    delete, export and import them.
+  - They also load from the start screen.
+  - Ctrl+S quick-saves, and an autosave runs every five minutes.
+- **Multiplayer.**
+  - WebRTC data channels with pasted join and answer codes, or an optional
+    zero-dependency signalling server.
+  - The host keeps the region and runs the AI governors. Each player builds their own
+    tile at the same time and sends their city every month.
+  - Other players' cities appear next door and on the world map.
+  - Chat, money transfers, monthly contracts, land claims and standings.
+  - Everything a peer sends is checked.
+  - The host can remove a player. The name is barred for the rest of the session;
+    their land and city stay.
+  - Either party can end a contract between players; the host checks it's really theirs.
+  - AI governors' cities sell only for their value: ₵60k for the land, plus ₵150 per
+    person, ₵90 per job, and the treasury. The host checks the price against its own
+    numbers, stops running the AI there, and hands the city's save to the buyer.
+- Known limits:
+  - A player plays one tile per session; switching tiles leaves the session, but you
+    can rejoin with the same name.
+  - Players don't build together on the same tile.
+  - Each player's regional economy is their own projection.
+  - Players behind strict networks need a TURN server (settable in the panel).
+
+### Next ideas
+- Pipe and line capacity upgrades (bigger mains, high-voltage lines), and water
+  treatment tied to pollution.
+- Commodity flows between tiles as visible portal freight in the background
+  simulation.
+- Neighbour tiles with their real procedural buildings when viewed up close.
 
 ### U — Living citizens
 - Many sampled residents with daily schedules (school for children, shops,

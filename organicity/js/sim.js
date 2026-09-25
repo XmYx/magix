@@ -3,6 +3,8 @@
 // read-only systems — service coverage, land value & nuisance fields, traffic —
 // live in core.js and run in a Web Worker when available (in-thread time slices
 // otherwise), fed with snapshots and applied when results come back.
+import { utilityGrid, lineStats, UKINDS } from './grid.js';
+import { industryTick, industryMonth, IND_POLICIES } from './resources.js';
 import { N, FC, FN, DAY_SECONDS, MONTH_DAYS, ZONES, SERVICES, ROADS, LEVEL_APPEAL, FLOORS, START_MONEY, ORDINANCES, NEIGHBOUR_NAMES, STREET_NAMES, STREET_KINDS } from './config.js';
 import { START_ERAS, technology, buildingFloors, skyNetwork, massPlan, skyBridges } from './eras.js';
 import { hazardTick } from './terrain.js';
@@ -93,7 +95,7 @@ export class Sim {
     this.flowVersion = 0; this.fieldVersion = 0;
     this.budgetMs = 5;
     this.jobs = [
-      { name: 'utilities', period: 1, fn: () => this.utilitiesJob(), dep: () => world.net.version + ':' + world.bldVersion },
+      { name: 'utilities', period: 1, fn: () => this.utilitiesJob(), dep: () => world.net.version + ':' + world.bldVersion + ':' + (world.ulineVersion || 0) + ':' + !!this.strictGrid },
       { name: 'growth', period: 0.5, fn: () => this.growthJob() },
     ];
     for (const j of this.jobs) { j.next = 0; j.active = null; j.lastDep = null; j.ms = 0; }
@@ -321,7 +323,7 @@ export class Sim {
     for (const b of w.buildings.values()) {
       const Z = b.svc ? null : ZONES[b.zone], pol = b.svc ? null : w.policyAt(b);
       blds.push({
-        id: b.id, cx: b.cx, cz: b.cz, edge: b.edge, s: b.s, comp: b.comp ?? -1, svc: b.svc, platformId: b.platformId, zk: Z ? Z.key : '', kind: Z ? Z.kind : '',
+        id: b.id, cx: b.cx, cz: b.cz, edge: b.edge, s: b.s, comp: b.comp ?? -1, svc: b.svc, scrub: !!b.scrub, mining: w.districts[b.district]?.policy?.industry === 'mining', platformId: b.platformId, zk: Z ? Z.key : '', kind: Z ? Z.kind : '',
         level: b.level, occ: b.occ || 0, workers: b.workers || 0, ab: !!b.abandoned || (b.flood||0)>1, construction: b.constructionUntil > this.day || b.rubble > 0, spill: b.spill > 0, power: !!b.power, water: !!b.water, sewage: !!b.sewage,
         green: !!(pol && pol.green), carFree: !!(this.ordinances.carFree && pol?.carFree), bus: this.bcov('busstop', b) > 0.1, sky: skyHubs.has(b.id), spec: b.spec || null,
       });
@@ -521,6 +523,9 @@ export class Sim {
     A('Environment', pol > 0.3 ? 'bad' : pol > 0.15 ? 'warn' : 'good', pol > 0.15 ? `Homes breathe ${pct(pol)} pollution. Move industry downwind, plant parks, try green roofs.` : 'The air is clean.', 'pollution');
     const [ps, pd] = st.power, [ws, wd] = st.water;
     if (pd > ps || wd > ws) A('Utilities', 'bad', `${pd > ps ? `Power short by ${Math.round(pd - ps)} MW. ` : ''}${wd > ws ? `Water short by ${Math.round(wd - ws)} units.` : ''}`, pd > ps ? 'power' : 'water');
+    else if (st.overload?.power > 1) A('Utilities', 'bad', `Power lines are overloaded: ${Math.round(st.overload.power)} MW can't get through. Build a substation where lines reach town, or another line.`, 'pipes');
+    else if (st.overload?.water > 1 || st.overload?.sewage > 1) A('Utilities', 'bad', 'Water pipes or drains are at capacity: lay another run to the network that is short.', 'pipes');
+    else if (st.lowPressure > 3) A('Utilities', 'bad', `${st.lowPressure} buildings sit too high for the water pressure. A water tower uphill raises it.`, 'water');
     else A('Utilities', 'good', 'Power and water cover demand.', 'power');
     const net = st.incomeM - st.expenseM;
     A('Finance', this.money < 0 ? 'bad' : net < 0 ? 'warn' : 'good', this.money < 0 ? 'The city is in debt. Raise taxes, cut funding or sell utilities.' : net < 0 ? `Losing ₵${Math.round(-net).toLocaleString('en-US')} a month.` : `Surplus of ₵${Math.round(net).toLocaleString('en-US')} a month.`, null);
@@ -562,11 +567,12 @@ export class Sim {
   // weights for commuters in, commuters out and freight at each regional exit
   exitWeights() {
     const nb = this.tileNeighbours || {}, P = this.partnerCities || [], pf = this.portalFlows;
-    return [...this.w.net.nodes.values()].filter((n) => n.outside && n.edges.size).map((n) => {
+    const ex = [...this.w.net.nodes.values()].filter((n) => n.outside && n.edges.size), cargo = (this.industryFlow?.sales || 0) * 30 / 60 / Math.max(1, ex.length);   // commodity loads leave by every exit
+    return ex.map((n) => {
       const side = sideOf(n), t = nb[side], p = P.find((q) => q.dir === side), size = t ? t.pop || 0 : 20000;
       // with the regional economy running, each exit is a portal carrying its families' commutes, migrants and freight
-      if (pf) { const f = pf.get(n.id); return { id: n.id, side, name: t?.name || null, in: f ? f.in + f.migrants : 0, out: f ? f.out + f.migrants : 0, freight: f ? f.freight : 0, toll: f?.toll ?? 0 }; }
-      return { id: n.id, side, name: t?.name || null, in: p ? (p.unemployed || 0) * 0.25 + 5 : size / 1000, out: p ? (p.jobsFree || 0) * 0.3 + 5 : size / 1000, freight: size / 1000 + (t?.kind === 'ai' ? 20 : 5) };
+      if (pf) { const f = pf.get(n.id); return { id: n.id, side, name: t?.name || null, in: f ? f.in + f.migrants : 0, out: f ? f.out + f.migrants : 0, freight: (f ? f.freight : 0) + cargo, toll: f?.toll ?? 0 }; }
+      return { id: n.id, side, name: t?.name || null, in: p ? (p.unemployed || 0) * 0.25 + 5 : size / 1000, out: p ? (p.jobsFree || 0) * 0.3 + 5 : size / 1000, freight: size / 1000 + (t?.kind === 'ai' ? 20 : 5) + cargo };
     });
   }
   terminals() {
@@ -682,7 +688,11 @@ export class Sim {
     let hh = 0, hhCap = 0, happyR = 0, nR = 0, eduSum = 0, kids = 0, seniors = 0, hiSum = 0;
     const cap = { C: 0, I: 0, O: 0 };
     for (const b of w.buildings.values()) {
-      if (b.svc) continue;
+      if (b.svc) {   // resource industry employs people too
+        const J = SERVICES[b.svc]?.jobs; b.jobs = J && !b.abandoned && !(b.constructionUntil > this.day) && (b.flood || 0) <= 1 ? J : 0;
+        if (b.jobs) cap.I += b.jobs; else if (J) b.workers = 0;
+        continue;
+      }
       this.capacity(b);
       const kind = ZONES[b.zone].kind;
       if (b.abandoned) { b.occ = 0; b.workers = 0; continue; }
@@ -719,8 +729,8 @@ export class Sim {
     const oFill = cap.O ? Math.min(fill, (W * Math.min(1, eduRate + hiEdu * 0.5) + commuterPool * 0.4) / cap.O) : 0;
     const filled = { C: 0, I: 0, O: 0 };
     for (const b of w.buildings.values()) {
-      if (b.svc || !b.jobs) continue;
-      const kind = ZONES[b.zone].kind;
+      if (!b.jobs) continue;
+      const kind = b.svc ? 'I' : ZONES[b.zone].kind;
       const f = (kind === 'O' ? oFill : fill) * (b.abandoned || b.fire ? 0 : 1) * (b.out ? 1 : 0.3);
       b.workers = (b.workers || 0) + (b.jobs * f - (b.workers || 0)) * (sb && sb.instant ? 1 : 0.3);
       filled[kind === 'M' ? 'C' : kind] += b.workers;
@@ -734,7 +744,8 @@ export class Sim {
     const pen = (k) => (this.tax[k] - 9) * 4.5 + (k === 'R' || k === 'C' ? (this.landTax || 0) * 3 : 0);
     // goods: shops sell what local industry makes, topped up by imports over roads and freight terminals
     const terms = this.terminals(), termCap = terms.reduce((s, t) => s + t.cap, 0), has = (k) => terms.some((t) => t.svc === k);
-    const goodsDemand = cap.C * 0.5, localGoods = filled.I * 1.1, usedLocal = Math.min(localGoods, goodsDemand);
+    const ind = industryTick(this);   // mines, mills and plants: production, local use and sales
+    const goodsDemand = cap.C * 0.5, localGoods = filled.I * 1.1 + (ind?.goods || 0) / MONTH_DAYS, usedLocal = Math.min(localGoods, goodsDemand);
     const imported = Math.min(goodsDemand - usedLocal, (hasOut ? 150 + pop * 0.05 : 0) + termCap * 1.5);
     const supply = goodsDemand > 1 ? (usedLocal + imported) / goodsDemand : 1;
     st.goods = { demand: goodsDemand, local: localGoods, usedLocal, imported, supply, exportable: Math.max(0, localGoods - usedLocal), termCap };
@@ -745,6 +756,7 @@ export class Sim {
       O: (80 * (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 - cap.O)) / (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 + cap.O + 30) - pen('O') - 5 + (has('airport') ? 10 : this.shared('airport') ? 5 : 0),
     };
     if (this.devPriority && target[this.devPriority] != null) target[this.devPriority] += 10;   // the president's development priority
+    { let hj = 0; for (const b of w.buildings.values()) if (SERVICES[b.svc]?.chain && b.jobs) hj += b.jobs; target.R += Math.min(15, hj / 40); }   // mines and mills need workers' housing
     for (const k in dem) dem[k] = sb && sb.lockDemand ? sb.demand[k] : clamp(dem[k] * 0.8 + target[k] * 0.2, -100, 100);
     Object.assign(st, { pop, households: hh, hhCap, workers: W, employed, unemp, jobs: cap, filled, commuters, eduRate, happyR: avgHappyR,
       kids, adults, seniors, seats, schoolLoad, hiEdu, hiSeats, hiLoad, patients, clinicLoad, outJobs });
@@ -755,7 +767,7 @@ export class Sim {
     let prio = 0; for (const d of w.districts) if (d && d.policy.priority !== 'balanced') prio++;
     for (const b of w.buildings.values()) {
       if (b.svc) {
-        const S = SERVICES[b.svc], base = (S.upkeep * this.budgetFor(b.svc)) / MONTH_DAYS;
+        const S = SERVICES[b.svc], base = (S.upkeep * this.budgetFor(b.svc) * (b.svc === 'coal' ? 1 - 0.35 * (ind?.fuel || 0) : 1) * (b.scrub ? 1.4 : 1)) / MONTH_DAYS;   // local coal is cheaper fuel; scrubbers cost extra
         exp[S.cat === 'util' ? 'utilities' : 'services'] += base; exp.policies += base * prio * 0.05; // priority surcharge
         if (S.tourism) inc.tourism += (S.tourism * Math.min(1, this.stats.pop / 5000 + 0.3) * this.budgetFor(b.svc)) / MONTH_DAYS;
         continue;
@@ -765,7 +777,7 @@ export class Sim {
       // retirees pay about half the income tax of working households
       if (b.hh) inc.R += ((b.occ * this.taxFor('R', b)) / 100 * 85 * (0.6 + 0.8 * lv) * (1 - 0.5 * (b.seniors || 0) / Math.max(1, b.occ * HH))) / MONTH_DAYS;
       if (b.jobs) {
-        const k = kind === 'M' ? 'C' : kind, prod = b.prod ?? 1;
+        const k = kind === 'M' ? 'C' : kind, prod = (b.prod ?? 1) * (k === 'I' ? (1 + 0.2 * (ind?.machinery || 0)) * (pol?.industry === 'park' ? 1.1 : 1) : 1);   // local machinery; industrial parks
         const spec = (b.spec === 'leisure' ? 1.25 : b.spec === 'tech' ? 1.35 : 1) * (k === 'C' && ord.curfew ? 0.92 : 1) * (k === 'I' && ord.noise ? 0.95 : 1) * (k === 'C' ? 0.6 + 0.4 * (st.goods?.supply ?? 1) : 1);   // shops without goods earn less
         const base = (k === 'C' ? 70 * (0.6 + 0.8 * lv) : k === 'O' ? 95 * (0.6 + 0.8 * lv) : 55 * (pol && pol.green ? 0.8 : 1)) * spec;
         inc[k] += (((b.workers || 0) * this.taxFor(k, b)) / 100 * base * prod) / MONTH_DAYS;
@@ -787,7 +799,8 @@ export class Sim {
     if (hasOut || this.terminals().length) inc.exports = ((st.goods?.exportable ?? filled.I * 1.1) * mk.goods * bonus) / MONTH_DAYS;
     inc.deals = (this.dealFlow?.inc || 0) / MONTH_DAYS; exp.deals = (this.dealFlow?.exp || 0) / MONTH_DAYS;
     inc.tolls = (this.tollIncome || 0) / MONTH_DAYS;                  // toll booths at this tile's portals (set monthly by the region)
-    exp.roads *= this.infra ?? 1;                                     // the president's infrastructure spending
+    exp.roads *= (this.infra ?? 1) * (1 - 0.15 * (ind?.materials || 0));   // local cement and steel make repairs cheaper
+    inc.industry = ind?.sales || 0; exp.inputs = ind?.costs || 0;                                     // the president's infrastructure spending
     // economy: bonds, insurance, preparedness and land tax
     exp.bonds = this.bondTick();
     const insured = this.insuredValue();
@@ -795,7 +808,8 @@ export class Sim {
     exp.preparedness = (600 * (this.preparedness || 0)) / MONTH_DAYS;
     inc.land = 0; if (this.landTax) for (const b of w.buildings.values()) if (!b.svc && !b.abandoned) inc.land += (this.landValueOf(b) * this.landTax) / 100 / 360;
     for (const k in ord) if (ord[k] && ORDINANCES[k]) exp.ordinances += ORDINANCES[k].cost / MONTH_DAYS;
-    for (const d of w.districts) if (d?.policy.green) exp.policies += 60 / MONTH_DAYS;
+    for (const d of w.districts) { if (d?.policy.green) exp.policies += 60 / MONTH_DAYS; if (d?.policy.industry && IND_POLICIES[d.policy.industry]) exp.policies += IND_POLICIES[d.policy.industry].cost / MONTH_DAYS; }
+    exp.lines = w.ulines?.length ? lineStats(w).upkeep / MONTH_DAYS : 0;
     // bus lines: operating cost per stop, fares from peak riders (~6 per rider per month)
     for (const l of w.lines) {
       const info = this.lineInfo?.get(l.id);
@@ -805,7 +819,7 @@ export class Sim {
     }
     exp.roads += w.levees.reduce((n,v)=>n+v,0)*.03/MONTH_DAYS;
     exp.debt = this.debtTick();
-    const income = inc.R + inc.C + inc.I + inc.O + inc.fares + inc.trade + inc.tourism + inc.exports + inc.deals + inc.land + inc.tolls, expense = exp.services + exp.utilities + exp.roads + exp.debt + exp.transit + exp.junctions + exp.imports + exp.policies + exp.ordinances + exp.deals + exp.bonds + exp.insurance + exp.preparedness;
+    const income = inc.R + inc.C + inc.I + inc.O + inc.fares + inc.trade + inc.tourism + inc.exports + inc.deals + inc.land + inc.tolls + inc.industry, expense = exp.services + exp.utilities + exp.roads + exp.debt + exp.transit + exp.junctions + exp.imports + exp.policies + exp.ordinances + exp.deals + exp.bonds + exp.insurance + exp.preparedness + exp.lines + exp.inputs;
     if (!(sb && sb.infinite)) this.money += income - expense;
     this.month.income += income; this.month.expense += expense;
     st.incomeM = income * MONTH_DAYS; st.expenseM = expense * MONTH_DAYS; st.inc = inc; st.exp = exp;
@@ -833,7 +847,7 @@ export class Sim {
     if (this.scenario && !this.scenarioStart && this.day >= 30) this.scenarioStart = { pop: st.pop, day: this.day };
     if (this.scenario === 'gridlock' && !this.scenarioWon && !this.scenarioFailed && this.day > 720) { this.scenarioFailed = true; this.msg('The two-year deadline has passed. Keep playing, or restart the scenario.', 'bad'); }
     if (this.day % MONTH_DAYS === 0) {
-      this.monthlyNews(); this.growRegion(); this.gentrify(); this.onMonth?.();
+      industryMonth(this); this.monthlyNews(); this.growRegion(); this.gentrify(); this.onMonth?.();
       this.lastMonth = { ...this.month };
       this.history.push({ day: this.day, pop: Math.round(pop), money: Math.round(this.money), income: Math.round(this.month.income), expense: Math.round(this.month.expense),
         unemp: +unemp.toFixed(3), R: Math.round(this.demand.R), C: Math.round(this.demand.C), I: Math.round(this.demand.I), O: Math.round(this.demand.O), happy: +avgHappyR.toFixed(3) });
@@ -905,6 +919,7 @@ export class Sim {
     const hub = [...comps.entries()].find(([k]) => g.compOut[k])?.[1];
     this.utilSurplus = hub ? { power: +(hub.p - (hub.dp || 0)).toFixed(1), water: +(hub.w - (hub.dw || 0)).toFixed(1) } : { power: 0, water: 0 };   // before any deals
     for (const d of this.deals || []) {
+      if (d.kind !== 'power' && d.kind !== 'water') continue;   // commodity contracts run in the industry tick
       const dir = Object.entries(this.tileNeighbours || {}).find(([, t]) => t.key === d.partner)?.[0], linked = !!dir && outSides.has(dir) && !!hub;
       let q = 0;
       if (linked) {
@@ -928,17 +943,46 @@ export class Sim {
     this.tradeFlow = tr;
     let sp = 0, dp = 0, sw = 0, dw = 0, ss = 0;
     for (const c of comps.values()) { sp += c.p; sw += c.w; ss += c.s; }
-    const order = all.filter((b) => b.svc).concat(all.filter((b) => !b.svc));
+    // Power lines, pipes and drains join road networks into grids. Each network (or, under the
+    // strict rule, each line) serves its own demand from its own supply first; what it lacks it
+    // imports from the rest of its grid, but only as much as its lines (and substations) carry.
+    const grid = utilityGrid(w), strict = !!this.strictGrid, avail = { p: new Map(), w: new Map(), s: new Map() };
+    const order = all.filter((b) => b.svc).concat(all.filter((b) => !b.svc)), nodeOf = new Map();
+    const boost = new Map(); for (const b of all) if (b.svc === 'substation' && !b.abandoned && b.comp >= 0) boost.set(b.comp, (boost.get(b.comp) || 0) + SERVICES.substation.capBoost * this.budgetFor('substation'));
+    const lineLoad = new Map(), short = { p: 0, w: 0, s: 0 };
+    for (const f in UKINDS) {
+      const kind = UKINDS[f], dem = new Map(), sup = new Map();
+      for (const b of order) { const k = grid.node(kind, b, strict); nodeOf.set(f + b.id, k); if (k != null) { const [np, nw] = need.get(b.id); dem.set(k, (dem.get(k) || 0) + (f === 'p' ? np : nw)); } }
+      for (const [k, c] of comps) sup.set('c' + k, c[f]);
+      const nodes = new Set([...dem.keys(), ...sup.keys()]), roots = new Map();
+      for (const k of nodes) { const r = grid.root(kind, k); (roots.get(r) || roots.set(r, []).get(r)).push(k); }
+      for (const list of roots.values()) {
+        let pool = 0; for (const k of list) pool += Math.max(0, (sup.get(k) || 0) - (dem.get(k) || 0));
+        for (const k of list) {
+          const own = sup.get(k) || 0, deficit = Math.max(0, (dem.get(k) || 0) - own);
+          if (!deficit || list.length < 2) { avail[f].set(k, own); continue; }
+          const cap = grid.capacity(kind, k, f === 'p' && k[0] === 'c' ? boost.get(+k.slice(1)) || 0 : 0), imp = Math.min(deficit, cap, pool);
+          pool -= imp; avail[f].set(k, own + imp);
+          if (imp < deficit && cap <= imp + 1e-6 && pool > 0) short[f] += deficit - imp;   // the lines, not the plants, are the limit
+          const ids = k[0] === 'l' ? [+k.slice(1)] : [...grid.touching(kind, +k.slice(1))];
+          for (const id of ids) lineLoad.set(id, Math.max(lineLoad.get(id) || 0, cap ? imp / cap : 0));
+        }
+      }
+    }
+    this.lineLoad = lineLoad; this.stats.overload = { power: +short.p.toFixed(1), water: +short.w.toFixed(1), sewage: +short.s.toFixed(1) };
+    const draw = (f, b, n) => { const k = nodeOf.get(f + b.id), v = k == null ? 0 : avail[f].get(k) || 0; if (v < n) return false; avail[f].set(k, v - n); return true; };
+    // water pressure: pumps lift water 18 units above themselves, water towers 30; homes higher up run dry
+    const head = new Map();
+    for (const b of all) if (SERVICES[b.svc]?.water && !b.abandoned && b.comp >= 0) { const r = grid.root('water', 'c' + b.comp), h = w.heightAt(b.cx, b.cz) + (b.svc === 'tower' ? 30 : 18); if (h > (head.get(r) ?? -1e9)) head.set(r, h); }
+    let lowPressure = 0;
     for (const b of order) {
       const [np, nw] = need.get(b.id);
       dp += np; dw += nw;
-      const c = comps.get(b.comp);
-      if (!c) { b.power = b.water = b.sewage = false; continue; }
-      b.power = c.p >= np; if (b.power) c.p -= np;
-      b.water = c.w >= nw; if (b.water) c.w -= nw;
-      b.sewage = c.s >= nw; if (b.sewage) c.s -= nw;
+      const had = b.power; b.power = draw('p', b, np); b.water = draw('w', b, nw); b.sewage = draw('s', b, nw);
+      if (b.water && !b.svc) { const k = nodeOf.get('w' + b.id), h = k != null ? head.get(grid.root('water', k)) : null; if (h != null && w.heightAt(b.cx, b.cz) > h) { b.water = false; b.lowPressure = true; lowPressure++; } else b.lowPressure = false; }
+      if (had !== undefined && had !== b.power && !b.svc && b.chunk != null) w.dirty?.chunks.add(b.chunk);   // lights on or off: redraw its chunk
     }
-    this.stats.power = [sp, dp]; this.stats.water = [sw, dw]; this.stats.sewage = [ss, dw];
+    this.stats.power = [sp, dp]; this.stats.water = [sw, dw]; this.stats.sewage = [ss, dw]; this.stats.lowPressure = lowPressure;
     yield;
     const LS = SERVICES.landfill;
     const fills = all.filter((b) => b.svc === 'landfill' && !b.abandoned && b.comp >= 0);
@@ -1105,7 +1149,7 @@ export class Sim {
   }
 
   // ---------------------------------------------------------------- save
-  serialize() { return { day: this.day, money: this.money, tax: this.tax, demand: this.demand, history: this.history, sandbox: this.sandbox, serviceBudgets: this.serviceBudgets, loans: this.loans, loanId: this.loanId, scenario: this.scenario, scenarioWon: this.scenarioWon, event: this.event || null, shock: this.shock || 0, bonds: this.bonds, bondId: this.bondId, insurance: !!this.insurance, preparedness: this.preparedness || 0, landTax: this.landTax || 0, debtMonths: this.debtMonths || 0, austerity: !!this.austerity, gameOver: !!this.gameOver, ordinances: this.ordinances, region: this.region, news: this.news.slice(-30), milestone: this.milestone, scenarioStart: this.scenarioStart, scenarioFailed: !!this.scenarioFailed, tutorialFlags: this.tutorialFlags, weatherOverride: this.weatherOverride, startYear: this.startYear, eraPace: this.eraPace, brackets: this.brackets, trade: this.trade }; }
+  serialize() { return { day: this.day, money: this.money, tax: this.tax, demand: this.demand, history: this.history, sandbox: this.sandbox, serviceBudgets: this.serviceBudgets, loans: this.loans, loanId: this.loanId, scenario: this.scenario, scenarioWon: this.scenarioWon, event: this.event || null, shock: this.shock || 0, bonds: this.bonds, bondId: this.bondId, insurance: !!this.insurance, preparedness: this.preparedness || 0, landTax: this.landTax || 0, debtMonths: this.debtMonths || 0, austerity: !!this.austerity, gameOver: !!this.gameOver, ordinances: this.ordinances, region: this.region, news: this.news.slice(-30), milestone: this.milestone, scenarioStart: this.scenarioStart, scenarioFailed: !!this.scenarioFailed, tutorialFlags: this.tutorialFlags, weatherOverride: this.weatherOverride, startYear: this.startYear, eraPace: this.eraPace, brackets: this.brackets, trade: this.trade, ...(this.strictGrid ? { strictGrid: true } : {}), ...(this.industry ? { industry: { stock: this.industry.stock, mined: this.industry.mined, last: this.industry.last, warned: this.industry.warned || {} } } : {}) }; }
   load(d) {
     Object.assign(this, { day: d.day, money: d.money, tax: d.tax, demand: d.demand, history: d.history || [] });
     this.sandbox = d.sandbox ? { ...SANDBOX_DEFAULTS, ...d.sandbox } : null;
@@ -1121,7 +1165,7 @@ export class Sim {
     this.startYear=START_ERAS.includes(d.startYear) || (Number.isInteger(d.startYear) && d.startYear > 1800 && d.startYear < 2400) ? d.startYear : 2000;   // later region cities start in the region's current year
     this.eraPace=[1,5,10].includes(d.eraPace)?d.eraPace:1;
     this.brackets = { lowDensity: 0, highDensity: 0, smallBiz: 0, largeBiz: 0, ...(d.brackets || {}) };
-    this.trade = { sell: true, buy: false, ...(d.trade || {}) };
+    this.trade = { sell: true, buy: false, ...(d.trade || {}) }; this.strictGrid = !!d.strictGrid; this.industry = d.industry ? { stock: d.industry.stock || {}, mined: d.industry.mined || {}, last: d.industry.last || null, warned: d.industry.warned || {}, month: null } : null;
     this.w.day = d.day;this.updateEra();hazardTick(this,false);
   }
 }

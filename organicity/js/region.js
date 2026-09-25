@@ -58,12 +58,13 @@ export function neighbours(r, k) {
   const t = r.tiles[k]; if (!t) return [];
   return DIRS.map(([dx, dz, dir]) => ({ dir, t: r.tiles[tileKey(t.x + dx, t.z + dz)] })).filter((q) => q.t);
 }
-export function canBuy(r, k) { const t = r.tiles[k]; return !!t && t.kind === 'wild' && !t.owned && neighbours(r, k).some((q) => q.t.owned); }
+export function canBuy(r, k) { const t = r.tiles[k]; return !!t && t.kind === 'wild' && !t.owned && !t.owner && neighbours(r, k).some((q) => q.t.owned); }   // in multiplayer, land another player holds is taken
 // each extra tile costs more than the last
 export function tileCost(r) { const owned = Object.values(r.tiles).filter((t) => t.owned).length; return Math.round((60000 * 1.6 ** (owned - 1)) / 1000) * 1000; }
 export function nameFor(r) { const used = new Set(Object.values(r.tiles).map((t) => t.name)); return CITY_NAMES.find((n) => !used.has(n)) || `New town ${Object.keys(r.tiles).length}`; }
 
 // headline numbers (and a small picture) of the city being played, for the world map and its neighbours
+const round = (o = {}) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.round(v)]).filter(([, v]) => v > 0));
 export function summarize(world, sim, rend) {
   const st = sim.stats, jobs = st.jobs.C + st.jobs.I + st.jobs.O, filled = st.filled.C + st.filled.I + st.filled.O;
   let thumb = null;
@@ -80,7 +81,9 @@ export function summarize(world, sim, rend) {
   const hist = sim.history, back = hist[Math.max(0, hist.length - 4)], growth = back && back.pop > 20 ? Math.max(-0.05, Math.min(0.08, (st.pop / back.pop - 1) / Math.max(1, hist.length - 1 - Math.max(0, hist.length - 4)))) : 0;
   const services = [...new Set([...world.buildings.values()].filter((b) => b.svc && !b.abandoned).map((b) => b.svc))].filter((k) => SHARED[k]);
   return { pop: Math.round(st.pop), jobs: Math.round(jobs), jobsFree: Math.max(0, Math.round(jobs - filled)), unemployed: Math.round(st.workers * st.unemp), year: sim.year, money: Math.round(sim.money), thumb, edges, exits: exitsOf(world).map(({ side, pos }) => ({ side, pos })),
-    growth, surplus: { ...(sim.utilSurplus || { power: 0, water: 0 }) }, services, day: sim.day };
+    growth, surplus: { ...(sim.utilSurplus || { power: 0, water: 0 }) }, services, day: sim.day,
+    // last month's commodity trade, for the regional market
+    industry: sim.industry?.last ? { sold: round(sim.industry.last.sold), bought: round(sim.industry.last.bought), exchange: [...world.buildings.values()].some((b) => b.svc === 'exchange' && !b.abandoned) } : null };
 }
 
 // what the simulation of tile k sees of its neighbours: adjacent cities you run, with their latest numbers
@@ -106,11 +109,15 @@ export function exitsOf(world) {
   return [...world.net.nodes.values()].filter((n) => n.outside).map((n) => { const side = sideOf(n); return { side, pos: +(side === 'west' || side === 'east' ? n.z : n.x).toFixed(1), id: n.id }; });
 }
 // For the city on tile k: neighbour edge profiles keyed by *my* side, and the exits that face me.
+// A tile whose land was pregenerated keeps the match it was made with, so its city grows on that land.
 export function edgeMatchFor(r, k) {
+  if (r.tiles[k]?.em !== undefined) return r.tiles[k].em;
   const out = {};
-  for (const { dir, t } of neighbours(r, k)) if (t.kind === 'city' && t.summary?.edges?.[OPPOSITE[dir]]) out[dir] = t.summary.edges[OPPOSITE[dir]];
+  for (const { dir, t } of neighbours(r, k)) { const e = t.edges?.[OPPOSITE[dir]] || (t.kind === 'city' && t.summary?.edges?.[OPPOSITE[dir]]); if (e) out[dir] = e; }
   return Object.keys(out).length ? out : null;
 }
+export const SIDES = ['west', 'east', 'north', 'south'];
+export function edgesOf(world) { const o = {}; for (const s of SIDES) o[s] = edgeProfile(world, s); return o; }
 export function stubsFor(r, k) {
   const out = [];
   for (const { dir, t } of neighbours(r, k)) for (const e of t.summary?.exits || []) if (e.side === OPPOSITE[dir]) out.push({ side: dir, pos: e.pos, name: t.name, key: tileKey(t.x, t.z) });

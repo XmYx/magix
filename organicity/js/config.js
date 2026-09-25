@@ -19,7 +19,8 @@ export const ROADS = {
   ramp:      { name: 'Ramp',      width: 5,  speed: 15, capacity: 1600, cost: 16, upkeep: 0.1,  desc: 'One-way slip road for interchanges; draw it in the direction of travel.', noAccess: true, oneway: 1 },
 };
 // Grade separation: cost multipliers and the height/depth of the deck; ramps are RAMP_LEN long.
-export const LAYERS = { 1: { name: 'Elevated', cost: 2.5, y: 6 }, 0: { name: 'Ground', cost: 1, y: 0 }, '-1': { name: 'Tunnel', cost: 3.5, y: -5 } };
+export const LAYERS = { 3: { name: 'Elevated · 18 m', cost: 4.2, y: 18 }, 2: { name: 'Elevated · 12 m', cost: 3.3, y: 12 }, 1: { name: 'Elevated · 6 m', cost: 2.5, y: 6 }, 0: { name: 'Ground', cost: 1, y: 0 }, '-1': { name: 'Tunnel', cost: 3.5, y: -5 } };
+export const BRIDGE_DECK = 4.5;   // a bridge deck's height above the water
 export const RAMP_LEN = 14;
 // Junction control: base delay (s), through capacity (veh / peak), build cost.
 export const JUNCTIONS = {
@@ -73,6 +74,7 @@ export const SERVICES = {
   wind:     { cat: 'util', name: 'Wind turbine',      w: 5,  d: 5,  cost: 3500,  upkeep: 110, power: 10, noise: 0.2, desc: 'Clean power; output varies with wind.' },
   pump:     { cat: 'util', name: 'Water pump',        w: 7,  d: 7,  cost: 4500,  upkeep: 200, water: 140, nearWater: true, desc: 'Must be placed by the shore.' },
   tower:    { cat: 'util', name: 'Water tower',       w: 5,  d: 5,  cost: 3000,  upkeep: 120, water: 35, desc: 'Small supply, place anywhere.' },
+  substation: { cat: 'util', name: 'Substation', w: 6, d: 6, cost: 6000, upkeep: 120, capBoost: 240, desc: 'Transformers where power lines meet a road network: it can take 240 MW more from the grid than its lines alone.' },
   outlet:   { cat: 'util', name: 'Sewage outlet',     w: 6,  d: 6,  cost: 3500,  upkeep: 150, sewage: 160, nearWater: true, pollution: 0.9, desc: 'Must be by water. Pollutes the shore.' },
   landfill: { cat: 'util', name: 'Landfill',          w: 18, d: 16, cost: 6000,  upkeep: 350, garbage: 700, radius: 380, storage: 160000, pollution: 0.5, desc: 'Garbage trucks cover a road-network radius.' },
   fire:     { cat: 'svc',  name: 'Fire station',      w: 10, d: 9,  cost: 7000,  upkeep: 450, radius: 170, desc: 'Prevents buildings burning down.' },
@@ -96,6 +98,23 @@ export const SERVICES = {
   museum:   { cat: 'svc',  name: 'Museum',            w: 16, d: 12, cost: 20000, upkeep: 500, park: 80,  landmark: 2500,  tourism: 1800, desc: 'Draws visitors; raises education appeal nearby.' },
   stadium:  { cat: 'svc',  name: 'Stadium',           w: 26, d: 22, cost: 45000, upkeep: 900, park: 60,  landmark: 5000,  tourism: 4000, noise: 0.6, desc: 'Big tourism earner, but noisy.' },
   spire:    { cat: 'svc',  name: 'Observation spire', w: 10, d: 10, cost: 80000, upkeep: 1200, park: 140, landmark: 15000, tourism: 7000, desc: 'Skyline icon visible from everywhere.' },
+  // resource industry (see resources.js): extractors sit on a deposit, processors turn inputs into
+  // products, the exchange and warehouse run the market. All need road, power, water and workers;
+  // output leaves by the highway or a freight terminal.
+  lumbercamp: { cat: 'ind', chain: 'extract', name: 'Lumber camp',     w: 14, d: 12, cost: 9000,  upkeep: 220, jobs: 25,  dep: 'timber', out: 'timber', rate: 60, reach: 26, pollution: 0.05, noise: 0.15, desc: 'Fells the forest around it. Timber regrows slowly.' },
+  coalmine:   { cat: 'ind', chain: 'extract', name: 'Coal mine',       w: 16, d: 14, cost: 16000, upkeep: 420, jobs: 60,  dep: 'coal',   out: 'coal',   rate: 70, reach: 18, pollution: 0.35, noise: 0.3, desc: 'Digs coal: fuel for power plants, steelworks, smelters and cement kilns.' },
+  quarry:     { cat: 'ind', chain: 'extract', name: 'Stone quarry',    w: 18, d: 16, cost: 10000, upkeep: 240, jobs: 30,  dep: 'stone',  out: 'stone',  rate: 80, reach: 18, pollution: 0.15, noise: 0.45, desc: 'Cuts stone for cement.' },
+  ironmine:   { cat: 'ind', chain: 'extract', name: 'Iron mine',       w: 16, d: 14, cost: 18000, upkeep: 450, jobs: 60,  dep: 'iron',   out: 'iron',   rate: 55, reach: 18, pollution: 0.3, noise: 0.3, desc: 'Mines iron ore for steel.' },
+  oremine:    { cat: 'ind', chain: 'extract', name: 'Ore mine',        w: 16, d: 14, cost: 18000, upkeep: 450, jobs: 50,  dep: 'ore',    out: 'ore',    rate: 45, reach: 18, pollution: 0.3, noise: 0.3, desc: 'Mines copper and tin ore for the smelter.' },
+  sawmill:    { cat: 'ind', chain: 'process', name: 'Sawmill',         w: 18, d: 12, cost: 14000, upkeep: 300, jobs: 40,  in: { timber: 1 }, out: 'lumber', rate: 50, pollution: 0.1, noise: 0.3, desc: 'Saws timber into lumber.' },
+  papermill:  { cat: 'ind', chain: 'process', name: 'Paper mill',      w: 18, d: 14, cost: 20000, upkeep: 420, jobs: 50,  in: { timber: 1.2 }, out: 'paper', rate: 40, pollution: 0.35, noise: 0.2, unlock: 800, desc: 'Pulps timber into paper; shops sell it as goods.' },
+  furniture:  { cat: 'ind', chain: 'process', name: 'Furniture works', w: 16, d: 12, cost: 18000, upkeep: 380, jobs: 70,  in: { lumber: 1 }, out: 'furniture', rate: 35, pollution: 0.05, noise: 0.15, unlock: 800, desc: 'Turns lumber into furniture; shops sell it as goods.' },
+  cementworks:{ cat: 'ind', chain: 'process', name: 'Cement works',    w: 18, d: 16, cost: 24000, upkeep: 500, jobs: 45,  in: { stone: 1, coal: 0.3 }, out: 'cement', rate: 55, pollution: 0.5, noise: 0.3, unlock: 1200, desc: 'Burns stone with coal into cement. Local cement and steel make road upkeep cheaper.' },
+  steelworks: { cat: 'ind', chain: 'process', name: 'Steelworks',      w: 24, d: 18, cost: 45000, upkeep: 900, jobs: 140, in: { iron: 1, coal: 1 }, out: 'steel', rate: 40, pollution: 0.8, noise: 0.5, unlock: 2500, desc: 'A blast furnace: iron and coal become steel.' },
+  smelter:    { cat: 'ind', chain: 'process', name: 'Smelter',         w: 18, d: 14, cost: 35000, upkeep: 700, jobs: 80,  in: { ore: 1, coal: 0.5 }, out: 'metals', rate: 30, pollution: 0.7, noise: 0.35, unlock: 2500, desc: 'Smelts ore into copper and tin.' },
+  machinery:  { cat: 'ind', chain: 'process', name: 'Machinery plant', w: 22, d: 16, cost: 55000, upkeep: 1000, jobs: 120, in: { steel: 1, metals: 0.5 }, out: 'machinery', rate: 25, pollution: 0.25, noise: 0.3, unlock: 5000, desc: 'Builds machines from steel and metals. Local machinery makes every factory more productive.' },
+  exchange:   { cat: 'ind', chain: 'market', name: 'Commodity exchange', w: 14, d: 12, cost: 30000, upkeep: 600, jobs: 40, unlock: 1500, desc: 'Traders sell your commodities at better prices and import the inputs your plants lack.' },
+  warehouse:  { cat: 'ind', chain: 'market', name: 'Warehouse',       w: 20, d: 14, cost: 12000, upkeep: 250, jobs: 20, stock: 600, desc: 'Stores commodities, so plants keep running and sales wait for good prices.' },
 };
 // District architectural styles override facade palettes for growables.
 export const STYLES = {
@@ -106,7 +125,17 @@ export const STYLES = {
   glass:    { name: 'Glass & steel', walls: [0x6f9ac0, 0x5a86b0, 0x88aac8], roof: [0x5a6068, 0x6a7078] },
 };
 
+// utility lines drawn by the player: they join separate road networks into one utility grid,
+// and under the strict grid rule every building needs one of each within reach
+export const ULINES = {
+  power: { name: 'Power line', cost: 4, upkeep: 0.03, cap: 80, reach: 12, color: 0xf0c040, desc: 'Pylons carry electricity between networks; plants far from town can feed it.' },
+  water: { name: 'Water pipe', cost: 6, upkeep: 0.04, cap: 160, reach: 14, color: 0x4aa0ff, desc: 'Underground mains carry fresh water between networks and to the buildings along them.' },
+  sewer: { name: 'Drain', cost: 7, upkeep: 0.05, cap: 160, reach: 14, color: 0x9a7a4a, desc: 'Underground drains carry sewage to outlets and take rainwater off the streets (less ponding).' },
+};
+
 export const OVERLAYS = {
+  resources: { name: 'Natural resources' },
+  pipes: { name: 'Underground: pipes & lines' },
   none:      { name: 'None' },
   level: { name: 'Building level', good: true },
   happiness: { name: 'Happiness', good: true },

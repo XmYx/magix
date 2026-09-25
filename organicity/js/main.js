@@ -7,12 +7,17 @@ import { UI } from './ui.js';
 import { SAVE_KEY, makeSave, loadSave } from './save.js';
 import { CityAudio } from './audio.js';
 import { SCENARIOS, setupScenario } from './scenarios.js';
-import { readShared, encodeSave, decodeSave } from './share.js';
-import { createRegion, loadRegion, saveRegion, cityKey, partnersOf, summarize, canBuy, tileCost, nameFor, edgeMatchFor, stubsFor, neighbours as tileNeighbours, dealsFor, addDeal, removeDeal, evolveAI, backgroundMonth, OPPOSITE } from './region.js';
+import { readShared, encodeSave, decodeSave, download } from './share.js';
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import { createRegion, loadRegion, saveRegion, cityKey, partnersOf, summarize, canBuy, tileCost, nameFor, edgeMatchFor, edgesOf, stubsFor, neighbours as tileNeighbours, dealsFor, addDeal, removeDeal, evolveAI, backgroundMonth, OPPOSITE } from './region.js';
 import { technology, START_ERAS } from './eras.js';
 import { loadPacks } from './packs.js';
 import { RegionSim } from './regionsim.js';
+import { regionMarket, aiOffers } from './resources.js';
 import { TileHost, loadView, storeView } from './tilehost.js';
+import * as saves from './saves.js';
+import { Multiplayer, joinGame, adoptRegion, savedName, saveName, iceText, setIce } from './mpgame.js';
+import { COLORS } from './mp.js';
 import { viewSnapshot, unb64 } from './tileview.js';
 import { newPresident } from './presidents.js';
 import { fastestRoute } from './routes.js';
@@ -26,6 +31,8 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) naviga
 const BOOT_KEY = 'organicity-boot';
 const $ = (id) => document.getElementById(id);
 
+// in the desktop app there is no site to go back to
+if (window.organicityDesktop) for (const a of document.querySelectorAll('#intro a[href="../index.html"]')) a.parentElement.hidden = true;
 // start screen language
 for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n, el.textContent);
 $('optLang').innerHTML = Object.entries(LANGS).map(([k, n]) => `<option value="${k}" ${k === getLang() ? 'selected' : ''}>${n}</option>`).join('');
@@ -61,6 +68,7 @@ async function boot(opts) {
     if (old && (!region || old.id !== region.id)) for (const k of Object.keys(localStorage)) if (k.startsWith(`organicity-city:${old.id}:`)) localStorage.removeItem(k);
     region = createRegion(world, sim);
   } else region.active = tileKey;
+  for (const k of Object.keys(localStorage)) if (k.startsWith('organicity-view:') && !k.startsWith(`organicity-view:${region.id}:`)) localStorage.removeItem(k);   // views of a replaced region
   const here = region.tiles[region.active];
   if (opts.mode === 'found') Object.assign(here, { kind: 'city', owned: true, name: here.name || nameFor(region) });
   // road stubs that line up with the neighbours' exits, so roads meet across the border
@@ -96,7 +104,9 @@ async function boot(opts) {
       if (r?.segments.length) (sim.dispatches ||= []).push({ kind: 'van', segs: r.segments, t: performance.now() });
     }
   };
-  sim.onMonth = () => { region.day = (region.day || 0) + 30; econ.month(sim); regionEvents(); syncRegion(); econ.pack(); saveRegion(region); };
+  sim.onMonth = () => { region.day = (region.day || 0) + 30; econ.month(sim); regionEvents(); syncRegion(); sim.regionMarket = regionMarket(region, region.active); region.offers = aiOffers(region, region.active, sim, tileNeighbours(region, region.active).map((q) => `${q.t.x},${q.t.z}`)); econ.pack(); saveRegion(region); mp?.monthly(); };
+  let mp = null;   // multiplayer (set up once the background runner exists)
+  sim.regionMarket = regionMarket(region, region.active);
   saveRegion(region);
   const rend = new Renderer($('view'), world, sim);
   const store = () => localStorage.setItem(SAVE_KEY, JSON.stringify(makeSave(world, sim)));
@@ -112,33 +122,69 @@ async function boot(opts) {
   };
   for (const q of Object.values(region.tiles)) if (q.kind === 'ai' && q.exitNode != null && q.home == null) q.home = region.active;
   const leave = async (next) => {
+    if (mp?.active && !confirm('Leaving this city ends your multiplayer session (you can rejoin later with the same name). Continue?')) return;
+    mp?.leave();
     try { await persist(); } catch (e) { ui.toast('Could not store this city: ' + e.message, 'bad'); return; }
     sessionStorage.setItem(BOOT_KEY, JSON.stringify(next)); location.reload();
   };
+  // saved games: the whole region, kept in the browser's (or the desktop app's) own database
+  const gameMeta = () => { const t = region.tiles[region.active]; return { meta: { city: t.name, pop: Math.round(sim.stats.pop || 0), money: Math.round(sim.money), year: sim.year, day: sim.day, cities: Object.values(region.tiles).filter((q) => q.kind === 'city' && q.gov !== 'ai').length, sandbox: !!sim.sandbox }, thumb: t.summary?.thumb || null }; };
   const ui = new UI(world, sim, rend, {
+    mp: () => mp, mpConfig: { iceText, setIce, savedName, colors: COLORS },
     save() {
       persist().then(() => ui.toast('City saved in this browser.', 'good'), (e) => ui.toast('Could not save: ' + e.message, 'bad'));
     },
+    async saveGame(name, id = null) {
+      try { await persist(); const gid = await saves.saveGame({ id, name, ...gameMeta() }); ui.toast(`Game saved${name ? ` as “${name}”` : ''}.`, 'good'); return gid; }
+      catch (e) { ui.toast('Could not save the game: ' + e.message, 'bad'); return null; }
+    },
+    quickSave() { const id = saves.currentSlot(); return this.saveGame(null, id || null); },
+    async loadGame(id) {
+      if (!confirm('Load this saved game? Progress since your last save will be lost.')) return;
+      try { await saves.loadGame(id); sessionStorage.setItem(BOOT_KEY, JSON.stringify({ mode: 'load' })); location.reload(); }
+      catch (e) { ui.toast('Could not load: ' + e.message, 'bad'); }
+    },
+    games: () => saves.listGames(),
+    currentGame: () => saves.currentSlot(),
+    renameGame: (id, name) => saves.renameGame(id, name),
+    deleteGame: (id) => saves.deleteGame(id),
+    async exportGame(id, name) { try { download(`${(name || 'city').replace(/[^\w-]+/g, '-')}.organicity-game`, await saves.exportGame(id), 'application/json'); } catch (e) { ui.toast('Could not export: ' + e.message, 'bad'); } },
+    async importGame(file) { try { await saves.importGame(await file.text()); ui.toast('Saved game imported.', 'good'); } catch (e) { ui.toast('Could not import: ' + e.message, 'bad'); } },
     region: () => region,
     renameTile(key, name) { const t = region.tiles[key]; if (!t || !name?.trim()) return; t.name = name.trim().slice(0, 24); saveRegion(region); syncRegion(); ui.renderWorldMap(); },
     addDeal(deal) { addDeal(region, deal); saveRegion(region); syncRegion(); },
     removeDeal(id) { removeDeal(region, id); saveRegion(region); syncRegion(); },
     buyTile(key) {
+      if (mp?.active) { if (!canBuy(region, key)) return ui.toast('You can claim land next to your own.', 'warn'); mp.claim(key); ui.toast('Claim sent to the region.', 'info'); return; }   // in multiplayer, land is claimed through the host
       if (!canBuy(region, key)) return ui.toast('Only tiles next to one you own can be bought.', 'warn');
       const cost = tileCost(region);
       if (!sim.canAfford(cost)) return ui.toast(`Buying this tile costs ${cost.toLocaleString('en-US')}.`, 'warn');
       sim.spend(cost); region.tiles[key].owned = true; saveRegion(region);
       ui.toast('Tile bought. Found a city on it from the world map.', 'good'); ui.renderWorldMap();
     },
-    switchTile(key) { const t = region.tiles[key]; if (t?.kind === 'city' && t.gov !== 'ai' && key !== region.active) leave({ mode: 'tile', tileKey: key }); },
+    switchTile(key) { const t = region.tiles[key]; if (t?.kind === 'city' && t.gov !== 'ai' && t.gov !== 'remote' && key !== region.active) leave({ mode: 'tile', tileKey: key }); },
     // play another governor's city: it becomes yours (you keep their name and policy)
     takeOver(key) {
       const t = region.tiles[key]; if (!t || t.kind !== 'city' || t.gov !== 'ai' || key === region.active) return;
+      if (mp?.active) { mp.buyCity(key); return; }   // in multiplayer an AI city sells only for its value
       if (!localStorage.getItem(cityKey(region, key))) return ui.toast('That city is still being founded. Try again shortly.', 'warn');
       if (!confirm(`Take over ${t.name} and play it as ${econ.tile(key)?.president.name}? The AI governor steps aside; you can hand it back later.`)) return;
       Object.assign(t, { gov: 'player', owned: true }); econ.tile(key).president.controller = 'player';
       leave({ mode: 'tile', tileKey: key });
     },
+    // commodity contracts offered by AI governors next door
+    acceptOffer(i) {
+      const o = region.offers?.[i]; if (!o) return;
+      addDeal(region, { seller: o.role === 'sell' ? region.active : o.partner, buyer: o.role === 'sell' ? o.partner : region.active, kind: o.kind, amount: o.amount, price: o.price });
+      region.offers.splice(i, 1); syncRegion(); saveRegion(region); ui.toast(`Contract signed with ${o.name}: ${o.amount} ${o.kind} a month.`, 'good');
+    },
+    cancelContract(id) {
+      const d = (region.deals || []).find((x) => x.id === id);
+      if (mp?.active && d?.players?.length) { mp.endContract(id); return; }   // a contract with another player ends through the host
+      removeDeal(region, id); syncRegion(); saveRegion(region); ui.toast('Contract ended.', 'info');
+    },
+    offers: () => region.offers || [],
+    contracts: () => (sim.deals || []).filter((d) => d.kind && !['power', 'water'].includes(d.kind)).map((d) => ({ ...d, name: region.tiles[d.partner]?.name || d.partner })),
     // let an AI governor run one of your other cities (it keeps building in the background)
     handOver(key) {
       const t = region.tiles[key]; if (!t || t.kind !== 'city' || t.gov === 'ai' || key === region.active) return;
@@ -169,15 +215,19 @@ async function boot(opts) {
   ui.toolChanged(); ui.hud();
   window.city = { world, sim, rend, tools, ui, audio, region, econ };
   // the neighbouring cities, drawn from their latest views; the background host keeps them running
-  const views = () => Object.fromEntries(tileNeighbours(region, region.active).map((q) => `${q.t.x},${q.t.z}`).map((k) => [k, loadView(region, k)]).filter(([, v]) => v));
+  // every other tile's view: cities from their last run, wild land as it was pregenerated
+  const views = () => Object.fromEntries(Object.keys(region.tiles).filter((k) => k !== region.active).map((k) => [k, loadView(region, k)]).filter(([, v]) => v));
+  { const here = region.tiles[region.active]; if (!here.edges && !here.summary?.edges) here.edges = edgesOf(world); }   // neighbours' land continues this city's edges
+  let regionT = null; const redrawRegion = () => { clearTimeout(regionT); regionT = setTimeout(() => rend.setRegion?.(region, views()), 400); };
   rend.setRegion?.(region, views());
   const thumb = (v) => { try { const cls = unb64(v.cls), S = v.S, cv = document.createElement('canvas'); cv.width = cv.height = S; const g = cv.getContext('2d'), img = g.createImageData(S, S);
-    const P = [[96, 146, 62], [70, 124, 168], [150, 150, 146], [128, 180, 88], [42, 150, 60], [70, 140, 230], [230, 190, 50], [150, 110, 220], [230, 120, 160], [180, 178, 170]];
+    const P = [[96, 146, 62], [70, 124, 168], [150, 150, 146], [128, 180, 88], [42, 150, 60], [70, 140, 230], [230, 190, 50], [150, 110, 220], [230, 120, 160], [180, 178, 170], [62, 104, 44]];
     for (let i = 0; i < S * S; i++) { const c = P[cls[i]] || P[0]; img.data.set([c[0], c[1], c[2], 255], i * 4); } g.putImageData(img, 0, 0); return cv.toDataURL('image/png'); } catch { return null; } };
   const host = new TileHost(region, econ, sim, {
     thumb,
+    onTerrain: (k) => { redrawRegion(); mp?.tileChanged(k); },
     onTile(k, res, job) {
-      if (tileNeighbours(region, region.active).some((q) => `${q.t.x},${q.t.z}` === k)) rend.setRegion?.(region, views());
+      redrawRegion(); mp?.tileChanged(k);
       const t = region.tiles[k], built = new Set(res.built), pres = econ.tile(k)?.president.name;
       if (job.generated) sim.headline(`${pres} founded the city of ${t.name} next door.`, 'info');
       else for (const s of ['school', 'clinic', 'fire', 'police', 'landfill']) if (built.has(s)) { sim.headline(`${t.name} (${pres}) opened a new ${s === 'fire' ? 'fire station' : s === 'police' ? 'police station' : s}.`, 'info'); break; }
@@ -185,10 +235,13 @@ async function boot(opts) {
     },
   });
   window.city.host = host;
+  mp = new Multiplayer({ region, econ, sim, world, rend, ui, tilehost: host, redrawRegion, syncRegion });
+  window.city.mp = mp;
+  if (opts.mp) mp.attachGuest(opts.mp);
   if (sim.sandbox) ui.toast(`Sandbox mode · seed ${world.seed}`, 'info');
   if (sim.scenario && SCENARIOS[sim.scenario]) ui.toast(`${SCENARIOS[sim.scenario].name}: ${SCENARIOS[sim.scenario].desc}`, 'info');
 
-  let last = performance.now(), saveT = 0, hostT = 0;
+  let last = performance.now(), saveT = 0, hostT = 0, autoT = 0;
   function loop(now) {
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
     sim.update(dt);
@@ -199,6 +252,8 @@ async function boot(opts) {
     saveT += dt; hostT = (hostT || 0) + dt;
     if (hostT > 1) { hostT = 0; host.tick(); }
     if (saveT > 120 && world.buildings.size) { saveT = 0; persist().catch(() => { /* quota exceeded — keep playing */ }); }
+    autoT = (autoT || 0) + dt;
+    if (autoT > 300 && world.buildings.size) { autoT = 0; persist().then(() => saves.saveGame({ id: saves.AUTOSAVE_ID, name: 'Autosave', ...gameMeta() })).catch(() => { /* keep playing */ }); }   // every five minutes
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
@@ -239,6 +294,44 @@ if (location.hash.startsWith('#city=')) {
 } else if (pending && pending.mode) { $('intro').hidden = true; boot(pending); }
 else {
   $('introLoad').hidden = !readSave();
+  // joining someone else's region: connect first, then build your city on the land the host gives you
+  $('introMp').onclick = () => { $('mpJoin').hidden = !$('mpJoin').hidden; };
+  $('mpName').value = savedName();
+  $('mpColors').innerHTML = 'Colour ' + COLORS.map((c, i) => `<label class="chk"><input type="radio" name="mpcol" value="${c}" ${i === 1 ? 'checked' : ''}><span class="sw" style="background:${c}"></span></label>`).join('');
+  $('mpStart').onclick = async () => {
+    const name = $('mpName').value.trim(); if (!name) { $('mpStatus').textContent = 'Pick a name first.'; return; }
+    saveName(name); $('mpStart').disabled = true;
+    const url = $('mpUrl').value.trim(), room = $('mpRoom').value.trim();
+    let give; const answer = () => new Promise((ok) => { give = ok; });
+    $('mpConnect').onclick = () => give?.($('mpAnswer').value.trim());
+    $('mpCopy').onclick = () => { navigator.clipboard?.writeText($('mpCode').value); $('mpStatus').textContent = 'Join code copied. Send it to the host.'; };
+    try {
+      const { session, welcome } = await joinGame({ name, color: document.querySelector('input[name=mpcol]:checked')?.value, url: url && room ? url : null, room, answer,
+        onCode: (c) => { $('mpCodes').hidden = false; $('mpCode').value = c; }, onStatus: (t) => { $('mpStatus').textContent = t; } });
+      const { region: r, tile, year } = adoptRegion(welcome), t = r.tiles[tile], code = localStorage.getItem(cityKey(r, tile));
+      $('intro').hidden = true;
+      if (code) boot({ mode: 'tile', tileKey: tile, save: await decodeSave(code), mp: session });
+      else boot({ mode: 'found', tileKey: tile, seed: t.seed, mapPreset: t.preset, year, startYear: [...START_ERAS].reverse().find((y) => y <= year) || 2000, eraPace: 1, mp: session });
+    } catch (e) { $('mpStatus').textContent = 'Could not join: ' + e.message; $('mpStart').disabled = false; }
+  };
+  // saved games on the start screen
+  saves.listGames().then((list) => {
+    $('introGames').hidden = false;
+    const render = (games) => {
+      $('introList').innerHTML = games.length ? games.map((g) => `<div class="game"><img src="${g.thumb || ''}" alt=""><div><b>${esc(g.name)}</b><small>${esc(g.meta?.city || '')} · ${(g.meta?.pop || 0).toLocaleString('en-US')} people · ${g.meta?.year || ''} · ${new Date(g.updated).toLocaleString()}</small></div><div class="row"><button data-gload="${g.id}" class="primary">Load</button><button data-gdel="${g.id}">Delete</button></div></div>`).join('')
+        : '<p class="dim">No saved games yet: save one from the game with the Save button (Ctrl+S saves quickly).</p>';
+      $('introList').innerHTML += '<div class="row"><button data-gimp>Import a saved game file…</button></div>';
+    };
+    render(list);
+    $('introGames').onclick = () => { $('introList').hidden = !$('introList').hidden; };
+    $('introList').onclick = async (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.gload) { try { await saves.loadGame(b.dataset.gload); $('intro').hidden = true; boot({ mode: 'load' }); } catch (err) { alert(err.message); } }
+      if (b.dataset.gdel && confirm('Delete this saved game?')) { await saves.deleteGame(b.dataset.gdel); render(await saves.listGames()); }
+      if (b.dataset.gimp) $('gameFile').click();
+    };
+    $('gameFile').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; try { await saves.importGame(await f.text()); render(await saves.listGames()); } catch (err) { alert(err.message); } };
+  });
   $('introGo').onclick = () => { $('intro').hidden = true; boot(newOpts()); };
   $('introLoad').onclick = () => { $('intro').hidden = true; boot({ mode: 'load' }); };
 }

@@ -11,6 +11,7 @@ export function cityBlocks(world, sim) {
   const H = [], J = [];
   const at = (f, b) => (f ? sim.at(f, b.cx, b.cz) : 0);
   for (const b of world.buildings.values()) {
+    if (b.svc && b.jobs > 0 && !b.abandoned) J.push({ id: b.id, slots: Math.max(1, Math.round(b.jobs)), filled: 0, kind: 'I', level: 2, x: b.cx, z: b.cz });   // mines and plants
     if (b.svc || b.abandoned || b.rubble > 0) continue;
     if (b.hh > 0) {
       const services = (sim.bcov('clinic', b) + sim.bcov('school', b) + sim.bcov('police', b) + sim.bcov('fire', b)) / 4;
@@ -21,7 +22,7 @@ export function cityBlocks(world, sim) {
   return { housing: H, jobs: J };
 }
 
-// ground classes: 0 land, 1 water, 2 road, 3–8 zones 1–6, 9 service lot
+// ground classes: 0 land, 1 water, 2 road, 3–8 zones 1–6, 9 service lot, 10 woods
 export const VIEW_S = 128;
 const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
 export const unb64 = (str, Type = Uint8Array) => { const s = atob(str), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Type(u.buffer); };
@@ -31,7 +32,7 @@ export function viewSnapshot(world) {
   for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
     const x = Math.min(N - 1, Math.floor(i * k + k / 2)), z = Math.min(N - 1, Math.floor(j * k + k / 2)), c = z * N + x, o = j * S + i;
     const bid = world.bld[c], b = bid && world.buildings.get(bid);
-    cls[o] = world.water[c] ? 1 : world.road[c] ? 2 : b ? (b.svc ? 9 : 2 + b.zone) : world.zone[c] ? 2 + world.zone[c] : 0;
+    cls[o] = world.water[c] ? 1 : world.road[c] ? 2 : b ? (b.svc ? 9 : 2 + b.zone) : world.zone[c] ? 2 + world.zone[c] : world.tree?.[c] || world.tree?.[c + 1] || world.tree?.[c + N] ? 10 : 0;
     hgt[o] = clamp(Math.round(world.heightAt(x + 0.5, z + 0.5) * 3), 0, 255);
   }
   const boxes = [];

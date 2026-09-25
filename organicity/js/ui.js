@@ -1,6 +1,9 @@
 import { TRANSIT, transitMode } from './transit.js';
 // Organicity — DOM interface: HUD, tool dock, panels, tooltips and toasts.
-import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS, ORDINANCES } from './config.js';
+import { DEPOSITS, COMMODITIES, priceOf, IND_POLICIES } from './resources.js';
+import { Preview, propsOf } from './preview.js';
+import { cityValue } from './mpgame.js';
+import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS, ORDINANCES, ULINES } from './config.js';
 import { fmtMoney, fmtInt, clamp } from './util.js';
 import { TERRACE_SERVICES, buildingFloors, massPlan } from './eras.js';
 import { WEATHER } from './weather.js';
@@ -39,6 +42,7 @@ const CATS = [
   { id: 'zone', key: '3', label: 'Zones', glyph: '▦' },
   { id: 'util', key: '4', label: 'Utilities', glyph: 'ϟ' },
   { id: 'svc', key: '5', label: 'Services', glyph: '✚' },
+  { id: 'ind', key: 'I', label: 'Industry', glyph: '⚒' },
   { id: 'district', key: '6', label: 'Districts', glyph: '◇' },
   { id: 'lines', key: 'L', label: 'Transit lines', glyph: '⊶' },
   { id: 'bulldoze', key: '7', label: 'Bulldoze', glyph: '✖' },
@@ -48,6 +52,7 @@ const CATS = [
   { id: 'advisors', key: 'N', label: 'Advisors', glyph: '✉', panel: true },
   { id: 'region', key: 'R', label: 'Region', glyph: '⇄', panel: true },
   { id: 'president', key: 'K', label: 'President', glyph: '♛', panel: true },
+  { id: 'mp', key: 'J', label: 'Multiplayer', glyph: '⇆', panel: true },
   { id: 'terrain', key: 'T', label: 'Terrain', glyph: '≈' },
   { id: 'sandbox', key: '', label: 'Sandbox', glyph: '⚙', panel: true, sandbox: true },
 ];
@@ -84,7 +89,7 @@ export class UI {
         <button id="mPhoto" title="Photo mode (P)">◘ ${t('menu.photo')}</button>
         <button id="mShare" title="Share this city as a link or file">${t('menu.share')}</button>
         <button id="mSet" title="Sound, accessibility and graphics">⚙</button>
-        <button id="mSave" title="Save to this browser">${t('menu.save')}</button>
+        <button id="mSave" title="Saved games: save, load, export (Ctrl+S quick-saves)">${t('menu.save')}</button>
         <button id="mNew" title="Start a new city">${t('menu.new')}</button>
         <button id="mHelp" title="How to play">${t('menu.help')}</button>
       </div>`;
@@ -95,7 +100,7 @@ export class UI {
     });
     $('mDay').addEventListener('click', () => { const order = ['cycle', 'day', 'night']; this.r.setDayMode(order[(order.indexOf(this.r.dayMode) + 1) % 3]); this.hud(); });
     $('mPix').addEventListener('click', () => { this.r.setPixel(this.r.pixel >= 4 ? 1 : this.r.pixel + 1); this.hud(); });
-    $('mSave').addEventListener('click', () => this.actions.save());
+    $('mSave').addEventListener('click', () => this.togglePanel('saves'));
     $('mUndo').addEventListener('click', () => this.tools.undo());
     $('mNew').addEventListener('click', () => { if (confirm('Start a new city? Unsaved progress will be lost.')) this.actions.newCity(); });
     $('mHelp').addEventListener('click', () => this.actions.help());
@@ -143,6 +148,9 @@ export class UI {
     $('dock').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) this.pickCategory(b.dataset.c); });
     $('fly').addEventListener('click', (e) => this.flyClick(e));
     $('fly').addEventListener('input', (e) => this.flyInput(e));
+    // hover a buildable: a card with it turning in 3D and all its numbers
+    $('fly').addEventListener('mouseover', (e) => { const b = e.target.closest('button'); if (b && b !== this.cardFor) this.cardFor = b, this.showCard(b); });
+    $('fly').addEventListener('mouseleave', () => this.hideCard());
   }
   renderDock() {
     $('dock').innerHTML = CATS.filter((c) => !c.sandbox || this.sim.sandbox).map((c) => `<button data-c="${c.id}" title="${t('cat.' + c.id, c.label)}${c.key ? ` (${c.key})` : ''}"><span class="g">${c.glyph}</span><span class="l">${t('cat.' + c.id, c.label)}</span>${c.key ? `<kbd>${c.key}</kbd>` : ''}</button>`).join('');
@@ -154,6 +162,9 @@ export class UI {
     const t = this.tools;
     if (c === 'util' && SERVICES[t.s.svc].cat !== 'util') t.s.svc = 'coal';
     if (c === 'svc' && SERVICES[t.s.svc].cat !== 'svc') t.s.svc = 'fire';
+    if (c === 'ind' && SERVICES[t.s.svc].cat !== 'ind') t.s.svc = 'lumbercamp';
+    if (c === 'ind') this.r.setOverlay('resources');
+    if (t.s.under) { t.s.under = false; if (this.r.overlay === 'pipes') this.r.setOverlay('none'); }
     t.setTool(c);
     if (c === 'district' && t.s.district) this.showDistrict(t.s.district);
   }
@@ -166,26 +177,30 @@ export class UI {
     const brush = `<label class="rng">Brush <input type="range" min="1" max="30" value="${s.brush}" data-k="brush"><b>${s.brush}</b></label>`;
     switch (s.tool) {
       case 'road':
-        h = `<div class="row">${Object.entries(ROADS).map(([k, R]) => `<button class="${s.road === k ? 'on' : ''}" data-road="${k}" title="${esc(R.desc)}"><span class="sw road-${k}"></span>${R.name}<small>${fmtMoney(R.cost)}/m</small></button>`).join('')}</div>
+        h = `<div class="row">${Object.entries(ROADS).map(([k, R]) => `<button class="${s.road === k ? 'on' : ''}" data-road="${k}"><img class="ico" data-icon="road:${k}@${s.layer}" alt="">${R.name}<small>${fmtMoney(R.cost)}/m</small></button>`).join('')}</div>
           <div class="row"><button class="${!s.curve ? 'on' : ''}" data-curve="0">Straight</button><button class="${s.curve ? 'on' : ''}" data-curve="1">Curved <kbd>C</kbd></button><button class="${s.oneway ? 'on' : ''}" data-oneway="1" title="New roads run one way, in the direction you draw them">One-way →</button></div>
-          <div class="row">${[1, 0, -1].map((L) => `<button class="${s.layer === L ? 'on' : ''}" data-layer="${L}" title="${L ? `Crosses other roads without a junction; ×${LAYERS[L].cost} cost` : 'Joins every road it crosses'}">${LAYERS[L].name}</button>`).join('')}
+          <div class="row"><span class="dim">Level <kbd>PgUp</kbd>/<kbd>PgDn</kbd></span>${[3, 2, 1, 0, -1].map((L) => `<button class="${s.layer === L ? 'on' : ''}" data-layer="${L}"><img class="ico" data-icon="road:${s.road}@${L}" alt="">${LAYERS[L].name}</button>`).join('')}</div><div class="row">
             ${[0, 14, 22].map((d) => `<button class="${s.parallel === d ? 'on' : ''}" data-parallel="${d}" title="${d ? 'Also build an identical road alongside (one-way twins run opposite: a dual carriageway)' : 'Single road'}">${d ? `Parallel ${Math.round(d * 1.5)} m` : 'Single'}</button>`).join('')}
             <button class="${s.upgrade ? 'on' : ''}" data-upgrade="1" title="Drag over existing roads to convert them to the selected type">Upgrade brush</button></div>
           <p class="hint">${s.upgrade ? 'Drag across roads to convert them. ' : ''}Click to start, click to end; roads chain on. ${s.curve ? 'Curves: start → bend → end. ' : ''}Crossings join at any angle. <kbd>Shift</kbd> snaps to 15°. Right-click stops.</p>`;
         break;
       case 'zone':
-        h = `<div class="row">${ZONES.slice(1).map((Z) => `<button class="${s.zone === Z.id ? 'on' : ''}" data-zone="${Z.id}" title="${Z.name}"><span class="sw" style="background:${rgbCss(Z.color)}"></span>${Z.name}</button>`).join('')}
-          <button class="${s.zone === 0 ? 'on' : ''}" data-zone="0"><span class="sw x"></span>Dezone</button></div>
+        h = `<div class="row">${ZONES.slice(1).map((Z) => `<button class="${s.zone === Z.id ? 'on' : ''}" data-zone="${Z.id}"><img class="ico" data-icon="zone:${Z.id}" alt="">${Z.name}</button>`).join('')}
+          <button class="${s.zone === 0 ? 'on' : ''}" data-zone="0"><img class="ico" data-icon="zone:0" alt="">Dezone</button></div>
           <div class="row"><button class="${!s.fill && !s.place ? 'on' : ''}" data-fill="0">Brush</button><button class="${s.fill && !s.place ? 'on' : ''}" data-fill="1">Fill block <kbd>F</kbd></button>${s.fill || s.place ? '' : brush}</div>
           ${this.sim.sandbox ? `<div class="row">Place building: ${[1, 2, 3, 4, 5].map((L) => `<button class="${s.place === L ? 'on' : ''}" data-place="${L}" title="Click a zoned lot to stamp a finished, level-locked building">L${L}</button>`).join('')}</div>` : ''}
-          <p class="hint">Paint any shape along a road. Lots follow the streets, so wedges, corners and slivers all get built on.</p>`;
+          <p class="hint">Paint any shape along a road. Lots follow the streets, so wedges, corners and slivers all get built on. The brush only zones empty land; hold <kbd>Shift</kbd> to repaint existing zones.</p>`;
         break;
-      case 'util': case 'svc':
-        h = `<div class="row">${Object.entries(SERVICES).filter(([key, S]) => S.cat === s.tool && (!s.platform || TERRACE_SERVICES.includes(key))).map(([k, S]) => {
+      case 'util': case 'svc': case 'ind':
+        const lineRow = s.tool === 'util' ? `<div class="row">${Object.entries(ULINES).map(([k, L]) => `<button class="${s.uline === k ? 'on' : ''}" data-uline="${k}"><img class="ico" data-icon="uline:${k}" alt="">${L.name}<small>${fmtMoney(L.cost)}/m</small></button>`).join('')}
+          <button class="${this.sim.strictGrid ? 'on' : ''}" data-strict-grid="1" title="Off: roads carry power, water and sewage. On: every building needs a power line, a water pipe and a drain within reach.">Strict grid</button></div>` : '';
+        if (s.tool === 'util' && s.uline) { h = `${lineRow}<div class="row"><button data-under-demo="1" title="Remove pipe, drain and line runs without touching roads or buildings">Underground bulldozer</button></div><p class="hint">${s.uline !== 'power' ? 'Underground view: pipes and drains run on one flat level below the whole map; blue ground is reached by water pipes, brown by drains. ' : ''}${esc(ULINES[s.uline].desc)} Click to start, click to end; runs chain on and join where they meet or touch a road. Right-click stops. Upkeep ${fmtMoney(ULINES[s.uline].upkeep * 100)} per 100 m a month. Bulldoze removes a run.</p><div class="row">${Object.entries(SERVICES).filter(([, S]) => S.cat === 'util').map(([k, S]) => `<button data-svc="${k}">${S.name}</button>`).join('')}</div>`; break; }
+        h = lineRow + `<div class="row">${Object.entries(SERVICES).filter(([key, S]) => S.cat === s.tool && (!s.platform || TERRACE_SERVICES.includes(key))).map(([k, S]) => {
           const need = S.landmark || S.unlock, locked = need && this.sim.stats.pop < need && !this.sim.sandbox, built = S.landmark && [...this.w.buildings.values()].some((b) => b.svc === k);
-          return `<button class="${s.svc === k ? 'on' : ''}" data-svc="${k}" title="${esc(S.desc)}${S.landmark ? ` Landmark: unlocks at ${fmtInt(S.landmark)} people; ₵${fmtInt(S.tourism)}/month tourism.` : ''}" ${locked || built ? 'disabled' : ''}>${S.landmark ? '★ ' : ''}${S.name}<small>${locked ? `pop ${fmtInt(need)}` : built ? 'built' : fmtMoney(S.cost)}</small></button>`;
+          return `<button class="${s.svc === k ? 'on' : ''}" data-svc="${k}" ${locked || built ? 'disabled' : ''}><img class="ico" data-icon="svc:${k}" alt="">${S.landmark ? '★ ' : ''}${S.name}<small>${locked ? `pop ${fmtInt(need)}` : built ? 'built' : fmtMoney(S.cost)}</small></button>`;
         }).join('')}</div>
-          <p class="hint">${esc(SERVICES[s.svc].desc)} Upkeep ${fmtMoney(SERVICES[s.svc].upkeep)}/month. ${s.platform ? `Placing on terrace #${s.platform}. Click inside the deck. <button data-ground="1">Return to ground</button>` : 'Placement snaps to the nearest road.'}</p>`;
+          ${s.tool === 'ind' ? '<div class="row"><button data-industry="1">Industry report</button></div>' : ''}
+          <p class="hint">${esc(SERVICES[s.svc].desc)} Upkeep ${fmtMoney(SERVICES[s.svc].upkeep)}/month.${SERVICES[s.svc].jobs ? ` ${SERVICES[s.svc].jobs} jobs.` : ''}${SERVICES[s.svc].dep ? ' Place it on the deposit shown by the resources overlay.' : ''} ${s.platform ? `Placing on terrace #${s.platform}. Click inside the deck. <button data-ground="1">Return to ground</button>` : 'Placement snaps to the nearest road.'}</p>`;
         break;
       case 'district': {
         const ds = this.w.districts.filter(Boolean);
@@ -203,10 +218,11 @@ export class UI {
         h = `<div class="row">${Object.entries(TRANSIT).map(([k,m])=>`<button data-transit-mode="${k}" class="${s.transitMode===k?'on':''}">${m.name}<small>Tracks ₵${m.trackCost}/unit</small></button>`).join('')}<button data-show-lines="1">Manage lines (${this.w.lines.length})</button></div>
           <p class="hint">Select a mode, place its stations in Services, then click them in order and press Enter. Buses need a depot; trams follow roads. Rail builds elevated tracks; metro builds tunnels. Track costs are charged on completion. Capacity limits leave excess riders driving.</p>`;
         break;
-      case 'bulldoze': h = '<p class="hint">Click a building or road segment to remove it. Services refund 40%. Ctrl+Z undoes.</p>'; break;
+      case 'bulldoze': h = s.under ? '<div class="row"><button class="on" data-under-off="1">Underground bulldozer · on</button></div><p class="hint">Removes pipe, drain and power line runs only; roads and buildings above are untouched. Ctrl+Z undoes.</p>' : '<div class="row"><button data-under-demo="1">Underground bulldozer</button></div><p class="hint">Click a building or road segment to remove it. Services refund 40%. Ctrl+Z undoes.</p>'; break;
       default: h = '<p class="hint">Click buildings, roads or land for details. Right-drag rotates · middle-drag or Shift+right-drag pans · wheel zooms · WASD moves · Q/E turn.</p>';
     }
     $('fly').innerHTML = h;
+    this.hideCard(); this.previewer()?.fill($('fly'));
   }
 
   flyClick(e) {
@@ -224,15 +240,38 @@ export class UI {
     if (d.zone) t.set({ zone: +d.zone });
     if (d.fill) t.set({ fill: d.fill === '1', place: 0 });
     if (d.place) t.set({ place: t.s.place === +d.place ? 0 : +d.place });
-    if (d.svc) t.set({ svc: d.svc });
+    if (d.svc) { t.pts = []; t.set({ svc: d.svc, uline: null }); }
+    if (d.uline) { t.pts = []; t.set({ uline: d.uline }); this.r.setOverlay('pipes'); }
+    if (d.underOff) { t.set({ under: false }); this.r.setOverlay('none'); }
+    if (d.underDemo) { t.setTool('bulldoze', { under: true }); this.r.setOverlay('pipes'); }
+    if (d.strictGrid) { this.sim.strictGrid = !this.sim.strictGrid; this.toast(this.sim.strictGrid ? 'Strict grid: buildings now need a power line, water pipe and drain within reach.' : 'Roads carry utilities again.', 'info'); this.toolChanged(); }
     if (d.transitMode) {t.lineStops=[];t.set({transitMode:d.transitMode});}
     if (d.showLines) this.showLines();
+    if (d.industry) { this.togglePanel('industry'); this.r.setOverlay('resources'); }
     if (d.dist) {
       if (d.dist === 'new') { const nd = this.w.newDistrict(); if (nd) { t.set({ district: nd.id, dErase: false }); this.showDistrict(nd.id); } else this.toast('District limit reached', 'warn'); }
       else if (d.dist === 'erase') t.set({ dErase: !t.s.dErase });
       else { t.set({ district: +d.dist, dErase: false }); this.showDistrict(+d.dist); }
     }
   }
+  previewer() { if (this.preview === undefined) { try { this.preview = new Preview(this.w, this.r.mats); } catch { this.preview = null; } } return this.preview; }
+  buildableOf(b) {
+    const d = b.dataset, s = this.tools.s;
+    if (d.svc) return ['svc', d.svc]; if (d.uline) return ['uline', d.uline]; if (d.zone != null) return ['zone', d.zone];
+    if (d.road) return ['road', `${d.road}@${s.layer}`]; if (d.layer != null) return ['road', `${s.road}@${d.layer}`];
+    return null;
+  }
+  showCard(btn) {
+    const it = this.buildableOf(btn), P = this.previewer(); if (!it) return this.hideCard();
+    let card = $('card'); if (!card) { card = document.createElement('div'); card.id = 'card'; card.hidden = true; document.body.appendChild(card); }
+    const info = propsOf(it[0], it[1], this.sim);
+    card.innerHTML = `${P?.ok ? '<canvas width="252" height="168"></canvas>' : ''}<h4>${esc(info.title)}</h4><table>${info.rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(String(v))}</td></tr>`).join('')}</table>${info.desc ? `<p>${esc(info.desc)}</p>` : ''}`;
+    card.hidden = false;
+    const r = btn.getBoundingClientRect(), h = card.offsetHeight;
+    card.style.left = `${Math.max(8, Math.min(innerWidth - 290, r.left))}px`; card.style.top = `${Math.max(8, r.top - h - 10)}px`;
+    P?.showCard(card, it[0], it[1]);
+  }
+  hideCard() { this.cardFor = null; const c = $('card'); if (c) c.hidden = true; this.preview?.hideCard(); }
   flyInput(e) {
     const k = e.target.dataset.k; if (!k) return;
     this.tools.s[k] = +e.target.value; e.target.nextElementSibling.textContent = e.target.value; this.tools.refresh();
@@ -257,17 +296,26 @@ export class UI {
     if (name === 'advisors') this.openPanel('advisors', () => t('panel.advisors'), () => this.advisorsHtml());
     if (name === 'region') this.openPanel('region', () => t('panel.region'), () => this.regionHtml());
     if (name === 'share') this.openPanel('share', () => t('panel.share'), () => this.shareHtml());
+    if (name === 'industry') this.openPanel('industry', () => 'Industry & resources', () => this.industryHtml());
+    if (name === 'mp') { if (this.actions.mp?.()) this.actions.mp().unread = 0; this.openPanel('mp', () => 'Multiplayer', () => this.mpHtml()); }
+    if (name === 'saves') { this.refreshGames(); this.openPanel('saves', () => 'Saved games', () => this.savesHtml()); }
     if (name === 'settings') this.openPanel('settings', () => t('panel.settings'), () => this.settingsHtml());
     if (name === 'overlays' || name === 'budget') this.sim.tutorialFlags[name] = true;
   }
   renderPanel(force) {
     if (!this.panelFn) return;
     const el = $('panel'), a = document.activeElement;
-    if (!force && el.contains(a) && a.matches('input, select')) return;
+    if (!force && el.contains(a) && a.matches('input, select, textarea')) return;
     const html = this.panelFn(); if (html === null) return this.closePanel();
     const scroll = el.querySelector('.body')?.scrollTop || 0;
+    // a refresh keeps what the player was doing: typed text, choices and open sections
+    const keyOf = (n) => { const d = [...n.attributes].find((x) => x.name.startsWith('data-')); return d ? `${n.tagName}:${d.name}:${n.type === 'radio' ? n.value : ''}` : null; };
+    const kept = new Map(), open = [...el.querySelectorAll('details')].map((d) => d.open);
+    if (!force) for (const n of el.querySelectorAll('input, textarea, select')) { const k = keyOf(n); if (k && !n.readOnly && n.type !== 'file') kept.set(k, n.type === 'checkbox' || n.type === 'radio' ? n.checked : n.value); }
     const title = typeof this.panelTitle === 'function' ? this.panelTitle() : this.panelTitle;
     el.innerHTML = `<header><h2>${esc(title)}</h2><button class="x" aria-label="Close">✕</button></header><div class="body">${html}</div>`;
+    if (!force) for (const n of el.querySelectorAll('input, textarea, select')) { const k = keyOf(n); if (k && kept.has(k)) { if (n.type === 'checkbox' || n.type === 'radio') n.checked = kept.get(k); else n.value = kept.get(k); } }
+    el.querySelectorAll('details').forEach((d, i) => { if (open[i] !== undefined) d.open = open[i]; });
     el.querySelector('.body').scrollTop = scroll;
     el.querySelector('.x').onclick = () => this.closePanel();
     this.bindPanel(el);
@@ -276,6 +324,38 @@ export class UI {
   bindPanel(el) {
     el.querySelectorAll('[data-pol]').forEach((inp) => { inp.onchange = () => { this.w.econ?.setPolicy(this.w.econ.active, { [inp.dataset.pol]: +inp.value }); this.renderPanel(true); }; });
     el.querySelector('[data-pol-dev]')?.addEventListener('change', (e) => { this.w.econ?.setPolicy(this.w.econ.active, { dev: e.target.value }); this.renderPanel(true); });
+    el.querySelectorAll('[data-offer]').forEach((b) => { b.onclick = () => { this.actions.acceptOffer?.(+b.dataset.offer); this.renderPanel(true); }; });
+    el.querySelectorAll('[data-cdeal]').forEach((b) => { b.onclick = () => { this.actions.cancelContract?.(+b.dataset.cdeal); this.renderPanel(true); }; });
+    const mp = this.actions.mp?.();
+    el.querySelector('.chatlog')?.scrollTo(0, 1e6);
+    el.querySelector('[data-mp-host]')?.addEventListener('click', () => {
+      const name = el.querySelector('[data-mp-name]').value.trim(); if (!name) { this.toast('Pick a name first.', 'warn'); return; }
+      this.actions.mpConfig?.setIce(el.querySelector('[data-mp-ice]').value); mp.host(name, el.querySelector('[data-mp-color]:checked')?.value); this.renderPanel(true);
+    });
+    el.querySelector('[data-mp-answer]')?.addEventListener('click', async () => { try { this.mpAnswerCode = await mp.answer(el.querySelector('[data-mp-join]').value); this.renderPanel(true); } catch (e) { this.toast(e.message, 'warn'); } });
+    el.querySelector('[data-mp-copy]')?.addEventListener('click', () => { navigator.clipboard?.writeText(this.mpAnswerCode || ''); this.toast('Answer code copied.', 'info'); });
+    el.querySelector('[data-mp-open]')?.addEventListener('click', () => { const u = el.querySelector('[data-mp-url]').value.trim(), rm = el.querySelector('[data-mp-room]').value.trim(); if (!/^https?:\/\//.test(u) || !/^[\w-]{1,48}$/.test(rm)) { this.toast('Give a server address (http…) and a room name (letters, digits, - or _).', 'warn'); return; } mp.openRoom(u, rm); this.renderPanel(true); });
+    el.querySelector('[data-mp-close]')?.addEventListener('click', () => { mp.closeRoom(); this.renderPanel(true); });
+    el.querySelector('[data-mp-leave]')?.addEventListener('click', () => { if (confirm('Leave the multiplayer game? Your city stays yours; you can rejoin later with the same name.')) { mp.leave(); this.renderPanel(true); } });
+    const say = el.querySelector('[data-mp-say]'), send = () => { if (say.value.trim()) { mp.say(say.value); say.value = ''; } };
+    el.querySelector('[data-mp-send]')?.addEventListener('click', send); say?.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') send(); });
+    el.querySelectorAll('[data-mp-kick]').forEach((b) => { b.onclick = () => { const p = mp.players.find((q) => q.id === b.dataset.mpKick); if (p && confirm(`Remove ${p.name} from the game? They can't rejoin this session; their land and city stay on the map.`)) mp.kick(p.id); }; });
+    el.querySelectorAll('[data-mp-end]').forEach((b) => { b.onclick = () => { if (confirm('End this contract? It stops at once for both of you.')) mp.endContract(+b.dataset.mpEnd); }; });
+    el.querySelectorAll('[data-mp-yes]').forEach((b) => { b.onclick = () => mp.decide(b.dataset.mpYes, true); });
+    el.querySelectorAll('[data-mp-no]').forEach((b) => { b.onclick = () => mp.decide(b.dataset.mpNo, false); });
+    el.querySelector('[data-mp-propose]')?.addEventListener('click', () => {
+      const to = el.querySelector('[data-mp-to]').value, kind = el.querySelector('[data-mp-kind]').value, amount = +el.querySelector('[data-mp-amount]').value, price = +el.querySelector('[data-mp-price]').value;
+      if (!(amount > 0)) { this.toast('Give an amount.', 'warn'); return; }
+      if (kind === 'money') mp.propose(to, { money: amount }); else { const [role, k] = kind.split(':'); mp.propose(to, { deal: { kind: k, amount, price: Math.max(0, price || 0), role } }); }
+    });
+    const nameIn = el.querySelector('[data-game-name]'), again = () => this.refreshGames();
+    el.querySelector('[data-game-new]')?.addEventListener('click', async () => { await this.actions.saveGame?.(nameIn.value.trim() || null, null); again(); });
+    el.querySelectorAll('[data-game-save]').forEach((b) => { b.onclick = async () => { await this.actions.saveGame?.(null, b.dataset.gameSave); again(); }; });
+    el.querySelectorAll('[data-game-load]').forEach((b) => { b.onclick = () => this.actions.loadGame?.(b.dataset.gameLoad); });
+    el.querySelectorAll('[data-game-ren]').forEach((b) => { b.onclick = async () => { const n = prompt('Name this saved game', b.closest('.game').querySelector('b').textContent); if (n) { await this.actions.renameGame?.(b.dataset.gameRen, n); again(); } }; });
+    el.querySelectorAll('[data-game-exp]').forEach((b) => { b.onclick = () => this.actions.exportGame?.(b.dataset.gameExp, b.dataset.name); });
+    el.querySelectorAll('[data-game-del]').forEach((b) => { b.onclick = async () => { if (confirm('Delete this saved game? This cannot be undone.')) { await this.actions.deleteGame?.(b.dataset.gameDel); again(); } }; });
+    el.querySelector('[data-game-imp]')?.addEventListener('click', () => { const f = document.createElement('input'); f.type = 'file'; f.accept = '.organicity-game,.json,application/json'; f.onchange = async () => { if (f.files[0]) { await this.actions.importGame?.(f.files[0]); again(); } }; f.click(); });
     el.querySelector('[data-hist]')?.addEventListener('change', (e) => { this.histMetric = e.target.value; this.renderPanel(true); });
     el.querySelector('[data-report-close]')?.addEventListener('click', () => { this.reportTerm = null; this.renderPanel(true); });
     el.querySelectorAll('[data-ord]').forEach((c) => { c.onchange = () => { this.sim.setOrdinance(c.dataset.ord, c.checked); this.renderPanel(true); }; });
@@ -324,6 +404,12 @@ export class UI {
     });
     el.querySelector('[data-ground-view]')?.addEventListener('click',()=>{this.tools.set({platform:0});this.r.cam.targetY=0;});
     el.querySelector('[data-follow]')?.addEventListener('click', () => this.followResident(this.inspected, 0));
+    el.querySelector('[data-scrub]')?.addEventListener('change', (e) => { const b = this.inspected; if (b) { b.scrub = e.target.checked; this.sim.fieldVersion = (this.sim.fieldVersion || 0) + 1; } });
+    el.querySelector('[data-reclaim]')?.addEventListener('click', () => {
+      const b = this.inspected; if (!b || !this.sim.canAfford(2000)) { this.toast('Not enough money', 'warn'); return; }
+      this.w.beginTx('Reclaim'); const ok = this.w.reclaim(b); this.w.commitTx(ok ? 2000 : 0);
+      if (ok) { this.sim.spend(2000); if (this.sim.industry) delete this.sim.industry.mined[b.id]; this.toast(SERVICES[b.svc].dep === 'timber' ? 'The clearing is replanted.' : 'The old workings are flooding into a lake.', 'good'); this.closePanel(); }
+    });
     el.querySelector('[data-follow-next]')?.addEventListener('click', () => { const f = this.r.follow; if (f) this.followResident(this.w.buildings.get(f.citizen.home), f.citizen.k + 1); });
     el.querySelector('[data-follow-cam]')?.addEventListener('click', () => { if (this.r.follow) { this.r.follow.camera = !this.r.follow.camera; this.renderPanel(true); } });
     el.querySelector('[data-follow-stop]')?.addEventListener('click', () => { this.r.follow = null; this.closePanel(); });
@@ -387,6 +473,7 @@ export class UI {
     q('[data-prio]').addEventListener('change', (e) => { P.priority = e.target.value; this.w.districtVersion++; });
     q('[data-style]').addEventListener('change', (e) => { P.style = e.target.value; this.touchDistrict(dId); });
     q('[data-green]').addEventListener('change', (e) => { P.green = e.target.checked; });
+    q('[data-dindustry]')?.addEventListener('change', (e) => { P.industry = e.target.value; this.renderPanel(true); });
     q('[data-historic]').addEventListener('change', (e) => { P.historic = e.target.checked; });
     q('[data-carfree]').addEventListener('change', (e) => { P.carFree = e.target.checked; });
     q('[data-ddel]').addEventListener('click', () => {
@@ -448,7 +535,7 @@ export class UI {
       <table class="kv">
         <tr><td>Residential tax</td><td class="pos">${m(inc.R)}</td></tr><tr><td>Commercial tax</td><td class="pos">${m(inc.C)}</td></tr>
         <tr><td>Industrial tax</td><td class="pos">${m(inc.I)}</td></tr><tr><td>Office tax</td><td class="pos">${m(inc.O)}</td></tr>
-        <tr><td>Services upkeep</td><td class="neg">-${m(exp.services)}</td></tr><tr><td>Utilities upkeep</td><td class="neg">-${m(exp.utilities)}</td></tr>
+        <tr><td>Services upkeep</td><td class="neg">-${m(exp.services)}</td></tr><tr><td>Utilities upkeep</td><td class="neg">-${m(exp.utilities)}</td></tr>${exp.lines ? `<tr><td>Power lines & pipes</td><td class="neg">-${m(exp.lines)}</td></tr>` : ''}
         <tr><td>Bus fares</td><td class="pos">${m(inc.fares)}</td></tr><tr><td>Tourism</td><td class="pos">${m(inc.tourism)}</td></tr><tr><td>Utility exports</td><td class="pos">${m(inc.trade)}</td></tr><tr><td>Goods exports</td><td class="pos">${m(inc.exports)}</td></tr>
         <tr><td>Utility imports</td><td class="neg">-${m(exp.imports)}</td></tr><tr><td>District policies</td><td class="neg">-${m(exp.policies)}</td></tr><tr><td>Ordinances</td><td class="neg">-${m(exp.ordinances)}</td></tr>
         <tr><td>Utility deals</td><td class="${(inc.deals || 0) - (exp.deals || 0) < 0 ? 'neg' : 'pos'}">${m((inc.deals || 0) - (exp.deals || 0))}</td></tr><tr><td>Land tax</td><td class="pos">${m(inc.land)}</td></tr><tr><td>Tolls</td><td class="pos">${m(inc.tolls)}</td></tr>
@@ -519,6 +606,79 @@ export class UI {
       <ul class="newslist">${s.news.slice(-14).reverse().map((n) => `<li class="${n.kind}"><small>${n.year} · ${MONTHS[Math.floor((n.day % 360) / MONTH_DAYS)]}</small> ${esc(n.text)}</li>`).join('') || '<li class="dim">No news yet.</li>'}</ul>`;
   }
 
+  // a mine's or plant's status in the inspector: staff, deposit, inputs and what holds it back
+  industryRows(b, S) {
+    const f = this.sim.industryFlow, wk = S.jobs ? `${Math.round(b.workers || 0)} / ${S.jobs}` : '—', miss = [];
+    if (b.edge < 0) miss.push('road'); if (!b.power) miss.push('power'); if (!b.water) miss.push('water'); if (!f?.canShip) miss.push('a highway link or freight terminal');
+    if (S.jobs && (b.workers || 0) < S.jobs * 0.5) miss.push('workers');
+    return `<tr><td>Workers</td><td>${wk}</td></tr><tr><td>Running at</td><td>${bar(b.indEff || 0)} ${Math.round((b.indEff || 0) * 100)}%</td></tr>
+      ${S.dep ? `<tr><td>${DEPOSITS[S.dep].name} deposit</td><td>${bar(b.indRich || 0)} ${Math.round((b.indRich || 0) * 100)}% · ${Math.round((b.indLeft ?? 1) * 100)}% left</td></tr>` : ''}
+      ${S.in ? `<tr><td>Inputs</td><td>${Object.entries(S.in).map(([c, r]) => `${r} ${COMMODITIES[c].name.toLowerCase()}`).join(' + ')} · ${Math.round((b.indInputs ?? 0) * 100)}% supplied</td></tr>` : ''}
+      ${S.out ? `<tr><td>Makes</td><td>${COMMODITIES[S.out].name} · up to ${S.rate}/month · ₵${(COMMODITIES[S.out].price * priceOf(this.sim, S.out)).toFixed(1)} each</td></tr>` : ''}
+      ${miss.length ? `<tr><td>Needs</td><td class="neg">${miss.join(', ')}</td></tr>` : ''}`;
+  }
+  // the industry report: stock, this month's flows and prices along the chain
+  industryHtml() {
+    const s = this.sim, ind = s.industry, f = s.industryFlow, m = ind?.month || {}, last = ind?.last || {};
+    const blds = [...this.w.buildings.values()].filter((b) => SERVICES[b.svc]?.chain);
+    const n = (o, c) => Math.round(o?.[c] || 0);
+    const rm = s.regionMarket, rows = Object.entries(COMMODITIES).map(([c, C]) => `<tr><td>${C.name}</td><td>${n(ind?.stock, c)}</td><td>${n(m.made, c)}</td><td>${n(m.used, c)}</td><td>${n(m.sold, c)}</td><td>${n(m.bought, c)}</td><td>₵${(C.price * priceOf(s, c)).toFixed(1)}</td><td class="${(rm?.price[c] ?? 1) >= 1 ? 'pos' : 'neg'}" title="Region: ${Math.round(rm?.supply[c] || 0)} offered, ${Math.round(rm?.demand[c] || 0)} wanted a month">${rm ? '×' + (rm.price[c] ?? 1).toFixed(2) : '—'}</td></tr>`).join('');
+    return `<p>${blds.length} industry building${blds.length === 1 ? '' : 's'} · ${f?.exchange ? 'commodity exchange open' : 'no exchange: raw materials sell at 60%'} · storage ${Math.round(f?.stockCap || 40)} per commodity${f && !f.canShip ? ' · <b class="neg">no highway or freight terminal: nothing can be sold</b>' : ''}</p>
+      <table class="kv"><tr><td>Sales this month</td><td class="pos">${fmtMoney(m.sales || 0)}</td></tr><tr><td>Imported inputs</td><td class="neg">-${fmtMoney(m.costs || 0)}</td></tr><tr><td>Last month</td><td>${fmtMoney((last.sales || 0) - (last.costs || 0))}</td></tr>
+      <tr><td>Coal for power plants</td><td>${bar(f?.fuel || 0)} (up to −35% plant upkeep)</td></tr><tr><td>Cement & steel for roads</td><td>${bar(f?.materials || 0)} (up to −15% road upkeep)</td></tr><tr><td>Machinery for factories</td><td>${bar(f?.machinery || 0)} (up to +20% industrial output)</td></tr></table>
+      <table class="kv"><tr><th>Commodity</th><th>Stock</th><th>Made</th><th>Used</th><th>Sold</th><th>Bought</th><th>Price</th><th>Region</th></tr>${rows}</table>
+      ${(() => { const offers = this.actions.offers?.() || [], deals = this.actions.contracts?.() || [];
+        return `<h3>Contracts with other governors</h3>${deals.length ? `<table class="kv">${deals.map((d) => `<tr><td>${d.role === 'sell' ? 'Selling to' : 'Buying from'} ${esc(d.name)}</td><td>${d.amount} ${COMMODITIES[d.kind]?.name.toLowerCase()} /mo at ₵${d.price} <button data-cdeal="${d.id}">End</button></td></tr>`).join('')}</table>` : '<p class="dim">No contracts yet.</p>'}
+          ${offers.map((o, i) => `<p>${esc(o.name)} offers to ${o.role === 'sell' ? 'buy' : 'sell you'} <b>${o.amount} ${COMMODITIES[o.kind].name.toLowerCase()}</b> a month at ₵${o.price} each. <button data-offer="${i}">Accept</button></p>`).join('')}`; })()}
+      ${rm ? `<p class="dim">Regional market: ${rm.tiles} other cities trade through the portals; ${rm.exchanges} rival exchange${rm.exchanges === 1 ? '' : 's'} trim your exchange's premium. Scarce commodities fetch more (Region > ×1).</p>` : ''}
+      <p class="dim">Chains: forest → lumber camp → sawmill → furniture works (or paper mill) · stone + coal → cement · iron + coal → steel · ore + coal → metals · steel + metals → machinery. The resources overlay shows the deposits.</p>`;
+  }
+
+  // ---------------------------------------------------------------- multiplayer
+  mpOpen() { return this.panelName === 'mp'; }
+  mpChanged() { if (this.panelName === 'mp') this.renderPanel(false); const b = [...$('dock').children].find((x) => x.dataset.c === 'mp'), n = this.actions.mp?.()?.unread || 0; if (b) b.classList.toggle('unread', n > 0); }
+  mpHtml() {
+    const mp = this.actions.mp?.(), cfg = this.actions.mpConfig || {}, r = this.actions.region?.();
+    if (!mp) return '<p class="dim">Multiplayer starts with the city.</p>';
+    const dot = (c) => `<span class="sw" style="background:${/^#[0-9a-f]{6}$/i.test(c || '') ? c : '#888'}"></span>`;
+    if (!mp.active) return `<p>Play this region with friends. Each player builds their own city on a tile of the region at the same time; you see each other's cities grow next door, chat, send money, sign monthly contracts and race for land. Your game hosts the region: keep it open while others play.</p>
+      <label class="txt">Your name <input type="text" data-mp-name maxlength="24" value="${esc(cfg.savedName?.() || '')}"></label>
+      <div class="row">Colour ${(cfg.colors || []).map((c, i) => `<label class="chk"><input type="radio" name="mpc" data-mp-color value="${c}" ${i === 0 ? 'checked' : ''}>${dot(c)}</label>`).join('')}</div>
+      <div class="row"><button class="primary" data-mp-host>Host this region</button></div>
+      <h3>Connection</h3><label class="txt">STUN servers <input type="text" data-mp-ice value="${esc(cfg.iceText?.() || '')}"></label>
+      <p class="dim">Friends join from the start screen with <b>Join multiplayer…</b>. A STUN server helps players behind home routers reach each other (it learns your IP address); leave it empty to play on a local network only. Some networks also need a TURN server.</p>`;
+    const players = mp.players, me = mp.me, tileName = (k) => (k && r?.tiles[k]?.name) || (k ? 'unbuilt land' : '—');
+    const others = players.filter((p) => p.id !== me.id);
+    const deals = (r?.deals || []).filter((d) => d.players?.length);
+    return `<p>${dot(me.color)} <b>${esc(me.name)}</b> · ${mp.role === 'host' ? `hosting · ${players.length} player${players.length === 1 ? '' : 's'}` : 'connected to the host'} <button data-mp-leave>Leave</button></p>
+      ${mp.role === 'host' ? `<h3>Let players in</h3>
+        <label class="txt">A player's join code <textarea data-mp-join rows="2" placeholder="OJ…"></textarea></label><div class="row"><button data-mp-answer>Make answer code</button></div>
+        ${this.mpAnswerCode ? `<label class="txt">Send this answer code back <textarea readonly rows="2" data-mp-out>${esc(this.mpAnswerCode)}</textarea></label><div class="row"><button data-mp-copy>Copy</button></div>` : ''}
+        <details${mp.room ? ' open' : ''}><summary>Or let them in through a signalling server</summary><div class="row"><input type="text" data-mp-url placeholder="http://localhost:8787" value="${esc(mp.room?.url || '')}"><input type="text" data-mp-room placeholder="room name" value="${esc(mp.room?.room || '')}">${mp.room ? '<button data-mp-close>Close room</button>' : '<button data-mp-open>Open room</button>'}</div>
+        <p class="dim">Run <code>node scripts/organicity-signal.mjs</code> somewhere everyone can reach; players then join with the server address and room name.</p></details>` : ''}
+      <h3>Standings</h3><table class="kv"><tr><th>Player</th><th>City</th><th>People</th><th>Funds</th><th>Score</th></tr>${players.map((p) => `<tr><td>${dot(p.color)}${esc(p.name)}${p.id === me.id ? ' (you)' : ''}</td><td>${esc(tileName(p.tile))}</td><td>${fmtInt(p.pop || 0)}</td><td>${fmtMoney(p.money || 0)}</td><td>${fmtInt(p.score)}</td>${mp.role === 'host' ? `<td>${p.id === me.id ? '' : `<button data-mp-kick="${esc(p.id)}" title="Remove this player from the game">Remove</button>`}</td>` : ''}</tr>`).join('')}</table>
+      <h3>Chat</h3><div class="chatlog">${mp.chat.slice(-40).map((l) => `<p>${l.from ? `${dot(l.color)}<b>${esc(l.from)}</b> ` : '<i>'}${esc(l.text)}${l.from ? '' : '</i>'}</p>`).join('') || '<p class="dim">Say hello.</p>'}</div>
+      <div class="row"><input type="text" data-mp-say maxlength="300" placeholder="Message"><button data-mp-send>Send</button></div>
+      ${mp.offers.length ? `<h3>Offers to you</h3>${mp.offers.map((o) => `<p><b>${esc(o.fromName)}</b> ${o.deal ? `offers to ${o.deal.role === 'sell' ? 'sell you' : 'buy from you'} ${fmtInt(o.deal.amount)} ${esc(o.deal.kind)} a month at ₵${o.deal.price}` : `sends you ${fmtMoney(o.money)}`}. <button data-mp-yes="${esc(o.id)}">Accept</button><button data-mp-no="${esc(o.id)}">Decline</button></p>`).join('')}` : ''}
+      ${others.length ? `<h3>Trade</h3><div class="row"><select data-mp-to>${others.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>
+        <select data-mp-kind><option value="money">Send money</option>${['sell', 'buy'].map((role) => ['power', 'water', ...Object.keys(COMMODITIES)].map((k) => `<option value="${role}:${k}">${role === 'sell' ? 'Sell' : 'Buy'} ${k === 'power' ? 'power (MW)' : k === 'water' ? 'water' : COMMODITIES[k].name.toLowerCase()} monthly</option>`).join('')).join('')}</select>
+        <input type="number" data-mp-amount min="1" value="20" title="Amount (₵ for money, units a month for contracts)"><input type="number" data-mp-price min="0" value="10" title="Price per unit"><button data-mp-propose>Propose</button></div>
+        <p class="dim">Money moves when they accept. Contracts run monthly between your tiles: commodities come out of the seller's stock (industry report); power and water need a road link across your shared border.</p>` : '<p class="dim">Waiting for other players…</p>'}
+      ${deals.length ? `<h3>Contracts between players</h3>${deals.map((d) => { const mine = [d.seller, d.buyer].some((k) => r?.tiles[k]?.owner === me.name); return `<p>${esc(d.players[0] || '')} ↔ ${esc(d.players[1] || '')}: ${fmtInt(d.amount)} ${esc(d.kind)} a month at ₵${d.price}${mine ? ` <button data-mp-end="${d.id}">End contract</button>` : ''}</p>`; }).join('')}` : ''}`;
+  }
+
+  // saved games: the list is read from the database, then the panel redraws
+  refreshGames() { Promise.all([this.actions.games?.(), this.actions.currentGame?.()]).then(([list, cur]) => { this.gamesList = list || []; this.gameCur = cur; if (this.panelName === 'saves') this.renderPanel(true); }); }
+  savesHtml() {
+    const list = this.gamesList, cur = list?.find((g) => g.id === this.gameCur), city = this.actions.region?.()?.tiles?.[this.actions.region().active]?.name || 'City';
+    const kb = (n) => n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+    return `<div class="row"><input type="text" data-game-name maxlength="48" value="${esc(cur?.name || city)}"><button class="primary" data-game-new>Save as new game</button>${cur ? `<button data-game-save="${cur.id}">Save over “${esc(cur.name)}”</button>` : ''}</div>
+      <p class="dim">A saved game holds the whole region: every city, its neighbours and the regional economy. Ctrl+S saves over the current game; an autosave is kept every five minutes.</p>
+      <div class="games">${!list ? '<p class="dim">Reading saved games…</p>' : !list.length ? '<p class="dim">No saved games yet.</p>' : list.map((g) => `<div class="game${g.id === this.gameCur ? ' cur' : ''}"><img src="${g.thumb || ''}" alt=""><div><b>${esc(g.name)}</b><small>${esc(g.meta?.city || '')} · ${fmtInt(g.meta?.pop || 0)} people · ${fmtMoney(g.meta?.money || 0)} · ${g.meta?.year || ''}<br>${new Date(g.updated).toLocaleString()} · ${kb(g.size || 0)}</small></div>
+        <div class="row"><button data-game-load="${g.id}">Load</button>${g.id !== 'autosave' ? `<button data-game-save="${g.id}">Overwrite</button><button data-game-ren="${g.id}">Rename</button>` : ''}<button data-game-exp="${g.id}" data-name="${esc(g.name)}">Export</button><button data-game-del="${g.id}">Delete</button></div></div>`).join('')}</div>
+      <div class="row"><button data-game-imp>Import saved game…</button><button data-share-file>Export this city only (.organicity)</button></div>`;
+  }
+
   regionHtml() {
     const s = this.sim, st = s.stats, reg = s.regionList(), mk = s.market(), inc = st.inc || {}, P = reg.reduce((t, r) => t + (r.connected ? r.pop : 0), 0);
     const price = (v) => `<span class="${v >= 1 ? 'pos' : 'neg'}">${Math.round(v * 100)}%</span>`;
@@ -548,7 +708,7 @@ export class UI {
   dealsHtml() {
     const r = this.actions.region?.(); if (!r) return '';
     const s = this.sim, mine = Object.values(s.tileNeighbours || {}).filter((t) => t.kind === 'city' && t.gov !== 'ai'), mk = s.market();
-    const rows = s.dealFlow?.rows || s.deals || [];
+    const rows = (s.dealFlow?.rows || s.deals || []).filter((d) => d.kind === 'power' || d.kind === 'water');   // commodity contracts live in the industry report
     return `<h3>Utility deals</h3>
       ${rows.map((d) => { const other = r.tiles[d.partner]; return `<p>${d.role === 'sell' ? 'Sell' : 'Buy'} ${d.amount} ${d.kind === 'power' ? 'MW' : 'water'} ${d.role === 'sell' ? 'to' : 'from'} ${esc(other?.name || d.partner)} · ₵${d.price}/unit/month${d.linked === false ? ' · <span class="neg">no road link on that side</span>' : d.role === 'sell' && d.delivered < d.amount ? ` · <span class="warn">delivering ${Math.round(d.delivered)}</span>` : ''} <button data-deal-del="${d.id}">Cancel</button></p>`; }).join('') || '<p class="dim">No deals yet.</p>'}
       ${mine.length ? `<div class="row"><select data-deal-partner>${mine.map((t) => `<option value="${t.key}">${esc(t.name)}</option>`).join('')}</select><select data-deal-role><option value="sell">Sell</option><option value="buy">Buy</option></select><select data-deal-kind><option value="power">Power (MW)</option><option value="water">Water</option></select><select data-deal-amount>${[10, 25, 50, 100].map((v) => `<option>${v}</option>`).join('')}</select><button data-deal-add>Sign</button></div>
@@ -579,7 +739,10 @@ export class UI {
       <div class="row"><button data-pack-add>Add a pack (.json)…</button><input type="file" accept=".json,application/json" data-pack-file hidden></div>
       <p class="dim">Packs add district styles (District panel) and landmarks (Services). Cities that use a pack landmark keep working without the pack.</p>
       <h3>Graphics</h3>
-      <label class="chk"><input type="checkbox" data-set="lod" ${S.lod !== false ? 'checked' : ''}> Simplify distant buildings (faster on big cities)</label>`;
+      <label class="chk"><input type="checkbox" data-set="lod" ${S.lod !== false ? 'checked' : ''}> Simplify distant buildings (faster on big cities)</label>
+      <label class="chk"><input type="checkbox" data-set="dither" ${S.dither ? 'checked' : ''}> Dithering: a retro ordered-dither palette</label>
+      <label class="chk"><input type="checkbox" data-set="glow" ${S.glow ? 'checked' : ''}> Light glow: bloom on bright skies, lit windows and neon (stronger at night)</label>
+      <label class="chk"><input type="checkbox" data-set="fullTiles" ${S.fullTiles ? 'checked' : ''}> Full texture on the other tiles: their lots, roads and shores drawn pixel by pixel (more memory)</label>`;
   }
 
   sandboxHtml() {
@@ -639,7 +802,7 @@ export class UI {
       const currentRoutes = s.routes && s.routes.origin === b.id && s.routes.netVersion === this.w.net.version && s.routes.bldVersion === this.w.bldVersion ? s.routes : null;
       const travelTime = key => currentRoutes?.[key] ? Math.round(currentRoutes[key].seconds) + 's' : '—';
       const prob = [];
-      for (const [k, t] of [['fire', 'On fire!'], ['abandoned', 'Abandoned'], ['road', 'No road access'], ['outside', 'Not connected to the highway'], ['power', 'No electricity'], ['water', 'No water'], ['sewage', 'No sewage'], ['garbage', 'Garbage not collected']]) if (b.prob & PROB[k]) prob.push(t);
+      for (const [k, t] of [['fire', 'On fire!'], ['abandoned', 'Abandoned'], ['road', 'No road access'], ['outside', 'Not connected to the highway'], ['power', 'No electricity'], ['water', b.lowPressure ? 'No water: too high for the water pressure (build a water tower uphill)' : 'No water'], ['sewage', 'No sewage'], ['garbage', 'Garbage not collected']]) if (b.prob & PROB[k]) prob.push(t);
       const yes = (v) => (v ? '<b class="pos">✓</b>' : '<b class="neg">✗</b>');
       let body = `<p class="dim">${d ? `District: ${esc(d.name)} · ` : ''}${Math.round(b.area * 2.25)} m² lot${b.svc ? '' : ` · built day ${b.built}`}</p>`;
       if (b.svc) {
@@ -649,6 +812,9 @@ export class UI {
           ${S.water ? `<tr><td>Pumps</td><td>${Math.round(S.water * s.budgetFor(b.svc))} water units</td></tr>` : ''}${S.sewage ? `<tr><td>Treats</td><td>${Math.round(S.sewage * s.budgetFor(b.svc))} sewage units</td></tr>` : ''}
           ${S.radius ? `<tr><td>Coverage</td><td>${Math.round(S.radius * Math.sqrt(s.budgetFor(b.svc)) * 1.5)} m by road</td></tr>` : ''}${S.park ? `<tr><td>Appeal radius</td><td>${Math.round(S.park * Math.sqrt(s.budgetFor(b.svc)) * 1.5)} m</td></tr>` : ''}
           ${b.svc === 'landfill' ? `<tr><td>Fill level</td><td>${bar(1 - b.garb / S.storage)} ${Math.round((b.garb / S.storage) * 100)}%</td></tr>` : ''}
+          ${S.chain ? this.industryRows(b, S) : ''}
+          ${S.chain && S.chain !== 'market' || b.svc === 'coal' ? `<tr><td>Scrubbers</td><td><label class="chk"><input type="checkbox" ${b.scrub ? 'checked' : ''} data-scrub> −65% pollution, +40% upkeep</label></td></tr>` : ''}
+          ${S.dep ? `<tr><td colspan="2"><button data-reclaim title="${S.dep === 'timber' ? 'Close the camp and replant its clearing' : 'Close the site and let the pit flood into a lake'}">Reclaim the site · ${fmtMoney(2000)}</button></td></tr>` : ''}
           <tr><td>Electricity</td><td>${yes(b.power)}</td></tr><tr><td>Water</td><td>${yes(b.water)}</td></tr></table>
           <p class="dim">${esc(S.desc)}</p>`;
       } else {
@@ -804,6 +970,7 @@ export class UI {
         <label class="chk"><input type="checkbox" ${P.historic ? 'checked' : ''} data-historic> Historic: freeze buildings as they are</label>
         <label class="chk"><input type="checkbox" ${P.carFree ? 'checked' : ''} data-carfree> Car-free centre${this.sim.ordinances.carFree ? '' : ' (needs the car-free ordinance in Society)'}: a third of trips walk or cycle, quieter streets</label>
         <label class="chk"><input type="checkbox" ${P.green ? 'checked' : ''} data-green> Green industry: half the pollution, −20% industrial tax</label>
+        <h3>Industry</h3><select data-dindustry>${Object.entries(IND_POLICIES).map(([k, v]) => `<option value="${k}" ${(P.industry || 'none') === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select><p class="dim">${esc(IND_POLICIES[P.industry || 'none'].desc)}</p>
         <h3>Service priority</h3>
         <h3>Architecture</h3><select data-style>${Object.entries(STYLES).map(([k, v]) => `<option value="${k}" ${(P.style || 'auto') === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
         <h3>Services</h3><select data-prio>${Object.entries(PRIORITIES).map(([k, v]) => `<option value="${k}" ${P.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
@@ -946,12 +1113,19 @@ export class UI {
     for (let z = 0; z < r.size; z++) for (let x = 0; x < r.size; x++) {
       const k = `${x},${z}`, t = r.tiles[k], active = k === r.active, next = tileNeighbours(r, r.active).some((q) => q.t === t);
       let body = '', cls = `wt ${t.kind} p-${t.preset}${active ? ' here' : ''}${t.owned ? ' owned' : ''}`, style = '';
-      if (t.kind === 'city') {
+      if (t.gov === 'remote' || (t.owner && t.owner !== this.actions.mp?.()?.me.name && !t.owned)) {   // another player's land
+        const sm = t.summary || {};
+        if (t.summary?.thumb) style = `background-image:url(${t.summary.thumb})`;
+        style += `;box-shadow:inset 0 0 0 3px ${/^#[0-9a-f]{6}$/i.test(t.color || '') ? t.color : '#888'}`;
+        body = t.kind === 'city' ? `<b>${esc(t.name || 'City')}</b><small>${fmtPop(sm.pop || 0)} people${sm.year ? ` · ${sm.year}` : ''}</small><small class="gov">Player · ${esc(t.owner || '?')}</small>`
+          : `<b>${esc(t.owner || 'Player')}'s land</b><small>${MAP_PRESETS[t.preset]}</small>`;
+        cls += ' remote';
+      } else if (t.kind === 'city') {
         const sm = active ? { ...(t.summary || {}), pop: Math.round(this.sim.stats.pop), year: this.sim.year } : t.summary || {};
         if (t.summary?.thumb) style = `background-image:url(${t.summary.thumb})`;
         const gov = this.w.econ?.tile(k)?.president, ai = t.gov === 'ai';
         body = `<b>${esc(t.name || 'City')}${ai ? '' : ` <button class="ren" data-wm-rename="${k}" title="Rename">✎</button>`}</b><small>${fmtPop(sm.pop || 0)} people${sm.year ? ` · ${sm.year}` : ''}</small>`
-          + (ai ? `<small class="gov">AI · ${esc(gov?.name || 'governor')}${gov?.priority ? ` · ${AIMS[gov.priority]}` : ''}</small>${active ? '' : `<button data-wm-take="${k}" title="Play this city as its governor">Play as governor</button>`}`
+          + (ai ? `<small class="gov">AI · ${esc(gov?.name || 'governor')}${gov?.priority ? ` · ${AIMS[gov.priority]}` : ''}</small>${active ? '' : this.actions.mp?.()?.active ? `<button data-wm-take="${k}" title="Buy it from its AI governor for its value">Buy · ${fmtMoney(cityValue(t))}</button>` : `<button data-wm-take="${k}" title="Play this city as its governor">Play as governor</button>`}`
             : active ? '<em>You are here</em>' : `<button data-wm-switch="${k}">Play this city</button><button data-wm-hand="${k}" title="Let an AI governor run and build it">Hand to AI</button>`);
         if (ai) cls += ' aigov';
       } else if (t.kind === 'ai') {
@@ -959,7 +1133,7 @@ export class UI {
       } else if (t.owned) {
         body = `<b>Your land</b><small>${MAP_PRESETS[t.preset]}</small><button class="primary" data-wm-found="${k}">Found a city</button>`;
       } else {
-        body = `<small>${MAP_PRESETS[t.preset]}</small>${canBuy(r, k) ? `<button data-wm-buy="${k}">Buy · ${fmtMoney(cost)}</button>` : ''}`;
+        body = `<small>${MAP_PRESETS[t.preset]}</small>${canBuy(r, k) ? `<button data-wm-buy="${k}">${this.actions.mp?.()?.connected ? 'Claim' : 'Buy'} · ${fmtMoney(cost)}</button>` : ''}`;
       }
       cells.push(`<div class="${cls}" style="${style}">${body}</div>`);
     }

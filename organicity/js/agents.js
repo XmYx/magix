@@ -24,12 +24,18 @@ export const AGENT_TYPES = {
 const GAP = 1.2, ACCEL = 7, SPILL = 3.5, SIGNAL_PERIOD = 7;
 
 // height of the deck above ground at arc s (ramps ease in over RAMP_LEN)
+// Elevated decks run level between their two ends (never closer than half their height to the
+// ground below); they ease down over a ramp only at an end that meets another level or stops.
 export function deckHeight(e, s) {
   let base=0;
   if(e.heights?.length) { let k=0;while(k<e.n-1&&e.cum[k+1]<s)k++; const t=clamp((s-e.cum[k])/(e.cum[k+1]-e.cum[k]||1),0,1);base=e.heights[k]*(1-t)+e.heights[k+1]*t; }
   const L = e.layer || 0; if (!L) return base;
-  const t = clamp(Math.min(s, e.len - s) / RAMP_LEN, 0, 1);
-  return base + LAYERS[L].y * t * t * (3 - 2 * t);
+  const ease = (d, flat) => { if (flat) return 1; const t = clamp(d / RAMP_LEN, 0, 1); return t * t * (3 - 2 * t); };
+  const t = Math.min(ease(s, e.noRampA), ease(e.len - s, e.noRampB)), Ly = LAYERS[L]?.y ?? 0;
+  if (L < 0) return base + Ly * t;
+  const hA = e.heights?.[0] ?? base, hB = e.heights?.[e.heights.length - 1] ?? base, f = e.len ? clamp(s / e.len, 0, 1) : 0;
+  const deck = Math.max(hA + (hB - hA) * f + Ly, base + Ly * 0.5);
+  return base + (deck - base) * t;
 }
 
 export class Traffic {

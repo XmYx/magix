@@ -1,5 +1,5 @@
 // Deterministic heightfields and a daily, bounded flood propagation model.
-import { N, SERVICES, RAMP_LEN } from './config.js';
+import { N, SERVICES, RAMP_LEN, BRIDGE_DECK } from './config.js';
 import { fbm, clamp, hash2 } from './util.js';
 import { frontAt } from './weather.js';
 export const MAP_PRESETS = { river: 'River plain', hills: 'Rolling hills', coast: 'Coastal hills', islands: 'Island chain' };
@@ -20,7 +20,7 @@ export function generateHeights(w) {
 // same order (roads by id, then buildings) and never needs saving.
 const MAX_GRADE = 0.09, SHOULDER = 5;
 const smooth01 = (t) => t * t * (3 - 2 * t);
-export function nodeHeight(w, n) { return n.y ?? (n.y = w.heightAt(n.x, n.z)); }
+export function nodeHeight(w, n) { if (n.y != null) return n.y; const c = w.cellAt(n.x, n.z); return (n.y = c >= 0 && w.water[c] ? Math.max(w.heightAt(n.x, n.z), BRIDGE_DECK) : w.heightAt(n.x, n.z)); }   // a joint mid-river sits on the bridge deck
 function touch(w, x0, z0, x1, z1) {
   const g = w.dirty.grade;
   w.dirty.grade = g ? [Math.min(g[0], x0), Math.min(g[1], z0), Math.max(g[2], x1), Math.max(g[3], z1)] : [x0, z0, x1, z1];
@@ -40,18 +40,27 @@ export function gradeEdge(w, e) {
   const run = Math.max(1, e.cum[i1] - e.cum[i0]), g = Math.max(MAX_GRADE, (1.02 * Math.abs(h[n] - h[0])) / run);
   for (let k = i0 + 1; k < i1; k++) { const d = e.cum[k] - e.cum[k - 1]; h[k] = clamp(h[k], h[k - 1] - g * d, h[k - 1] + g * d); }
   for (let k = i1 - 1; k > i0; k--) { const d = e.cum[k + 1] - e.cum[k]; h[k] = clamp(h[k], h[k + 1] - g * d, h[k + 1] + g * d); }
+  // Bridges: over water a ground road rises to a deck above the waves, climbing from the banks
+  // no steeper than the grade limit.
+  const wet = new Uint8Array(n + 1);
+  if (!e.layer) for (let k = 0; k <= n; k++) { const c = w.cellAt(pts[2 * k], pts[2 * k + 1]); wet[k] = c >= 0 && w.water[c] ? 1 : 0; }
+  if (wet.some((v) => v)) {
+    for (let k = 1; k < n; k++) if (wet[k]) h[k] = Math.max(h[k], BRIDGE_DECK);
+    for (let k = 1; k < n; k++) { const d = e.cum[k] - e.cum[k - 1]; h[k] = Math.max(h[k], h[k - 1] - g * d * 1.5); }
+    for (let k = n - 1; k > 0; k--) { const d = e.cum[k + 1] - e.cum[k]; h[k] = Math.max(h[k], h[k + 1] - g * d * 1.5); }
+  }
   e.heights = h; e.gradedN = n;
   // Where the grade-limited profile runs far below the ground it bores a tunnel; far above,
   // it crosses on a viaduct. Neither moves earth. 1 = viaduct, -1 = tunnel, 0 = graded.
   const struct = new Int8Array(n + 1);
-  if (!e.layer) for (let k = 1; k < n; k++) { const d = ground[k] - h[k]; struct[k] = d > 6 ? -1 : d < -6 ? 1 : 0; }
+  if (!e.layer) for (let k = 1; k < n; k++) { const d = ground[k] - h[k]; struct[k] = wet[k] || (d < -1.5 && (wet[k - 1] || wet[k + 1])) ? 2 : d > 6 ? -1 : d < -6 ? 1 : 0; }   // 2 = bridge
   for (let k = 1; k < n; k++) if (!struct[k] && struct[k - 1] && struct[k - 1] === struct[k + 1]) struct[k] = struct[k - 1];   // no one-sample gaps
   e.struct = struct.some((v) => v) ? struct : null;
   if (w.replaying) return;           // loading a save: the graded ground is restored, only the profile is needed
   // level the band under the road and blend the shoulders; decks and bores leave the land below alone
   const band = e.hw + 1, reach = band + SHOULDER, best = new Map();
   for (let k = 0; k < n; k++) {
-    if (e.layer && e.cum[k] > RAMP_LEN && e.cum[k + 1] < e.len - RAMP_LEN) continue;
+    if (e.layer && (e.noRampA || e.cum[k] > RAMP_LEN) && (e.noRampB || e.cum[k + 1] < e.len - RAMP_LEN)) continue;
     if (e.struct && (e.struct[k] || e.struct[k + 1])) continue;   // tunnels keep the hill, viaducts leave the valley
     const ax = pts[2 * k], az = pts[2 * k + 1], bx = pts[2 * k + 2], bz = pts[2 * k + 3], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
     const x0 = Math.max(0, Math.floor(Math.min(ax, bx) - reach)), x1 = Math.min(N - 1, Math.ceil(Math.max(ax, bx) + reach));
@@ -77,6 +86,7 @@ export function gradeEdge(w, e) {
 // Every edge whose polyline changed (new, split or rebuilt) gets graded again.
 export function roadProfile(w) {
   const edges = [...w.net.edges.values()].sort((a, b) => a.id - b.id);
+  w.net.levels();
   for (const e of edges) if (e.gradedN !== e.n || !e.heights || e.heights.length !== e.n + 1) gradeEdge(w, e);
   if (w.dirty.grade) w.dirty.trees = true;
 }
@@ -113,12 +123,25 @@ export function flattenLot(w, b) {
   b.pad = pad;
   if (bx1 >= bx0) { touch(w, bx0, bz0, bx1 + 1, bz1 + 1); w.dirty.trees = true; }
 }
+// cells within 6 units of a drain (cached per line version)
+function drainMask(w) {
+  const drains = (w.ulines || []).filter((l) => l.kind === 'sewer'); if (!drains.length) return null;
+  if (w._drainMask?.v === w.ulineVersion) return w._drainMask.m;
+  const m = new Uint8Array(N * N);
+  for (const l of drains) {
+    const len = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]);
+    for (let s = 0; s <= len; s += 2) { const cx = l.a[0] + (l.b[0] - l.a[0]) * s / (len || 1), cz = l.a[1] + (l.b[1] - l.a[1]) * s / (len || 1);
+      for (let z = Math.max(0, Math.floor(cz - 6)); z <= Math.min(N - 1, cz + 6); z++) for (let x = Math.max(0, Math.floor(cx - 6)); x <= Math.min(N - 1, cx + 6); x++) if (Math.hypot(x - cx, z - cz) <= 6) m[z * N + x] = 1; }
+  }
+  w._drainMask = { v: w.ulineVersion, m }; return m;
+}
 export function pond(w, sim) {
   const P = w.pond ||= new Float32Array(N * N), E = w.elevation, W = w.water, type = sim.weather.type;
-  const rain = type === 'storm' ? 0.18 : type === 'rain' ? 0.06 : 0;
+  const rain = type === 'storm' ? 0.012 : type === 'rain' ? 0.003 : 0;   // puddles, not lakes
+  const D = drainMask(w);
   for (let i = 0; i < P.length; i++) {
     if (W[i]) { P[i] = 0; continue; }
-    P[i] *= w.road[i] || w.bld[i] ? 0.8 : 0.7;                               // soaks into open ground faster
+    P[i] *= D && D[i] ? 0.3 : w.road[i] || w.bld[i] ? 0.8 : 0.7;                 // soaks into open ground faster; drains take it away
     if (rain) P[i] += rain * frontAt(sim.weather, i % N, (i / N) | 0, sim.day + 0.5);
   }
   for (let pass = 0; pass < 6; pass++) for (let i = 0; i < P.length; i++) {
@@ -134,7 +157,8 @@ export function pond(w, sim) {
 export function hazardTick(sim, advance = true) {
   const w=sim.w, h=w.hazards, weather=sim.weather.type;
   if(advance) h.snow=clamp(h.snow+(weather==='snow'?.045:weather==='heat'?-.07:weather==='rain'?-.025:-.012),0,1.5);
-  if(advance) h.surge=clamp(h.surge+(weather==='storm'?.18:weather==='rain'?.035:-.12),0,2.4);
+  // surges are rare and shallow: only the worst storm days push the water up, and it recedes fast
+  if(advance) h.surge=clamp(h.surge+(weather==='storm'&&hash2(sim.day,w.seed,991)<.3?.05:-.2),0,.9);
   const flood=w.flood; flood.fill(0);
   // Multi-source propagation follows connected water; levees can block it, but overtopping remains possible.
   const q=new Int32Array(N*N), visited=new Uint8Array(N*N); let head=0,tail=0;
@@ -144,7 +168,7 @@ export function hazardTick(sim, advance = true) {
       const i=q[head++],x=i%N;
       for(const j of [x?i-1:-1,x<N-1?i+1:-1,i-N,i+N]) {
         if(j<0||j>=N*N||visited[j])continue;
-        const level=flood[i]+(w.water[i]?0:w.elevation[i])-.06;
+        const level=flood[i]+(w.water[i]?0:w.elevation[i])-.06;   // surges lose height as they spread inland
         if(level<=w.elevation[j]+(w.road[j]||w.bld[j]?0:w.levees[j])*3)continue;
         visited[j]=1;flood[j]=level-w.elevation[j];q[tail++]=j;
       }
@@ -153,7 +177,7 @@ export function hazardTick(sim, advance = true) {
   // Rainwater ponding: rain falls on land (heaviest under the front), runs downhill for a few
   // passes and collects in hollows; it drains away over the following days.
   if (advance) pond(w, sim);
-  if (w.pond) for (let i = 0; i < flood.length; i++) if (w.pond[i] > 0.05) flood[i] = Math.max(flood[i], w.pond[i] - 0.05);
+  if (w.pond) for (let i = 0; i < flood.length; i++) if (w.pond[i] > 0.25) flood[i] = Math.max(flood[i], w.pond[i] - 0.25);
   const active=[...w.buildings.values()].filter(b=>b.svc&&!b.abandoned&&b.edge>=0&&b.power&&b.water&&(b.flood||0)<1);
   for(const b of active.filter(b=>b.svc==='stormdrain')) {
     const r=SERVICES.stormdrain.radius, budget=sim.budgetFor('stormdrain');
@@ -172,9 +196,9 @@ export function hazardTick(sim, advance = true) {
   }
   for(const b of w.buildings.values()) {
     b.flood=b.platformId?0:flood[w.cellAt(b.cx,b.cz)]||0;
-    if(advance&&b.flood>.4) { b.occ=Math.max(0,(b.occ||0)*.97);b.happy=Math.max(0,(b.happy||0)-.08); }
+    if(advance&&b.flood>.6) { b.occ=Math.max(0,(b.occ||0)*.99);b.happy=Math.max(0,(b.happy||0)-.04); }
   }
-  h.flooded=[...w.buildings.values()].filter(b=>b.flood>.4).length;
+  h.flooded=[...w.buildings.values()].filter(b=>b.flood>.6).length;
   if(advance&&weather==='storm'&&hash2(sim.day,w.seed,987)<.12) {
     const all=[...w.buildings.values()].filter(b=>!b.platformId);
     const under=all.filter(b=>frontAt(sim.weather,b.cx,b.cz,sim.day+.5)>.6), pool=under.length?under:all;   // strikes come from the storm cells

@@ -147,7 +147,7 @@ export class Core {
       const k = Math.min(FN - 1, (b.cz / FC) | 0) * FN + Math.min(FN - 1, (b.cx / FC) | 0);
       if (b.svc) {
         const S = SERVICES[b.svc];
-        if (S.pollution && b.svc !== 'outlet') plume(b.cx, b.cz, 50 * S.pollution, S.pollution * 0.8);
+        if (S.pollution && b.svc !== 'outlet') { const v = S.pollution * (b.scrub ? 0.35 : 1) * (b.mining && S.dep ? 1.3 : 1); plume(b.cx, b.cz, 50 * S.pollution, v * 0.8); }   // scrubbers; mining districts
         if (b.svc === 'outlet') { splat(pol, b.cx, b.cz, 30, 0.4); splat(wpol, b.cx, b.cz, 90, 1.1); }   // sewage fouls the water
         if (b.svc === 'coal' && nearWater(b.cx, b.cz, 20)) splat(wpol, b.cx, b.cz, 50, 0.4);
         if (S.noise) splat(noi, b.cx, b.cz, 36, S.noise);

@@ -8,9 +8,11 @@
 // Deterministic for a given city and day. Runs monthly inside the background tile worker.
 import { N, SERVICES } from './config.js';
 import { mulberry32, hash2 } from './util.js';
+import { depositNear } from './resources.js';
+import { utilityGrid } from './grid.js';
 
 // an AI governor keeps a reserve: ₵5,000 behind essential utilities, ₵15,000 behind anything else
-const ESSENTIAL = new Set(['coal', 'wind', 'pump', 'tower', 'outlet']);
+const ESSENTIAL = new Set(['coal', 'wind', 'pump', 'tower', 'outlet', 'substation']);
 const reserve = (key) => (ESSENTIAL.has(key) ? 5000 : 15000);
 function tryService(w, sim, key, x, z, R = 40) {
   if (!SERVICES[key] || !sim.canAfford(SERVICES[key].cost + reserve(key))) return false;
@@ -84,7 +86,17 @@ export function aiBuild(w, sim, opts = {}) {
     }
     cands.sort((a, b) => a[2] - b[2]);
     for (const [x, z] of cands.slice(0, 80)) { const p = w.planService(key, x, z); if (p.ok) { w.placeService(key, p); sim.spend(SERVICES[key].cost); works.push({ cx: x, cz: z }); return true; } }
-    shore(); return false;
+    // no reachable shoreline: run a spur road from the nearest junction to just short of the nearest candidate
+    const tgt = cands[0]; if (!tgt) return false;
+    const from = inner.reduce((b, q) => (!b || Math.hypot(q.x - tgt[0], q.z - tgt[1]) < Math.hypot(b.x - tgt[0], b.z - tgt[1]) ? q : b), null); if (!from) return false;
+    let ax = from.x, az = from.z;
+    for (let k = 0; k < 5; k++) {
+      const d = Math.hypot(tgt[0] - ax, tgt[1] - az); if (d < 5) break;
+      const step = Math.min(55, d - 2), bx = ax + (tgt[0] - ax) * step / d, bz = az + (tgt[1] - az) * step / d;
+      if (step < 6 || !tryRoad(w, sim, ax, az, bx, bz, 'street', 5000)) break;
+      ax = bx; az = bz; done.push('shore road');
+    }
+    return false;
   };
   if ((!has('pump') && !has('tower')) || wD > wS * 0.8) { if (byShore('pump') || tryService(w, sim, 'tower', ...away(25), 30)) done.push('water'); }
   if (!has('outlet') || sD > sS * 0.8) { if (byShore('outlet')) done.push('sewage'); }
@@ -94,6 +106,7 @@ export function aiBuild(w, sim, opts = {}) {
   const need = { fire: 25, police: 45, school: 60, clinic: 80 }, surplus = (st.incomeM || 0) - (st.expenseM || 0);
   for (const k of ['fire', 'police', 'school', 'clinic']) {
     if (homes.length < need[k] || (has(k) ? false : surplus < SERVICES[k].upkeep * 0.5 && homes.length < need[k] * 2)) continue;
+    if (all.filter((b) => b.svc === k).length >= 1 + Math.floor(homes.length / 120)) continue;   // one per ~120 homes at most
     const sample = homes.filter((_, i) => i % Math.max(1, Math.floor(homes.length / 30)) === 0), lacking = sample.filter((b) => sim.bcov(k, b) < 0.1);
     if (lacking.length > sample.length * 0.3 && sim.money > SERVICES[k].cost * 2) {
       const x = lacking.reduce((s, b) => s + b.cx, 0) / lacking.length, z = lacking.reduce((s, b) => s + b.cz, 0) / lacking.length;
@@ -101,6 +114,44 @@ export function aiBuild(w, sim, opts = {}) {
     }
   }
   if (homes.length > 40 && rng() < 0.25) { const b = homes[Math.floor(rng() * homes.length)]; if (tryService(w, sim, 'parkS', b.cx, b.cz, 20)) done.push('park'); }
+  // 2b. resource industry: work a deposit near town, then process what the town digs up
+  if (homes.length > 50 && sim.money > 45000 && rng() < 0.4) {
+    const ext = { timber: 'lumbercamp', coal: 'coalmine', stone: 'quarry', iron: 'ironmine', ore: 'oremine' }, count = (k) => all.filter((b) => b.svc === k).length;
+    const proc = [['sawmill', ['lumbercamp']], ['cementworks', ['quarry', 'coalmine']], ['steelworks', ['ironmine', 'coalmine']], ['smelter', ['oremine', 'coalmine']], ['furniture', ['sawmill']],
+      ['warehouse', ['sawmill']], ['papermill', ['lumbercamp']], ['exchange', ['warehouse']], ['machinery', ['steelworks', 'smelter']]]
+      .find(([k, need]) => !count(k) && need.every((n) => count(n)) && (!SERVICES[k].unlock || (st.pop || 0) >= SERVICES[k].unlock));
+    if (proc) { const src = all.find((b) => b.svc === proc[1][0]); if (tryService(w, sim, proc[0], (src.cx + cx) / 2, (src.cz + cz) / 2, 40)) done.push(proc[0]); }
+    else if (all.filter((b) => SERVICES[b.svc]?.chain === 'extract').length < 4) {
+      for (let r = 40; r <= 160; r += 30) {
+        let hit = null;
+        for (let a = 0; a < 12 && !hit; a++) {
+          const x = cx + Math.cos(a * Math.PI / 6 + rng()) * r, z = cz + Math.sin(a * Math.PI / 6 + rng()) * r;
+          if (x < 10 || z < 10 || x > N - 10 || z > N - 10) continue;
+          for (const [dep, key] of Object.entries(ext)) if (!count(key) && depositNear(w, dep, x, z, 18) > 0.25) { hit = [key, x, z]; break; }
+        }
+        if (hit && tryService(w, sim, hit[0], hit[1], hit[2], 16)) { done.push(hit[0]); break; }
+      }
+    }
+  }
+  // 2c. the grid: a plant or pump on a road network of its own gets a line or pipe into town;
+  // overloaded lines get a substation, and homes too high for the water pressure a tower
+  const byComp = new Map(); for (const b of homes) byComp.set(b.comp, (byComp.get(b.comp) || 0) + 1);
+  const town = [...byComp.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (town != null) for (const [svcs, kind] of [[['coal', 'wind'], 'power'], [['pump', 'tower'], 'water'], [['outlet'], 'sewer']]) {
+    const g = utilityGrid(w), cut = all.filter((b) => svcs.includes(b.svc) && b.comp >= 0 && g.root(kind, 'c' + b.comp) !== g.root(kind, 'c' + town));
+    for (const b of cut.slice(0, 1)) {
+      const a = inner.filter((n) => Math.hypot(n.x - b.cx, n.z - b.cz) < 40).sort((p, q) => Math.hypot(p.x - b.cx, p.z - b.cz) - Math.hypot(q.x - b.cx, q.z - b.cz))[0];
+      const townNodes = inner.filter((n) => { const e = [...n.edges].map((id) => w.net.edges.get(id))[0]; return e && w.net.compOf(e) === town; });
+      const t = a && townNodes.sort((p, q) => Math.hypot(p.x - a.x, p.z - a.z) - Math.hypot(q.x - a.x, q.z - a.z))[0]; if (!t) continue;
+      const plan = w.planULine(kind, a.x, a.z, t.x, t.z); if (!plan.ok || !sim.canAfford(plan.cost + 5000)) continue;
+      w.addULine(kind, a.x, a.z, t.x, t.z); sim.spend(plan.cost); done.push(kind + ' line');
+    }
+  }
+  if ((st.overload?.power || 0) > 1 && homes.length) { const b = homes[Math.floor(rng() * homes.length)]; if (tryService(w, sim, 'substation', b.cx, b.cz, 24)) done.push('substation'); }
+  if ((st.lowPressure || 0) > 5) {
+    const dry = homes.filter((b) => b.lowPressure).sort((p, q) => w.heightAt(q.cx, q.cz) - w.heightAt(p.cx, p.cz))[0];
+    if (dry && tryService(w, sim, 'tower', dry.cx, dry.cz, 30)) done.push('water tower');
+  }
   // 3. streets and zoning when land runs short
   // only land zoned for something in demand counts as room to grow
   const wanted = (z) => { const k = { 1: 'R', 2: 'R', 3: 'C', 4: 'I', 5: 'O', 6: 'C' }[z]; return sim.demand[k] > 5; };

@@ -18,7 +18,7 @@ export function netFromSnapshot(snap) {
     e.heights=heights; e.snapshotSpeed=speedF; e.hazardSpeed=hazardSpeed ?? 1; e.oneway = ow; e.layer = layer || 0; e.busLane = !!lane;
     e.fAB = fab ?? flow / 2; e.fBA = fba ?? flow / 2;
   }
-  updateCosts(net);
+  updateCosts(net); net.levels();
   for(const e of net.edges.values())if(e.snapshotSpeed!=null){e.speedF=e.snapshotSpeed;e.cost=e.len/(ROADS[e.type].speed*e.speedF);}
   return net;
 }

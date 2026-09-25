@@ -1,0 +1,40 @@
+{
+  "name": "organicity-desktop",
+  "productName": "Organicity",
+  "version": "1.0.0",
+  "description": "Organicity: a pixel-art city builder where nothing snaps to a grid.",
+  "author": "magix",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:linux": "electron-builder --linux --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "pack": "electron-builder --dir --publish never"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.github.magix.organicity",
+    "productName": "Organicity",
+    "directories": { "output": "dist", "buildResources": "resources" },
+    "files": ["main.cjs", "preload.cjs", "resources/icon.png", "package.json"],
+    "extraResources": [
+      { "from": "../organicity", "to": "app/organicity", "filter": ["**/*", "!**/*.map"] },
+      { "from": "node_modules/three/build", "to": "app/vendor/three/build" },
+      { "from": "node_modules/three/examples/jsm", "to": "app/vendor/three/examples/jsm" }
+    ],
+    "linux": { "target": ["AppImage", "deb", "tar.gz"], "category": "Game", "icon": "resources/icon.png", "maintainer": "magix" },
+    "mac": { "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }, { "target": "zip", "arch": ["x64", "arm64"] }], "category": "public.app-category.simulation-games", "icon": "resources/icon.png" },
+    "win": { "target": ["nsis", "portable"], "icon": "resources/icon.png" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

@@ -4,13 +4,21 @@
 // "road Voronoi": cells that share a road, a side and a frontage slot form a lot,
 // so plot boundaries run perpendicular to curved streets and meet at the
 // bisector of angled junctions — wedges, triangles and slivers fall out naturally.
-import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS } from './config.js';
+import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS, ULINES } from './config.js';
 import { generateHeights, roadProfile, flattenLot } from './terrain.js';
 import { landmarkDef } from './packs.js';
+import { depositNear, DEPOSITS } from './resources.js';
 import { transitMode } from './transit.js';
 import { RoadNet } from './roads.js';
 import { buildingFloors, technology, TERRACE_SERVICES } from './eras.js';
 import { fbm, hash2, mulberry32, maskDistance, clamp, rleEncode, rleDecode } from './util.js';
+
+// nearest point of a utility line to (x, z)
+export function segNearest(l, x, z) {
+  const [ax, az] = l.a, [bx, bz] = l.b, dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
+  const t = clamp(((x - ax) * dx + (z - az) * dz) / L2, 0, 1), px = ax + dx * t, pz = az + dz * t;
+  return { d: Math.hypot(x - px, z - pz), x: px, z: pz, t };
+}
 
 export const CH = 64;                 // render chunk size
 export const CHN = N / CH;
@@ -21,7 +29,7 @@ export class World {
   constructor(seed = 1234, mapPreset = 'river') {
     this.seed = seed; this.year = 2000; this.platforms = new Map(); this.platformId = 1; this.platformVersion = 0;
     const S = N * N;
-    this.mapPreset = mapPreset; this.elevation = new Float32Array(S); this.levees = new Uint8Array(S); this.flood = new Float32Array(S); this.hazards = { snow: 0, surge: 0 };
+    this.mapPreset = mapPreset; this.elevation = new Float32Array(S); this.levees = new Uint8Array(S); this.ulines = []; this.ulineId = 1; this.ulineVersion = 0; this.flood = new Float32Array(S); this.hazards = { snow: 0, surge: 0 };
     this.water = new Uint8Array(S);
     this.wdist = new Float32Array(S);
     this.road = new Uint8Array(S);
@@ -405,7 +413,7 @@ export class World {
       id: id || this.bid++, platformId: p.platformId || 0, heightYear: p.heightYear ?? this.year, baseY: 0, zone: p.zone || 0, svc: p.svc || null, level: p.level || 1,
       cells: Int32Array.from(p.cells), seed: p.seed ?? ((this.rng() * 1e9) | 0),
       occ: p.occ || 0, cap: 0, happy: 0.6, appeal: 0.5, neglect: 0, low: 0,
-      abandoned: !!p.abandoned, abDays: p.abDays || 0, fire: 0, built: p.built ?? this.day, spec: p.spec || null,
+      abandoned: !!p.abandoned, abDays: p.abDays || 0, fire: 0, built: p.built ?? this.day, spec: p.spec || null, scrub: !!p.scrub,
       power: true, water: true, sewage: true, garb: p.garb || 0, garbOk: true, geoVersion: 0,
     };
     for (const c of b.cells) {
@@ -622,8 +630,19 @@ export class World {
     const h = this.net.nearestEdge(x, z, DEPTH + 8, (e) => !ROADS[e.type].noAccess);
     if (!h) return { ok: false, err: 'Needs a road nearby' };
     const e = h.e, p = this.net.sampleAt(e, h.s);
-    const tx = p.tx, tz = p.tz; let fx = -tz, fz = tx;
+    let fx = -p.tz, fz = p.tx;
     if ((x - p.x) * fx + (z - p.z) * fz < 0) { fx = -fx; fz = -fz; }
+    const side = this.footprint(S, e, p, fx, fz, p.tx, p.tz);   // beside the road, as usual
+    // shoreline works can also sit past a dead end, facing along the road (a road run out to the water)
+    const endNode = h.s < 1 ? this.net.nodes.get(e.a) : h.s > e.len - 1 ? this.net.nodes.get(e.b) : null;
+    if (!side.ok && S.nearWater && endNode && endNode.edges.size === 1) {
+      const out = h.s < 1 ? -1 : 1, ax = p.tx * out, az = p.tz * out;
+      if ((x - p.x) * ax + (z - p.z) * az > 0) { const end = this.footprint(S, e, p, ax, az, -az, ax); if (end.ok) return end; }
+    }
+    return side;
+  }
+  // the cells a service of type S would cover, set back from the road point p, facing (fx, fz)
+  footprint(S, e, p, fx, fz, tx, tz) {
     const back = e.hw + 1 + S.d / 2;
     const cx = p.x + fx * back, cz = p.z + fz * back;
     const R = Math.hypot(S.w, S.d) / 2 + 1, cells = [];
@@ -645,6 +664,7 @@ export class World {
     if (wet) err = 'Cannot build on water';
     else if (bad) err = 'Blocked by roads or buildings';
     else if (S.nearWater && minW > 9) err = 'Must touch the shoreline';
+    else if (S.dep && depositNear(this, S.dep, cx, cz, S.reach) < 0.08) err = `Needs ${DEPOSITS[S.dep].name.toLowerCase()} nearby (see the resources overlay)`;
     return { ok: !err, err, cells, cx, cz, fx, fz, tx, tz, cost: S.cost };
   }
 
@@ -660,10 +680,13 @@ export class World {
   // ------------------------------------------------------------------ zoning
   canZone(i) { return !this.road[i] && !this.water[i] && this.accEdge[i] >= 0; }
 
-  paintZone(x, z, r, zoneId) {
+  // The brush only zones empty land: existing zones (and what stands on them) are left alone
+  // unless `overwrite` is set (Shift while painting). Dezoning (zoneId 0) always applies.
+  paintZone(x, z, r, zoneId, overwrite = false) {
     const kill = new Set(); let n = 0;
     for (let zz = Math.floor(z - r); zz <= Math.ceil(z + r); zz++) for (let xx = Math.floor(x - r); xx <= Math.ceil(x + r); xx++) {
       if (!this.inside(xx, zz) || Math.hypot(xx + 0.5 - x, zz + 0.5 - z) > r) continue;
+      if (zoneId && !overwrite && this.zone[zz * N + xx]) continue;
       n += this.setZone(zz * N + xx, zoneId, kill);
     }
     for (const id of kill) this.removeBuilding(id);
@@ -713,7 +736,7 @@ export class World {
     const id = this.districts.length; if (id >= DISTRICT_COLORS.length) return null;
     const r = this.rng;
     const nm = SYL[(r() * SYL.length) | 0] + SYL[(r() * SYL.length) | 0] + SUF[(r() * SUF.length) | 0];
-    const d = { id, name: nm[0].toUpperCase() + nm.slice(1), policy: { tax: { R: 0, C: 0, I: 0, O: 0 }, maxLevel: 5, maxFloors: 0, priority: 'balanced', green: false, historic: false, carFree: false } };
+    const d = { id, name: nm[0].toUpperCase() + nm.slice(1), policy: { tax: { R: 0, C: 0, I: 0, O: 0 }, maxLevel: 5, maxFloors: 0, priority: 'balanced', green: false, historic: false, carFree: false, industry: 'none' } };
     this.districts.push(d);
     return d;
   }
@@ -733,6 +756,52 @@ export class World {
     }
   }
 
+  // A worked-out extraction site returns to nature: pits and mines flood into a lake,
+  // a lumber camp's clearing is replanted. Returns false if there is nothing to reclaim.
+  reclaim(b) {
+    const S = SERVICES[b.svc]; if (!S?.dep) return false;
+    const cells = [...b.cells]; this.removeBuilding(b.id);
+    if (S.dep === 'timber') { for (const i of cells) if (!this.road[i] && !this.water[i] && hash2(i, this.seed, 5) < 0.6) this.tree[i] = 1; this.dirty.trees = true; return true; }
+    let x0 = N, z0 = N, x1 = 0, z1 = 0;
+    for (const i of cells) {
+      const x = i % N, z = (i / N) | 0;
+      if (this.road[i] || Math.min(x, z, N - 1 - x, N - 1 - z) < 2) continue;
+      if (this.tx && !this.tx.water.has(i)) this.tx.water.set(i, this.water[i]);
+      this.water[i] = 1; this.tree[i] = 0; if (this.zone[i]) { if (this.tx && !this.tx.zone.has(i)) this.tx.zone.set(i, this.zone[i]); this.zone[i] = 0; }
+      x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z);
+    }
+    if (x1 >= x0) { this.terrainEdited = true; this.pendingTerrain = true; this.markGround(x0 - 1, z0 - 1, x1 + 2, z1 + 2); this.finishTerrain(); }
+    return true;
+  }
+
+  // ------------------------------------------------------------------ utility lines
+  // straight runs of power line, water pipe or drain; a run may start or end on another run
+  planULine(kind, ax, az, bx, bz) {
+    const L = ULINES[kind], len = Math.hypot(bx - ax, bz - az);
+    if (!L) return { ok: false, err: 'Unknown line' };
+    if (len < 3) return { ok: false, err: 'Too short' };
+    if (len > 260) return { ok: false, err: 'Too long: 260 m at most per run' };
+    for (const [x, z] of [[ax, az], [bx, bz]]) if (x < 1 || z < 1 || x > N - 1 || z > N - 1) return { ok: false, err: 'Off the map' };
+    let wet = 0; for (let t = 0; t <= 1; t += 2 / len) { const c = this.cellAt(ax + (bx - ax) * t, az + (bz - az) * t); if (c >= 0 && this.water[c]) wet += 2; }
+    if (kind !== 'power' && wet > 40) return { ok: false, err: 'Pipes can cross at most 40 m of water' };
+    return { ok: true, len, cost: Math.round(len * L.cost * (1 + wet / len)) };
+  }
+  addULine(kind, ax, az, bx, bz) {
+    const l = { id: this.ulineId++, kind, a: [+ax.toFixed(1), +az.toFixed(1)], b: [+bx.toFixed(1), +bz.toFixed(1)] };
+    this.ulines.push(l); this.ulineVersion++; return l;
+  }
+  removeULine(id) { const n = this.ulines.length; this.ulines = this.ulines.filter((l) => l.id !== id); if (this.ulines.length !== n) this.ulineVersion++; }
+  // nearest line (of a kind, or any) within r of a point, with the distance and the nearest point on it
+  nearestULine(x, z, r = 3, kind = null, pipesFirst = false) {
+    let best = null, bd = r;
+    if (pipesFirst) { const p = this.nearestULine(x, z, r, 'water') || this.nearestULine(x, z, r, 'sewer'); if (p) return p; }
+    for (const l of this.ulines) {
+      if (kind && l.kind !== kind) continue;
+      const q = segNearest(l, x, z); if (q.d <= bd) { bd = q.d; best = { l, ...q }; }
+    }
+    return best;
+  }
+
   policyAt(b) { return (b.district && this.districts[b.district]?.policy) || null; }
 
   // ------------------------------------------------------------------ undo
@@ -740,14 +809,14 @@ export class World {
   // (as a compact snapshot), zone / district / water cells, buildings removed and
   // created. Simulation changes run with txMute set and are never recorded.
   beginTx(label, { net = false } = {}) {
-    this.tx = { label, platforms: JSON.stringify([...this.platforms.values()]), lines: JSON.stringify(this.lines), zone: new Map(), district: new Map(), water: new Map(), levees: new Map(), elev: new Map(), removed: new Map(), created: new Set(), net: net ? this.netState() : null, money: 0 };
+    this.tx = { label, platforms: JSON.stringify([...this.platforms.values()]), lines: JSON.stringify(this.lines), ulines: JSON.stringify(this.ulines), zone: new Map(), district: new Map(), water: new Map(), levees: new Map(), elev: new Map(), removed: new Map(), created: new Set(), net: net ? this.netState() : null, money: 0 };
   }
   commitTx(money = 0) {
     const t = this.tx; this.tx = null;
     if (!t) return null;
     t.money = money;
     const netChanged = t.net && t.net.version !== this.net.version;
-    if (t.platforms === JSON.stringify([...this.platforms.values()]) && t.lines === JSON.stringify(this.lines) && !netChanged && !t.zone.size && !t.district.size && !t.water.size && !t.levees.size && !t.elev.size && !t.removed.size && !t.created.size) return null;
+    if (t.platforms === JSON.stringify([...this.platforms.values()]) && t.lines === JSON.stringify(this.lines) && t.ulines === JSON.stringify(this.ulines) && !netChanged && !t.zone.size && !t.district.size && !t.water.size && !t.levees.size && !t.elev.size && !t.removed.size && !t.created.size) return null;
     this.undoStack.push(t);
     if (this.undoStack.length > 40) this.undoStack.shift();
     return t;
@@ -793,6 +862,7 @@ export class World {
     if (t.water.size) this.finishTerrain();
     this.platforms=new Map(JSON.parse(t.platforms || '[]').map(p=>[p.id,p]));this.platformVersion++;
     if (t.lines) { this.lines = JSON.parse(t.lines); this.lineVersion++; }
+    if (t.ulines) { this.ulines = JSON.parse(t.ulines); this.ulineVersion++; }
     let x0 = N, z0 = N, x1 = 0, z1 = 0;
     const grow = (i) => { const x = i % N, z = (i / N) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; };
     for (const [i, v] of t.zone) { if (!this.road[i] && !this.water[i]) this.zone[i] = v; grow(i); }
@@ -822,7 +892,7 @@ export class World {
     const enc = (cells) => { const s = Array.from(cells).sort((a, b2) => a - b2), d = []; let p = 0; for (const c of s) { d.push(c - p); p = c; } return rleEncode(d); };
     return {
       id: b.id, platformId: b.platformId || 0, heightYear: b.heightYear, zone: b.zone, svc: b.svc, level: b.level, seed: b.seed, occ: Math.round(b.occ), built: b.built,
-      abandoned: b.abandoned, abDays: b.abDays, garb: Math.round(b.garb), locked: !!b.locked, constructionUntil: b.constructionUntil || 0, spec: b.spec || null, rubble: b.rubble || 0, spill: b.spill || 0,
+      abandoned: b.abandoned, abDays: b.abDays, garb: Math.round(b.garb), locked: !!b.locked, constructionUntil: b.constructionUntil || 0, spec: b.spec || null, rubble: b.rubble || 0, spill: b.spill || 0, ...(b.scrub ? { scrub: 1 } : {}),
       cells: compact ? enc(b.cells) : Array.from(b.cells),
       ...(b.svc ? { cx: b.cx, cz: b.cz, fx: b.fx, fz: b.fz } : {}),
     };
@@ -834,7 +904,7 @@ export class World {
       mapPreset: this.mapPreset, levees: rleEncode(this.levees), hazards: this.hazards, seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
       nodes: [...this.net.nodes.values()].map((n) => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.outside ? 1 : 0, n.control || 'auto']),
       edges: [...this.net.edges.values()].map((e) => [e.id, e.a, e.b, +e.c.x.toFixed(2), +e.c.z.toFixed(2), e.type, +e.cond.toFixed(3), e.oneway || 0, e.layer || 0, e.busLane ? 1 : 0]),
-      lines: this.lines, lineId: this.lineId,
+      lines: this.lines, lineId: this.lineId, ...(this.ulines.length ? { ulines: this.ulines, ulineId: this.ulineId } : {}),
       zone: rleEncode(this.zone), district: rleEncode(this.district),
       ...(this.terrainEdited ? { water: rleEncode(this.water) } : {}),
       ...this.gradeDelta(),
@@ -861,6 +931,7 @@ export class World {
     w.year=d.year || 2000;w.platforms=new Map((d.platforms || []).map(p=>[p.id,p]));w.platformId=d.platformId || 1;
     w.genTerrain();
     if(d.levees)w.levees=rleDecode(d.levees,Uint8Array,N*N);
+    if (d.ulines) { w.ulines = d.ulines; w.ulineId = d.ulineId || d.ulines.reduce((m, l) => Math.max(m, l.id + 1), 1); }
     if(d.hazards)w.hazards={...w.hazards,...d.hazards};
     if (d.water) {
       w.water = rleDecode(d.water, Uint8Array, N * N);

@@ -60,7 +60,22 @@
         <button id="introGo" class="primary" data-i18n="intro.found">Found a new city</button>
         <button id="introLoad" hidden data-i18n="intro.continue">Continue saved city</button>
         <button id="introImport" title="Open a city shared as an .organicity file" data-i18n="intro.import">Import city…</button><input id="importFile" type="file" accept=".organicity,.json,application/json,text/plain" hidden>
+        <button id="introGames" hidden>Load game…</button>
+        <button id="introMp">Join multiplayer…</button><input id="gameFile" type="file" accept=".organicity-game,.json,application/json" hidden>
         <button id="introBack" hidden>Cancel</button>
+      </div>
+      <div id="introList" class="games" hidden></div>
+      <div id="mpJoin" hidden>
+        <b>Join a multiplayer region</b>
+        <label>Your name <input id="mpName" type="text" maxlength="24" autocomplete="off"></label>
+        <div class="row" id="mpColors"></div>
+        <details><summary>Through a signalling server (optional)</summary><label>Server <input id="mpUrl" type="text" placeholder="http://localhost:8787"></label> <label>Room <input id="mpRoom" type="text" maxlength="48"></label></details>
+        <div class="row"><button id="mpStart" class="primary">Join</button></div>
+        <p id="mpStatus" class="dim"></p>
+        <div id="mpCodes" hidden>
+          <label>1. Send this join code to the host <textarea id="mpCode" rows="3" readonly></textarea></label><div class="row"><button id="mpCopy">Copy join code</button></div>
+          <label>2. Paste the host's answer code <textarea id="mpAnswer" rows="3"></textarea></label><div class="row"><button id="mpConnect" class="primary">Connect</button></div>
+        </div>
       </div>
       <p class="dim"><a href="../index.html">← back to the site</a></p>
     </div>

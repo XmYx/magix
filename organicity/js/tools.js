@@ -1,13 +1,14 @@
 import { TRANSIT, transitMode } from './transit.js';
 import { routeLines } from './assign.js';
 // Organicity — input: camera controls and the player's tools.
-import { ROADS, SERVICES, ZONES, LAYERS, JUNCTIONS } from './config.js';
+import { ROADS, SERVICES, ZONES, LAYERS, JUNCTIONS, ULINES } from './config.js';
 import { bezier, clamp, fmtMoney } from './util.js';
+import { undergroundY } from './grid.js';
 
 export class Tools {
   constructor(world, sim, rend, ui) {
     this.w = world; this.sim = sim; this.r = rend; this.ui = ui;
-    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, transitMode: 'bus', terrainMode: 'water', platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0 };
+    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, transitMode: 'bus', terrainMode: 'water', platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0, uline: null };
     this.lineStops = [];      // bus stops picked for a new line
     this.pts = [];            // road points being drawn
     this.keys = new Set();
@@ -44,7 +45,7 @@ export class Tools {
   wheel(e) {
     e.preventDefault();
     const c = this.r.cam, g0 = this.r.groundAt(e.clientX, e.clientY);
-    const nd = clamp(c.dist * Math.pow(1.0015, e.deltaY), 22, 720);
+    const nd = clamp(c.dist * Math.pow(1.0015, e.deltaY), 22, 1000);
     if (g0 && nd < c.dist) { const k = 1 - nd / c.dist; c.x += (g0.x - c.x) * k * 0.6; c.z += (g0.z - c.z) * k * 0.6; }
     c.dist = nd;
   }
@@ -69,12 +70,13 @@ export class Tools {
     const k = e.key.toLowerCase();
     if (!down) { this.keys.delete(k); return; }
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); this.ui.actions.quickSave?.(); return; }
     this.keys.add(k);
     if (k === 'p') { this.ui.togglePhoto(); return; }
     if (k === 'm') { this.ui.toggleWorldMap(); return; }
     if (k === 'escape' && !document.getElementById('worldmap').hidden) { this.ui.toggleWorldMap(false); return; }
     if (document.body.classList.contains('photo')) { if (k === 'escape') this.ui.togglePhoto(false); return; }   // photo mode: camera keys only
-    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', 6: 'district', 7: 'bulldoze', l: 'lines', t: 'terrain', y: 'people', n: 'advisors', r: 'region', k: 'president' };
+    const map = { 1: 'inspect', 2: 'road', 3: 'zone', 4: 'util', 5: 'svc', i: 'ind', 6: 'district', 7: 'bulldoze', l: 'lines', t: 'terrain', y: 'people', n: 'advisors', r: 'region', k: 'president', j: 'mp' };
     if (map[k]) { this.ui.pickCategory(map[k]); return; }
     if (k === '8') { this.ui.togglePanel('overlays'); return; }
     if (k === '9') { this.ui.togglePanel('budget'); return; }
@@ -82,6 +84,7 @@ export class Tools {
     if (k === 'enter' && this.s.tool === 'lines') { this.finishLine(); return; }
     if (k === 'escape') { this.lineStops = []; if (this.pts.length) { this.pts = []; this.refresh(); } else this.setTool('inspect'); this.ui.closePanel(); }
     if (k === 'c' && this.s.tool === 'road') this.set({ curve: !this.s.curve });
+    if ((k === 'pageup' || k === 'pagedown') && this.s.tool === 'road') { e.preventDefault(); this.set({ layer: clamp(this.s.layer + (k === 'pageup' ? 1 : -1), -1, 3) }); this.ui.toast(`Road level: ${LAYERS[this.s.layer].name}`, 'info'); }
     if (k === 'f' && this.s.tool === 'zone') this.set({ fill: !this.s.fill });
     if (k === '[') this.set({ brush: clamp(this.s.brush - 1, 1, 30) });
     if (k === ']') this.set({ brush: clamp(this.s.brush + 1, 1, 30) });
@@ -98,7 +101,7 @@ export class Tools {
   }
   pinch() {
     const g = this.gestureState(), o = this.gesture, c = this.r.cam;
-    c.dist = clamp(c.dist * o.dist / Math.max(1, g.dist), 22, 720);
+    c.dist = clamp(c.dist * o.dist / Math.max(1, g.dist), 22, 1000);
     let da = g.angle - o.angle; da -= Math.round(da / (2 * Math.PI)) * 2 * Math.PI; c.yaw -= da;
     const p0 = this.r.groundAt(o.mx, o.my), p1 = this.r.groundAt(g.mx, g.my);
     if (p0 && p1) { c.x += p0.x - p1.x; c.z += p0.z - p1.z; }
@@ -158,7 +161,12 @@ export class Tools {
     }
   }
 
-  ground() { const p=['svc','util'].includes(this.s.tool) && this.w.platforms.get(this.s.platform);return this.r.groundAt(this.mouse.x, this.mouse.y, p?.y || 0); }
+  // underground editing picks on the flat pipe level, so what you point at is the pipe you see
+  underground() { const s = this.s; return (s.tool === 'util' && (s.uline === 'water' || s.uline === 'sewer')) || (s.tool === 'bulldoze' && s.under); }
+  ground() {
+    if (this.underground()) return this.r.groundAt(this.mouse.x, this.mouse.y, undergroundY(this.w));
+    const p=['svc','util','ind'].includes(this.s.tool) && this.w.platforms.get(this.s.platform);return this.r.groundAt(this.mouse.x, this.mouse.y, p?.y || 0);
+  }
 
   undo() {
     if (this.stroke) return;
@@ -244,7 +252,7 @@ export class Tools {
           const plan = this.roadPlan(h);
           if (plan.needCtrl) { r.setRoadPreview([plan.A, h], 0.4, true); tip = 'Click to place the bend of the curve'; }
           else {
-            r.setRoadPreview(plan.twin ? [...plan.pts, ...plan.twin.pts.slice().reverse()] : plan.pts, ROADS[s.road].width / 2, plan.ok);
+            r.setRoadPreview(plan.twin ? [...plan.pts, ...plan.twin.pts.slice().reverse()] : plan.pts, ROADS[s.road].width / 2, plan.ok, s.layer > 0 ? LAYERS[s.layer].y : 0);
             tip = `${s.layer ? LAYERS[s.layer].name + ' ' : ''}${ROADS[s.road].name}${plan.twin ? ' ×2' : ''} · ${Math.round(plan.cost.len)} m${plan.cost.wetLen > 1 ? ' (bridge)' : ''} · ${fmtMoney(plan.cost.cost)}${plan.err ? ' — ' + plan.err : ''}`;
           }
         } else tip = s.upgrade ? `Drag over roads to upgrade them to ${ROADS[s.road].name.toLowerCase()}` : `${ROADS[s.road].name}: click to start${s.curve ? ' a curve' : ''}`;
@@ -271,13 +279,29 @@ export class Tools {
         r.setBrush(g.x, g.z, s.brush, s.water ? 0x4a9aff : 0x9ad06a);
         tip = ['raise', 'lower', 'level', 'smooth'].includes(s.terrainMode) ? `${s.terrainMode[0].toUpperCase() + s.terrainMode.slice(1)} ground · ₵3 per unit of earth · height ${this.w.heightAt(g.x, g.z).toFixed(1)}` : s.terrainMode==='levee'?'Build flood levees · ₵12/cell':s.terrainMode==='removeLevee'?'Remove levees':s.water?'Paint water':'Paint land';
         break;
-      case 'util': case 'svc': {
+      case 'util': case 'svc': case 'ind': {
+        if (s.tool === 'util' && s.uline) {
+          const L = ULINES[s.uline], h = this.ulineSnap(g);
+          r.setBrush(h.x, h.z, 1.2, L.color);
+          if (this.pts.length) {
+            const a = this.pts[0], plan = this.w.planULine(s.uline, a.x, a.z, h.x, h.z), ok = plan.ok && this.sim.canAfford(plan.cost);
+            r.setRoadPreview([a, h], 0.6, ok);
+            tip = `${L.name} · ${Math.round(plan.len || 0)} m · ${fmtMoney(plan.cost || 0)}${!plan.ok ? ' — ' + plan.err : !ok ? ' — Not enough money' : ''}`;
+          } else tip = `${L.name}: click to start a run (snaps to roads and other ${L.name.toLowerCase()}s) · ${fmtMoney(L.cost)}/m`;
+          break;
+        }
         const S = SERVICES[s.svc], plan = this.w.planService(s.svc, g.x, g.z, s.platform);
         r.setGhost(plan, S, plan.ok && this.sim.canAfford(S.cost));
         tip = `${S.name} · ${fmtMoney(S.cost)} (+${fmtMoney(S.upkeep)}/mo)${plan.err ? ' — ' + plan.err : !this.sim.canAfford(S.cost) ? ' — Not enough money' : ''}`;
         break;
       }
       case 'bulldoze': case 'inspect': {
+        if (s.tool === 'bulldoze' && s.under) {   // the underground bulldozer only touches pipes, drains and lines
+          this.hover = null; const u = this.w.nearestULine(g.x, g.z, 3, null, true);
+          if (u) { this.hover = { u: u.l }; r.setBrush(u.x, u.z, 2.5, 0xff6a5a); tip = `Remove ${ULINES[u.l.kind].name.toLowerCase()} run (${Math.round(Math.hypot(u.l.b[0] - u.l.a[0], u.l.b[1] - u.l.a[1]))} m) · the city above is untouched`; }
+          else tip = 'Underground bulldozer: click a pipe, drain or power line run';
+          break;
+        }
         const b = r.pickBuilding(this.mouse.x, this.mouse.y);
         this.hover = null;
         const jn = !b && s.tool === 'inspect' && this.w.net.nearestNode(g.x, g.z, 7);
@@ -286,6 +310,7 @@ export class Tools {
         else {
           const h = this.w.net.nearestEdge(g.x, g.z, 1);
           if (h) { r.setEdgeHighlight(h.e, s.tool === 'inspect'); this.hover = { e: h.e }; if (s.tool === 'bulldoze') tip = `Remove ${ROADS[h.e.type].name.toLowerCase()} segment`; }
+          else if (s.tool === 'bulldoze') { const u = this.w.nearestULine(g.x, g.z, 2.5); if (u) { this.hover = { u: u.l }; r.setBrush(u.x, u.z, 2, 0xff6a5a); tip = `Remove ${ULINES[u.l.kind].name.toLowerCase()} run`; } }
         }
         break;
       }
@@ -300,6 +325,13 @@ export class Tools {
       else tip = value == null ? 'No data here' : `${o}: ${Math.round(value * 100)}% (simulation index)`;
     }
     this.ui.tip(tip, this.mouse.x, this.mouse.y);
+  }
+
+  // line runs snap to another run of the same kind, else to the centre of a nearby road
+  ulineSnap(g) {
+    const u = this.w.nearestULine(g.x, g.z, 3, this.s.uline); if (u) return { x: u.t < 0.08 ? u.l.a[0] : u.t > 0.92 ? u.l.b[0] : u.x, z: u.t < 0.08 ? u.l.a[1] : u.t > 0.92 ? u.l.b[1] : u.z };
+    const n = this.w.net.nearestNode(g.x, g.z, 3); if (n) return { x: n.x, z: n.z };
+    return { x: g.x, z: g.z };
   }
 
   bName(b) { return b.svc ? SERVICES[b.svc].name : `${ZONES[b.zone].name} (L${b.level})`; }
@@ -336,7 +368,7 @@ export class Tools {
           w.beginTx('Place building'); const res = w.placeGrowable(g.x, g.z, s.place); w.commitTx();
           if (!res.ok) this.ui.toast(res.err, 'warn'); else if (res.capped) this.ui.toast(`${ZONES[res.b.zone].name} tops out at level ${res.b.level}`, 'info');
         } else if (s.fill) { if (first) { w.beginTx('Block fill'); w.fillZone(g.x, g.z, s.zone); w.commitTx(); } }
-        else w.paintZone(g.x, g.z, s.brush, s.zone);
+        else w.paintZone(g.x, g.z, s.brush, s.zone, this.keys.has('shift'));
         break;
       case 'terrain': {
         if (['raise', 'lower', 'level', 'smooth'].includes(s.terrainMode)) {
@@ -362,8 +394,19 @@ export class Tools {
         w.paintDistrict(g.x, g.z, s.brush, s.dErase ? 0 : s.district);
         break;
       }
-      case 'util': case 'svc': {
+      case 'util': case 'svc': case 'ind': {
         if (!first) return;
+        if (s.tool === 'util' && s.uline) {
+          const h = this.ulineSnap(g);
+          if (!this.pts.length) { this.pts = [h]; break; }
+          const a = this.pts[0], plan = w.planULine(s.uline, a.x, a.z, h.x, h.z);
+          if (!plan.ok) { this.ui.toast(plan.err, 'warn'); break; }
+          if (!sim.canAfford(plan.cost)) { this.ui.toast('Not enough money', 'warn'); break; }
+          w.beginTx(ULINES[s.uline].name); w.addULine(s.uline, a.x, a.z, h.x, h.z); w.commitTx(plan.cost);
+          sim.spend(plan.cost); this.ui.float(`-${fmtMoney(plan.cost)}`, this.mouse.x, this.mouse.y);
+          this.pts = [{ x: h.x, z: h.z }];   // runs chain on; right-click or Esc stops
+          break;
+        }
         const S = SERVICES[s.svc], plan = w.planService(s.svc, g.x, g.z, s.platform);
         const need = S.landmark || S.unlock;
         if (need && !sim.sandbox && sim.stats.pop < need) { this.ui.toast(`${S.name} unlocks at ${need.toLocaleString('en-US')} people`, 'warn'); break; }
@@ -376,10 +419,12 @@ export class Tools {
       }
       case 'bulldoze': {
         if (!first || !this.hover) return;
+        if (s.under && !this.hover.u) return;
         if (this.hover.b) {
           const b = this.hover.b, refund = b.svc ? SERVICES[b.svc].cost * 0.4 : 0;
           w.beginTx('Demolish'); w.removeBuilding(b.id); w.commitTx(-refund); sim.spend(-refund);
         } else if (this.hover.e) { w.beginTx('Remove road', { net: true }); w.removeRoad(this.hover.e.id); w.commitTx(); }
+        else if (this.hover.u) { w.beginTx('Remove line'); w.removeULine(this.hover.u.id); w.commitTx(); }
         this.hover = null;
         break;
       }

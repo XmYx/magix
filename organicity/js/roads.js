@@ -170,7 +170,13 @@ export class RoadNet {
   }
 
   // Commit a road. Returns { edges: [new edge ids], bb: [x0,z0,x1,z1] }
-  // layer: 0 ground, 1 elevated, -1 tunnel. Roads only join others on the same layer;
+  // Where an elevated road or tunnel meets only roads of its own level, it keeps its height through
+  // the joint; it ramps to the ground only where it meets another level or ends.
+  levels() {
+    const keep = (id, L) => { const n = this.nodes.get(id); if (!n || n.edges.size < 2) return false; for (const x of n.edges) if ((this.edges.get(x)?.layer || 0) !== L) return false; return true; };
+    for (const e of this.edges.values()) { const L = e.layer || 0; e.noRampA = !!L && keep(e.a, L); e.noRampB = !!L && keep(e.b, L); }
+  }
+  // layer: 0 ground, 1–3 elevated levels, -1 tunnel. Roads only join others on the same layer;
   // elevated and tunnel roads pass over / under everything between their end ramps.
   build(sA, c, sB, type, oneway = 0, layer = 0) {
     oneway = oneway || ROADS[type].oneway || 0;

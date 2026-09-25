@@ -14,7 +14,7 @@ import { RoadNet } from '../organicity/js/roads.js';
 import { fastestRoute, commuteRoutes } from '../organicity/js/routes.js';
 import { weatherAt, WEATHER, frontAt } from '../organicity/js/weather.js';
 import { Core, netSnapshot, sampleField } from '../organicity/js/core.js';
-import { N, ZONES, SERVICES } from '../organicity/js/config.js';
+import { N, ZONES, SERVICES, LAYERS, BRIDGE_DECK } from '../organicity/js/config.js';
 import { setupScenario, TUTORIAL } from '../organicity/js/scenarios.js';
 import { quake, tornado, accident, festival, disasterTick, DISASTERS } from '../organicity/js/disasters.js';
 import { createRegion, canBuy, tileCost, partnersOf, neighbours as tileNeighbours, exitDir, edgeProfile, exitsOf, stubsFor, evolveAI } from '../organicity/js/region.js';
@@ -22,14 +22,18 @@ import { headway, lineCapacity, transitGraph, transitSearch, transitTo, updateCo
 import { pond } from '../organicity/js/terrain.js';
 import { registerPack, landmarkDef } from '../organicity/js/packs.js';
 import { t as tr, setLang, STRINGS } from '../organicity/js/i18n.js';
-import { backgroundMonth } from '../organicity/js/region.js';
+import { backgroundMonth, edgeMatchFor, edgesOf, neighbours } from '../organicity/js/region.js';
 import { RegionSim, TERM_YEARS } from '../organicity/js/regionsim.js';
 import { aiBuild } from '../organicity/js/builder.js';
-import { runTile, found } from '../organicity/js/tile-worker.js';
+import { runTile, found, terrainTile } from '../organicity/js/tile-worker.js';
 import { unb64, viewSnapshot } from '../organicity/js/tileview.js';
 import { rentOf, salaryOf, utility as famUtility, reconsider, newFamily, THRESHOLD } from '../organicity/js/families.js';
 import { applyPolicy, aiDecide, clampPolicy, predict } from '../organicity/js/presidents.js';
 import { readFileSync, existsSync } from 'node:fs';
+import * as saves from '../organicity/js/saves.js';
+import { Session, Link, channelPair, standings, cleanView } from '../organicity/js/mp.js';
+import { utilityGrid, lineStats, coverageMask, undergroundY } from '../organicity/js/grid.js';
+import { deposits, depositNear, industryTick, DEPOSITS, COMMODITIES, regionMarket, aiOffers, priceOf } from '../organicity/js/resources.js';
 import { encodeSave, decodeSave, readShared } from '../organicity/js/share.js';
 import { technology, buildingFloors, massPlan } from '../organicity/js/eras.js';
 import { assignTraffic, routeLines, junctionDelay } from '../organicity/js/assign.js';
@@ -1381,6 +1385,330 @@ test('regional economy adopts a founded AI city: real homes and jobs, families, 
   // you take over the AI governor's city; later hand it back
   t.gov = 'player'; econ.govern(st, t); assert(st.president.controller === 'player', 'take-over did not make it yours');
   t.gov = 'ai'; econ.govern(st, t); assert(st.president.controller === 'ai' && st.president.priority, 'hand-over did not restore the AI');
+});
+
+test('utility lines: power lines join road networks, the strict grid needs lines, drains clear ponds, undo and save', () => {
+  const w = new World(4242); w.newGame(); const s = new Sim(w, { worker: false, sandbox: {} }), finish = (g) => { for (const _ of g) {} };
+  // two separate towns on dry land west of the river, far from the highway
+  const A = 100; assert(![40, 110, 170, 260].some((x) => w.water[A * N + x]), 'test row is wet');
+  road(w, [40, A], [110, A]); road(w, [170, A], [260, A]);
+  const put = (k, x) => { for (let dx = 0; dx < 40; dx += 3) for (const dz of [8, -8, 12, -12]) { const p = w.planService(k, x + dx, A + dz); if (p.ok) return w.placeService(k, p); } throw new Error('could not place ' + k); };
+  put('coal', 50); const fire = put('fire', 190);
+  finish(s.utilitiesJob()); assert(!fire.power, 'separate network already powered');
+  w.beginTx('Power line'); w.addULine('power', 110, A, 170, A); w.commitTx(300);
+  finish(s.utilitiesJob()); assert(fire.power, 'power line did not join the networks');
+  assert(utilityGrid(w).root('power', 'c' + fire.comp) === utilityGrid(w).root('power', 'c' + [...w.buildings.values()].find((b) => b.svc === 'coal').comp), 'grids not joined');
+  // strict grid: a home needs a line of each kind within reach
+  w.paintZone(245, A + 10, 5, 1, true); const res = w.placeGrowable(245, A + 10, 1); assert(res.ok, 'could not place a home: ' + res.err);
+  const home = res.b; s.capacity(home); home.occ = 1;
+  finish(s.utilitiesJob()); assert(home.power, 'roads should carry power without the strict rule');
+  s.strictGrid = true; finish(s.utilitiesJob()); assert(!home.power, 'strict grid powered a home with no line near it');
+  w.addULine('power', 170, A, 250, A); finish(s.utilitiesJob()); assert(home.power, 'a line beside the home did not power it');
+  assert(fire.power, 'services should still draw from their road network');
+  // drains take ponded rainwater away
+  w.addULine('sewer', 60, A + 40, 200, A + 40);
+  const near = (A + 42) * N + 150, far = (A + 90) * N + 150;
+  w.pond = new Float32Array(N * N); w.pond[near] = 1; w.pond[far] = 1; s.weather = { type: 'clear' }; pond(w, s);
+  assert(w.pond[near] < w.pond[far] * 0.6 || w.pond[near] < 0.3, `drain did not clear the pond (${w.pond[near]} vs ${w.pond[far]})`);
+  // upkeep, undo and save
+  assert(lineStats(w).upkeep > 0, 'lines have no upkeep'); s.dailyTick(); assert(s.stats.exp.lines > 0, 'line upkeep not charged');
+  const n = w.ulines.length, again = World.load(w.serialize()); assert(again.ulines.length === n, 'lines not saved');
+  const save = makeSave(w, s), back = loadSave(save, { worker: false }); assert(back.sim.strictGrid && back.world.ulines.length === n, 'strict grid or lines lost on load');
+  w.undoStack.length = 0; w.beginTx('Line'); w.addULine('water', 10, 10, 60, 10); w.commitTx(10); w.undo(); assert(w.ulines.length === n, 'line undo failed');
+});
+
+test('resources: seeded deposits, extractors need them, the chain makes, uses and sells', () => {
+  const w = new World(4242); w.newGame(); const D = deposits(w), have = {};
+  for (const k of Object.keys(DEPOSITS)) have[k] = D.kind.filter((v) => v === DEPOSITS[k].id).length;
+  for (const k in have) assert(have[k] > 200, `no ${k} deposits (${have[k]})`);
+  assert(D === deposits(w) && deposits(new World(4242)).kind.every((v, i) => v === D.kind[i] || w.water[i]), 'deposits not deterministic');
+  const at = (k) => { const id = DEPOSITS[k].id; for (let i = 0; i < D.kind.length; i += 97) { const x = i % N, z = (i / N) | 0; if (D.kind[i] === id && x > 30 && z > 30 && x < N - 30 && z < N - 30 && depositNear(w, k, x, z, 18) > 0.4) return [x, z]; } throw new Error('no rich ' + k); };
+  const away = (k) => { const id = DEPOSITS[k].id; for (let z = 40; z < N - 40; z += 9) for (let x = 40; x < N - 40; x += 9) if (!w.water[z * N + x] && depositNear(w, k, x, z, 20) === 0) return [x, z]; };
+  // placement: a mine needs its deposit
+  const [bx, bz] = away('coal'); road(w, [bx - 30, bz], [bx + 30, bz]);
+  const bad = w.planService('coalmine', bx, bz + 10); assert(!bad.ok && /coal/i.test(bad.err || ''), 'coal mine placed without coal: ' + bad.err);
+  // the chain, with fake running buildings (road, power, water, full staff)
+  const s = new Sim(w, { worker: false }); let id = 90000;
+  const mk = (svc, [x, z]) => { const b = { id: ++id, svc, cx: x, cz: z, edge: 0, power: true, water: true, workers: SERVICES[svc].jobs, cells: [] }; w.buildings.set(b.id, b); return b; };
+  const iron = mk('ironmine', at('iron')), coal = mk('coalmine', at('coal')), steel = mk('steelworks', [250, 250]);
+  for (let d = 0; d < 30; d++) { s.day++; industryTick(s); }
+  const M = s.industry.month;
+  assert(M.made.iron > 10 && M.made.coal > 10, `mines idle: ${JSON.stringify(M.made)}`);
+  assert(M.made.steel > 5 && M.used.iron > 5, 'steelworks made nothing from local iron and coal');
+  assert(M.sales > 0 && Object.values(M.sold).some((v) => v > 0), 'nothing sold');
+  // infrastructure: no power stops the plant
+  steel.power = false; steel.water = false; const before = M.made.steel; s.day++; industryTick(s); assert(M.made.steel === before && steel.indEff === 0, 'plant ran without power or water');
+  // the exchange imports missing inputs, at a cost
+  steel.power = steel.water = true; w.buildings.delete(iron.id); w.buildings.delete(coal.id); s.industry.stock = {};
+  mk('exchange', [260, 260]); const c0 = M.costs; s.day++; industryTick(s);
+  assert(M.bought.iron > 0 && M.costs > c0, 'the exchange did not import inputs');
+  // it shows up in the city's books
+  s.dailyTick(); assert('industry' in s.stats.inc && 'inputs' in s.stats.exp, 'industry missing from the budget');
+  const back = loadSave(makeSave(w, s), { worker: false }).sim; assert(back.industry && back.industry.last !== undefined, 'industry state not saved');
+  for (const c of Object.keys(COMMODITIES)) assert(COMMODITIES[c].price > 0, 'bad price ' + c);
+  // reclaiming a quarry floods its pit into a lake; undo brings it back
+  const w2 = new World(4242); w2.newGame(); const D2 = deposits(w2); let q = null;
+  for (let i = 0; i < D2.kind.length && !q; i += 131) {
+    const x = i % N, z = (i / N) | 0; if (D2.kind[i] !== DEPOSITS.stone.id || x < 60 || z < 60 || x > N - 60 || z > N - 60 || depositNear(w2, 'stone', x, z, 18) < 0.3) continue;
+    road(w2, [x - 30, z], [x + 30, z]);
+    for (const dz of [13, -13, 16, -16]) { const p = w2.planService('quarry', x, z + dz); if (p.ok) { q = w2.placeService('quarry', p); break; } }
+  }
+  assert(q, 'could not place a quarry on stone');
+  const cells = [...q.cells], wet0 = cells.filter((c) => w2.water[c]).length;
+  w2.beginTx('Reclaim'); assert(w2.reclaim(q), 'reclaim refused'); w2.commitTx(2000);
+  assert(!w2.buildings.has(q.id) && cells.filter((c) => w2.water[c]).length > cells.length * 0.5, 'the pit did not flood');
+  w2.undo(); assert(w2.buildings.has(q.id) && cells.filter((c) => w2.water[c]).length === wet0, 'reclaim undo failed');
+});
+
+test('zoning brush paints only empty land unless overwriting', () => {
+  const w = new World(); w.newGame(); road(w, [150, 150], [230, 150]);
+  w.paintZone(190, 158, 6, 1); const cells = []; for (let i = 0; i < w.zone.length; i++) if (w.zone[i] === 1) cells.push(i);
+  assert(cells.length > 10, 'brush did not zone');
+  w.paintZone(190, 158, 6, 3); assert(cells.every((i) => w.zone[i] === 1), 'brush overwrote existing zones');
+  w.paintZone(190, 158, 6, 3, true); assert(cells.some((i) => w.zone[i] === 3), 'overwrite did not repaint');
+  w.paintZone(190, 158, 6, 0); assert(cells.every((i) => w.zone[i] === 0 || Math.hypot(i % N - 190, ((i / N) | 0) - 158) > 6.5), 'dezoning is blocked');
+});
+
+test('pregenerated tiles: every tile gets land that continues its neighbours, and a later city is founded on that land', () => {
+  const home = new World(777); home.newGame(); const s = new Sim(home, { worker: false });
+  const r = createRegion(home, s); const here = r.tiles[r.active]; here.edges = edgesOf(home);
+  const east = r.tiles[`${here.x + 1},${here.z}`];
+  const em = edgeMatchFor(r, `${here.x + 1},${here.z}`); assert(em?.west, 'the eastern tile does not see this city\'s edge');
+  const res = terrainTile({ seed: east.seed, preset: east.preset, edgeMatch: em });
+  assert(res.view && res.view.S === 128 && res.view.n === 0 && res.edges.west.length === 256, 'terrain view or edges missing');
+  // the shared border: water and heights agree along most of it
+  const a = here.edges.east, b = res.edges.west; let wet = 0, dh = 0;
+  for (let k = 0; k < 128; k++) { if (a[2 * k] === b[2 * k]) wet++; dh += Math.abs(a[2 * k + 1] - b[2 * k + 1]); }
+  assert(wet >= 110, `water does not continue across the border (${wet}/128)`); assert(dh / 128 < 1.5, `heights jump at the border (${(dh / 128).toFixed(2)})`);
+  // remembered: the tile keeps its match, so a city founded there gets the same land
+  east.edges = res.edges; east.em = em;
+  assert(edgeMatchFor(r, `${east.x},${east.z}`) === em, 'the pregenerated match was not kept');
+  const { world } = found({ seed: east.seed, preset: east.preset, edgeMatch: edgeMatchFor(r, `${east.x},${east.z}`) });
+  const v2 = viewSnapshot(world), c1 = unb64(res.view.cls), c2 = unb64(v2.cls); let same = 0; for (let i = 0; i < c1.length; i++) if ((c1[i] === 1) === (c2[i] === 1)) same++;
+  assert(same / c1.length > 0.97, 'the founded city is not on the pregenerated land');
+  // the next tile over continues the pregenerated one
+  const far = r.tiles[`${here.x + 2},${here.z}`]; if (far) { const em2 = edgeMatchFor(r, `${far.x},${far.z}`); assert(em2?.west === res.edges.east, 'land does not chain outwards'); }
+});
+
+test('Z4: lines carry a limited load, substations raise it, water pressure needs towers uphill; underground layer', () => {
+  const w = new World(4242); w.newGame(); const s = new Sim(w, { worker: false, sandbox: {} }), finish = (g) => { for (const _ of g) {} };
+  const A = 100; road(w, [40, A], [110, A]); road(w, [170, A], [260, A]);
+  const put = (k, x) => { for (let dx = 0; dx < 40; dx += 3) for (const dz of [8, -8, 12, -12]) { const p = w.planService(k, x + dx, A + dz); if (p.ok) return w.placeService(k, p); } throw new Error('could not place ' + k); };
+  put('coal', 50); put('coal', 80); w.addULine('power', 110, A, 170, A);
+  const eB = w.net.nearestEdge(220, A, 3).e; let id = 70000;
+  const homes = Array.from({ length: 14 }, (_, i) => { const b = { id: ++id, zone: 2, edge: eB.id, s: 5 + i, cx: 180 + i * 5, cz: A + 6, occ: 300, workers: 0, cells: [] }; w.buildings.set(b.id, b); return b; });
+  finish(s.utilitiesJob());
+  assert(homes.some((b) => !b.power) && s.stats.overload.power > 1, `one line carried everything (${JSON.stringify(s.stats.overload)})`);
+  assert(s.lineLoad.get(w.ulines[0].id) > 0.97, 'line load not recorded');
+  put('substation', 230); finish(s.utilitiesJob());
+  assert(homes.every((b) => b.power), 'the substation did not raise the import limit');
+  // pressure: a pump at the shore can't lift water to a hilltop home
+  for (const b of homes) w.buildings.delete(b.id);
+  const pump = { id: ++id, svc: 'pump', edge: eB.id, s: 2, cx: 175, cz: A + 8, cells: [] }; w.buildings.set(pump.id, pump);
+  const hill = { id: ++id, zone: 1, edge: eB.id, s: 40, cx: 240, cz: A + 8, occ: 2, workers: 0, cells: [] }; w.buildings.set(hill.id, hill);
+  for (let z = A; z < A + 16; z++) for (let x = 232; x < 248; x++) w.elevation[z * N + x] = w.heightAt(175, A + 8) + 25;
+  finish(s.utilitiesJob()); assert(!hill.water && hill.lowPressure && s.stats.lowPressure >= 1, 'a hilltop home got water at low pressure');
+  w.buildings.set(++id, { id, svc: 'tower', edge: eB.id, s: 30, cx: 238, cz: A + 8, cells: [] });
+  finish(s.utilitiesJob()); assert(hill.water, 'a water tower uphill did not restore pressure');
+  // the underground layer is flat and below all ground; coverage follows the pipes
+  const uy = undergroundY(w); let lo = Infinity; for (let i = 0; i < w.elevation.length; i++) lo = Math.min(lo, w.elevation[i]);
+  assert(uy < lo, 'pipes are not below the lowest ground');
+  w.addULine('water', 60, 300, 160, 300); const cov = coverageMask(w, 'water');
+  assert(cov[300 * N + 100] && cov[(300 + 10) * N + 100] && !cov[(300 + 30) * N + 100], 'pipe coverage wrong');
+});
+
+test('Z3/Z7/Z8: regional market prices, industrial districts, and contracts with AI governors', () => {
+  const home = new World(777); home.newGame(); const s = new Sim(home, { worker: false });
+  const r = createRegion(home, s), keys = Object.keys(r.tiles).filter((k) => k !== r.active);
+  const [k1, k2] = keys.filter((k) => r.tiles[k].kind === 'ai' || r.tiles[k].kind === 'wild').slice(0, 2);
+  Object.assign(r.tiles[k1], { kind: 'city', gov: 'ai', summary: { pop: 20000, industry: { sold: { steel: 900 }, bought: { furniture: 200 }, exchange: true } } });
+  Object.assign(r.tiles[k2], { kind: 'city', gov: 'ai', summary: { pop: 5000, industry: { sold: {}, bought: {}, exchange: true } } });
+  const m = regionMarket(r, r.active);
+  assert(m.price.steel < 1 && m.price.furniture > 1 && m.exchanges >= 2, `market prices wrong: ${JSON.stringify(m.price)}`);
+  const p0 = priceOf(s, 'steel'); s.regionMarket = m; assert(priceOf(s, 'steel') < p0, 'regional glut does not lower the price');
+  // industrial districts: a mining district speeds up its mine
+  const w = s.w, d = w.newDistrict(); let id = 80000;
+  const at = (k) => { const D = deposits(w), dep = DEPOSITS[k].id; for (let i = 0; i < D.kind.length; i += 97) { const x = i % N, z = (i / N) | 0; if (D.kind[i] === dep && x > 30 && z > 30 && x < N - 30 && z < N - 30 && depositNear(w, k, x, z, 18) > 0.4) return [x, z]; } };
+  const [mx, mz] = at('coal'), mine = { id: ++id, svc: 'coalmine', cx: mx, cz: mz, edge: 0, power: true, water: true, workers: 60, district: 0, cells: [] }; w.buildings.set(mine.id, mine);
+  industryTick(s); const e0 = mine.indEff; mine.district = d.id; d.policy.industry = 'mining'; industryTick(s);
+  assert(Math.abs(mine.indEff - e0 * 1.25) < 1e-6, 'mining district did not boost the mine');
+  // an AI neighbour offers to buy what you sold; the contract delivers from stock for money
+  s.industry.last = { sold: { furniture: 120 } }; const nb = keys.find((k) => Math.abs(r.tiles[k].x - r.tiles[r.active].x) + Math.abs(r.tiles[k].z - r.tiles[r.active].z) === 1);
+  Object.assign(r.tiles[nb], { kind: 'city', gov: 'ai', name: 'Testford', summary: { pop: 40000, industry: { sold: {}, bought: {} } } });
+  const offers = aiOffers(r, r.active, s, [nb]); assert(offers.length === 1 && offers[0].role === 'sell' && offers[0].kind === 'furniture', 'no offer for what you sell: ' + JSON.stringify(offers));
+  s.deals = [{ id: 1, role: 'sell', partner: nb, kind: 'furniture', amount: offers[0].amount, price: offers[0].price }];
+  s.industry.stock.furniture = 100; const sales0 = s.industry.month.sales; industryTick(s);
+  assert(s.industry.month.sales > sales0 && s.deals[0].delivered > 0, 'contract did not deliver');
+  assert(aiOffers({ ...r, deals: [{ seller: r.active, buyer: nb, kind: 'furniture' }] }, r.active, s, [nb]).length === 0, 'a second contract was offered to the same neighbour');
+});
+
+test('road levels: chained elevated roads hold their height through joints; higher levels; bridges over water', () => {
+  const w = new World(4242); w.newGame();
+  const lay = (a, b, L) => w.buildRoad(S(w, ...a), null, S(w, ...b), 'street', 0, L);
+  lay([40, 60], [100, 60], 1); lay([100, 60], [160, 60], 1);
+  const es = [...w.net.edges.values()].filter((e) => e.layer === 1).sort((p, q) => p.id - q.id), [e1, e2] = es;
+  const joint1 = e1.b === e2.a || e1.b === e2.b ? deckHeight(e1, e1.len) : deckHeight(e1, 0), joint2 = e2.a === e1.b || e2.a === e1.a ? deckHeight(e2, 0) : deckHeight(e2, e2.len);
+  assert(Math.abs(joint1 - joint2) < 0.05, `the deck steps at the joint (${joint1} vs ${joint2})`);
+  assert(joint1 - w.heightAt(100, 60) > LAYERS[1].y * 0.9, `the deck dipped at the joint (${joint1})`);
+  const endS = e1.noRampA ? e1.len : 0; assert(deckHeight(e1, endS) - w.heightAt(e1.pts[endS ? e1.pts.length - 2 : 0], e1.pts[endS ? e1.pts.length - 1 : 1]) < 0.6, 'the free end did not ramp down');
+  lay([40, 90], [160, 90], 3); const e3 = [...w.net.edges.values()].find((e) => e.layer === 3);
+  assert(deckHeight(e3, e3.len / 2) - w.heightAt(100, 90) > 16, 'level 3 is not higher');
+  // a bridge: the ground road over the river rises to a deck with parapets
+  let z = 150, x0 = -1, x1 = -1; for (let x = 150; x < N - 20; x++) { const wv = w.water[z * N + x]; if (wv && x0 < 0) x0 = x; if (!wv && x0 >= 0) { x1 = x; break; } }
+  assert(x0 > 0 && x1 > x0, 'no river on this row');
+  const res = w.buildRoad(S(w, x0 - 30, z), null, S(w, x1 + 30, z), 'street', 0, 0);
+  const br = res.edges.map((id) => w.net.edges.get(id)).find((e) => e.struct?.includes(2)); assert(br, 'no bridge section was made');
+  const mid = (x0 + x1) / 2; let best = null, bd = 1e9; for (let s = 0; s < br.len; s += 1) { const p = w.net.sampleAt(br, s); if (Math.abs(p.x - mid) < bd) { bd = Math.abs(p.x - mid); best = s; } }
+  assert(deckHeight(br, best) >= BRIDGE_DECK - 0.01, `the bridge deck is not above the water (${deckHeight(br, best)})`);
+});
+
+test('saved games: save the whole region, list, load it back over another game, rename, export and import', async () => {
+  const mk = () => { const m = new Map(); return { get length() { return m.size; }, key: (i) => [...m.keys()][i] ?? null, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m }; };
+  const ls = mk();
+  ls.setItem('organicity-save', '{"v":10,"city":"A"}'); ls.setItem('organicity-region', JSON.stringify({ id: 'r1', tiles: {} }));
+  ls.setItem('organicity-city:r1:2,2', 'gzA'); ls.setItem('organicity-view:r1:1,2', '{"S":128}'); ls.setItem('organicity-city:r9:0,0', 'other region'); ls.setItem('organicity-settings', '{"glow":true}');
+  const id = await saves.saveGame({ name: 'First', meta: { city: 'Ashford', pop: 1234 } }, ls);
+  const list = await saves.listGames(); const g = list.find((x) => x.id === id);
+  assert(g && g.name === 'First' && g.meta.pop === 1234 && !('data' in g), 'saved game not listed with its details');
+  assert(saves.currentSlot(ls) === id, 'current game not remembered');
+  // play on: a different game in storage
+  ls.setItem('organicity-save', '{"v":10,"city":"B"}'); ls.setItem('organicity-city:r1:2,2', 'gzB'); ls.setItem('organicity-city:r1:3,3', 'new city');
+  await saves.loadGame(id, ls);
+  assert(ls.getItem('organicity-save') === '{"v":10,"city":"A"}' && ls.getItem('organicity-city:r1:2,2') === 'gzA', 'loading did not restore the game');
+  assert(ls.getItem('organicity-city:r1:3,3') === null, 'a city founded after the save survived loading');
+  assert(ls.getItem('organicity-settings') === '{"glow":true}', 'loading touched the settings');
+  assert(ls.getItem('organicity-view:r1:1,2') === '{"S":128}', 'tile views not saved with the game');
+  await saves.renameGame(id, 'Renamed'); assert((await saves.listGames()).find((x) => x.id === id).name === 'Renamed', 'rename failed');
+  const file = await saves.exportGame(id), id2 = await saves.importGame(file);
+  assert(id2 !== id && (await saves.listGames()).some((x) => x.id === id2 && x.name === 'Renamed'), 'import did not add the game');
+  let bad = false; try { await saves.importGame('{"format":"something"}'); } catch { bad = true; } assert(bad, 'a foreign file was imported');
+  await saves.deleteGame(id2); assert(!(await saves.listGames()).some((x) => x.id === id2), 'delete failed');
+  await saves.saveGame({ id: saves.AUTOSAVE_ID, name: 'Autosave' }, ls); assert((await saves.listGames())[0].id === saves.AUTOSAVE_ID && saves.currentSlot(ls) === id, 'autosave misplaced or took over the current game');
+});
+
+test('multiplayer: join, region and views (chunked), city updates relayed, chat, money and contracts, bad input refused', async () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  const region = { id: 'r1', tiles: { '2,2': { owner: 'Host' }, '1,2': { kind: 'wild' }, '3,2': { kind: 'wild' } }, deals: [] }, applied = [], paid = { a: 0, b: 0 }, got = { a: [], b: [] };
+  const bigView = { S: 128, cls: 'A'.repeat(20000), hgt: 'B'.repeat(20000), boxes: 'C'.repeat(150000), n: 3 };
+  const host = new Session({ role: 'host', name: 'Host', hooks: {
+    regionSnapshot: () => region, views: () => ({ '2,2': bigView }),
+    assignTile: (p) => { const k = Object.keys(region.tiles).find((q) => region.tiles[q].kind === 'wild' && !region.tiles[q].owner); if (k) region.tiles[k].owner = p.name; return k || null; },
+    applyCity: (k, sum, view) => applied.push([k, sum?.pop, !!view]), tileState: (k) => region.tiles[k],
+    addDeal: (d) => { region.deals.push(d); return region.deals; },
+  } });
+  host.me.tile = '2,2';
+  const guest = (name, tag) => {
+    const [ha, ga] = channelPair(); host.addPeer(new Link(ha));
+    const g = new Session({ role: 'guest', name, hooks: {
+      onWelcome: (w) => got[tag].push(['welcome', w]), applyTile: (k, t, v) => got[tag].push(['tile', k, !!v]), onChat: (l) => got[tag].push(['chat', l.text]),
+      onOffer: (o) => got[tag].push(['offer', o]), pay: (x) => { paid[tag] += x; }, setDeals: (d) => got[tag].push(['deals', d.length]), onDecision: (o, ok) => got[tag].push(['decision', ok]),
+    } });
+    g.attach(new Link(ga)); g.hello({ rid: 'r1' }); return g;
+  };
+  const A = guest('Ada', 'a'); await tick(); const B = guest('Bo', 'b'); await tick(); await tick();
+  const wa = got.a.find((x) => x[0] === 'welcome')?.[1];
+  assert(wa && wa.you.tile === '1,2' && wa.region.id === 'r1' && wa.views['2,2']?.boxes.length === 150000, 'welcome, tile or chunked view missing');
+  assert(host.players.length === 3 && B.players.length === 3 && A.me.color !== B.me.color, 'players or colours wrong');
+  // Ada's city goes to the host and on to Bo; a city update for somebody else's tile is ignored
+  A.sendCity('1,2', { pop: 1234, money: 500 }, bigView, { housing: [], jobs: [] }); await tick(); await tick();
+  assert(applied.some(([k, pop, v]) => k === '1,2' && pop === 1234 && v), 'host did not apply the city');
+  assert(got.b.some((x) => x[0] === 'tile' && x[1] === '1,2' && x[2]), 'the other player did not see the city');
+  A.sendCity('3,2', { pop: 1 }, null, null); await tick(); assert(!applied.some(([k]) => k === '3,2'), 'a player updated a tile that is not theirs');
+  assert(standings(host.players)[0].name === 'Ada', 'leaderboard wrong');
+  // chat reaches everyone
+  B.sendChat('hello region'); await tick(); await tick();
+  assert(got.a.some((x) => x[0] === 'chat' && x[1] === 'hello region'), 'chat not relayed');
+  // money: Ada sends Bo ₵300; money moves only when Bo accepts
+  const o = A.propose(B.me.id, { money: 300 }); await tick(); await tick();
+  const inc = got.b.find((x) => x[0] === 'offer')?.[1]; assert(inc && inc.money === 300, 'offer not delivered');
+  B.answer(inc.id, true); await tick(); await tick();
+  assert(paid.b === 300 && paid.a === -300, `money did not move (${paid.a}, ${paid.b})`);
+  // a monthly contract with the host becomes a regional deal everyone hears about
+  let hostOffer = null; host.hooks.onOffer = (x) => { hostOffer = x; };
+  A.propose('p1', { deal: { kind: 'steel', amount: 20, price: 30, role: 'sell' } }); await tick(); await tick();
+  assert(hostOffer?.deal?.kind === 'steel', 'contract offer not delivered to the host');
+  host.answer(hostOffer.id, true); await tick(); await tick();
+  assert(region.deals.length === 1 && region.deals[0].seller === '1,2' && region.deals[0].buyer === '2,2', 'contract not recorded');
+  assert(got.b.some((x) => x[0] === 'deals' && x[1] === 1), 'deals not broadcast');
+  assert(!cleanView({ S: 128, cls: '<script>', hgt: '', boxes: '' }) && !cleanView({ S: 64 }), 'a bad view was accepted');
+});
+
+test('multiplayer signalling server: a guest join code reaches the host and the answer comes back', async () => {
+  const { server } = await import('./organicity-signal.mjs');
+  await new Promise((ok) => server.listen(0, ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const j = await (await fetch(`${url}/r/room1/join`, { method: 'POST', body: 'OJabc' })).json();
+    const pending = await (await fetch(`${url}/r/room1/pending`)).json(); assert(pending.length === 1 && pending[0].code === 'OJabc', 'join not pending');
+    assert((await fetch(`${url}/r/room1/answer/${j.id}`)).status === 204, 'answer before it was given');
+    await fetch(`${url}/r/room1/answer/${j.id}`, { method: 'POST', body: 'OAxyz' });
+    const a = await fetch(`${url}/r/room1/answer/${j.id}`); assert(a.status === 200 && (await a.text()) === 'OAxyz', 'answer not relayed');
+    assert((await fetch(`${url}/r/room1/join`, { method: 'POST', body: 'nope' })).status === 400, 'a bad join code was accepted');
+  } finally { server.close(); }
+});
+
+test('multiplayer regions: host assigns land, a guest adopts the region from their side, tiles merge, land is claimed', async () => {
+  const { assignTile, adoptRegion, mergeTile, claim, regionSnapshot } = await import('../organicity/js/mpgame.js');
+  const m = new Map(); globalThis.localStorage = { get length() { return m.size; }, key: (i) => [...m.keys()][i] ?? null, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+  try {
+    const home = new World(321); home.newGame(); const s = new Sim(home, { worker: false });
+    const r = createRegion(home, s); r.mp = { host: 'Host' }; r.tiles[r.active].owner = 'Host';
+    const k1 = assignTile(r, { name: 'Ada', color: '#3a8ae0' }), here = r.tiles[r.active], t1 = r.tiles[k1];
+    assert(t1 && t1.kind === 'wild' && t1.owner === 'Ada' && Math.abs(t1.x - here.x) + Math.abs(t1.z - here.z) === 1, 'the guest did not get free land next door');
+    assert(assignTile(r, { name: 'Ada', color: '#3a8ae0' }) === k1, 'a rejoining player did not get their land back');
+    const k2 = assignTile(r, { name: 'Bo', color: '#e8c040' }); assert(k2 && k2 !== k1, 'two players got the same land');
+    // Ada's side of the region
+    const { region: ra, tile } = adoptRegion({ you: { id: 'p2', name: 'Ada', color: '#3a8ae0', tile: k1 }, region: regionSnapshot(r, 2000), views: {} });
+    assert(tile === k1 && ra.active === k1 && ra.tiles[k1].owned && ra.tiles[k1].owner === 'Ada', 'the guest does not hold their land');
+    assert(!ra.tiles[r.active].owned && ra.tiles[r.active].gov === 'remote' && ra.tiles[r.active].owner === 'Host', 'the host city is not remote for the guest');
+    assert(!ra.tiles[k2].owned && ra.tiles[k2].owner === 'Bo', 'another player land looks free');
+    // news about Bo's city arrives; our own tile is never overwritten
+    assert(mergeTile(ra, k2, { ...ra.tiles[k2], kind: 'city', name: 'Bosville', summary: { pop: 900 } }, 'Ada') && ra.tiles[k2].kind === 'city' && ra.tiles[k2].gov === 'remote', 'a player city did not arrive');
+    mergeTile(ra, k1, { kind: 'wild', name: 'Stolen', owner: 'Ada' }, 'Ada'); assert(ra.tiles[k1].name !== 'Stolen', 'the host overwrote our own city');
+    assert(!mergeTile(ra, k2, 'junk', 'Ada'), 'junk accepted');
+    // claims: only next to your own land, only free land
+    const free = Object.keys(r.tiles).find((k) => r.tiles[k].kind === 'wild' && !r.tiles[k].owner && neighbours(r, k).some((q) => q.t.owner === 'Ada'));
+    const far = Object.keys(r.tiles).find((k) => r.tiles[k].kind === 'wild' && !r.tiles[k].owner && !neighbours(r, k).some((q) => q.t.owner === 'Ada'));
+    assert(claim(r, { name: 'Ada', color: '#3a8ae0' }, free) && r.tiles[free].owner === 'Ada', 'a claim next to your land failed');
+    assert(!claim(r, { name: 'Ada', color: '#3a8ae0' }, far), 'land far from yours was claimed');
+    assert(!claim(r, { name: 'Bo', color: '#e8c040' }, free), 'taken land was claimed again');
+  } finally { delete globalThis.localStorage; }
+});
+
+test('multiplayer rules: the host removes players, either party ends a contract, AI cities sell only for their value', async () => {
+  const { cityValue, buyCity, cancelDeal } = await import('../organicity/js/mpgame.js');
+  const { addDeal } = await import('../organicity/js/region.js');
+  const m = new Map(); globalThis.localStorage = { get length() { return m.size; }, key: (i) => [...m.keys()][i] ?? null, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+  try {
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    const region = { id: 'r9', tiles: { '2,2': { owner: 'Host', kind: 'city' }, '1,2': { kind: 'wild', owner: 'Ada' }, '3,2': { kind: 'wild', owner: 'Bo' }, '2,1': { kind: 'city', gov: 'ai', name: 'Aiton', summary: { pop: 3000, jobs: 1200, money: 20000 } } }, deals: [] };
+    localStorage.setItem('organicity-city:r9:2,1', 'SAVECODE');
+    const bought = [];
+    const host = new Session({ role: 'host', name: 'Host', hooks: {
+      assignTile: (p) => Object.keys(region.tiles).find((k) => region.tiles[k].owner === p.name) || null,
+      cancelDeal: (p, id) => cancelDeal(region, p, id), buyCity: (p, k, price) => buyCity(region, p, k, price, false), tileState: (k) => region.tiles[k],
+    } });
+    host.me.tile = '2,2';
+    const join = (name) => { const [ha, ga] = channelPair(); host.addPeer(new Link(ha)); const g = new Session({ role: 'guest', name, hooks: { onBought: (r) => bought.push(r), onBye: (why) => { g.bye = why; } } }); g.attach(new Link(ga)); g.hello({}); return g; };
+    const A = join('Ada'); await tick(); const B = join('Bo'); await tick(); await tick();
+    // contracts: Ada and Bo sign one; a stranger cannot end it, either party can
+    const deal = { seller: '1,2', buyer: '3,2', kind: 'steel', amount: 10, price: 30, players: ['Ada', 'Bo'] }; addDeal(region, deal); const id = region.deals[0].id;
+    assert(!cancelDeal(region, { name: 'Host' }, id) && region.deals.length === 1, 'a stranger ended the contract');
+    B.endContract(id); await tick(); await tick();
+    assert(region.deals.length === 0, 'a party could not end the contract');
+    // an AI city: too cheap is refused with its value; the full value buys it and the save goes to the buyer
+    const value = cityValue(region.tiles['2,1']); assert(value > 60000, 'value too low');
+    A.buyCity('2,1', value - 1000); await tick(); await tick();
+    assert(bought[0] && !bought[0].ok && bought[0].price === value && !region.tiles['2,1'].owner, 'an under-priced purchase went through');
+    A.buyCity('2,1', value); await tick(); await tick();
+    assert(bought[1]?.ok && bought[1].price === value && bought[1].code === 'SAVECODE', 'the purchase failed or the save was not handed over');
+    assert(region.tiles['2,1'].owner === 'Ada' && region.tiles['2,1'].gov === 'remote', 'the city did not change hands');
+    B.buyCity('2,1', value * 2); await tick(); await tick(); assert(!bought[2]?.ok, 'a bought city was sold twice');
+    // removal: Bo is removed, told why, and cannot come back under that name
+    const bo = host.players.find((p) => p.name === 'Bo'); assert(host.kick(bo.id) && !host.players.some((p) => p.name === 'Bo'), 'the player was not removed');
+    await tick(); await tick(); assert(/removed/.test(B.bye || ''), 'the removed player was not told');
+    const B2 = join('bo'); await tick(); await tick(); assert(/removed/.test(B2.bye || '') && !host.players.some((p) => /bo/i.test(p.name)), 'a removed player rejoined');
+    assert(!host.kick(host.me.id), 'the host removed themself');
+  } finally { delete globalThis.localStorage; }
 });
 
 // ------------------------------------------------------------------ runner

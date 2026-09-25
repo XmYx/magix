@@ -1,0 +1,52 @@
+# Builds the Organicity desktop app for Linux (AppImage, deb, tar.gz), macOS (dmg, zip; x64 and
+# arm64) and Windows (installer, portable). Run it from the Actions tab, or push a tag such as
+# desktop-v1.0.0. The packages are attached to the run as artifacts (unsigned builds).
+name: Organicity desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm install
+      - name: Headless game tests
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: .
+        run: node scripts/organicity-test.mjs
+      - name: Package
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test the Linux app (found a city, no errors)
+        if: matrix.os == 'ubuntu-latest'
+        run: ORGANICITY_SMOKE=1 ELECTRON_ENABLE_LOGGING=1 xvfb-run -a ./dist/linux-unpacked/organicity-desktop --no-sandbox
+      - uses: actions/upload-artifact@v4
+        with:
+          name: organicity-${{ matrix.os }}
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/*.tar.gz
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+          if-no-files-found: error

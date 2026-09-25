@@ -514,11 +514,79 @@ function genService(P, b, r) {
         else B('plain', m.u * hw, m.v * hd, m.y, m.w * hw, m.d * hd, m.h, m.color, m.roof ?? undefined);
       }
       break;
+    case 'substation':
+      B('plain', 0, 0, 0, hw * 0.9, hd * 0.9, 0.2, 0x9a9a94);
+      for (const u of [-1.4, 1.4]) { B('plain', u, -0.6, 0.2, 0.9, 0.7, 1.6, 0x7a8a94, 0x5a6a74); C(u, -0.6, 1.8, 0.25, 0.9, 6, 0xd8d0c0); }
+      for (const u of [-2.4, 0, 2.4]) B('plain', u, 1.4, 0, 0.1, 0.1, 3.2, 0x6a6e72);
+      B('plain', 0, 1.4, 3.1, 2.6, 0.1, 0.1, 0x6a6e72);
+      for (const [u, v] of [[-hw * 0.9, 0], [hw * 0.9, 0]]) B('plain', u, v, 0, 0.05, hd * 0.9, 1.2, 0x8a8e90);   // fence
+      break;
+    // ---- resource industry
+    case 'lumbercamp':
+      B('ind', -hw * 0.4, -hd * 0.2, 0, hw * 0.35, hd * 0.35, 3.2, 0x8a6a4a, 0x5a4a3a);
+      for (let k = 0; k < 4; k++) for (let j = 0; j < 3; j++) B('plain', hw * 0.35, -hd * 0.5 + k * 1.6, j * 0.5, 2.4, 0.3, 0.3, 0x8a5a32);
+      T(-hw * 0.7, -hd * 0.8, 1); T(hw * 0.8, -hd * 0.8, 1.1); T(0, -hd * 0.9, 0.9);
+      break;
+    case 'coalmine': case 'ironmine': case 'oremine': {
+      const heap = b.svc === 'coalmine' ? 0x2a2a2c : b.svc === 'ironmine' ? 0x8a4a32 : 0xb88a3a;
+      for (const [u, v] of [[-2.2, -2.2], [2.2, -2.2], [2.2, 2.2], [-2.2, 2.2]]) B('plain', -hw * 0.35 + u * 0.5, -hd * 0.2 + v * 0.5, 0, 0.2, 0.2, 12, 0x6a3a2a);
+      B('plain', -hw * 0.35, -hd * 0.2, 12, 1.6, 1.6, 0.5, 0x6a3a2a); C(-hw * 0.35, -hd * 0.2, 12.5, 1.1, 0.4, 10, 0x3a3a3a);
+      B('ind', hw * 0.35, hd * 0.25, 0, hw * 0.35, hd * 0.3, 4, 0x9a8a78, 0x6a6a68);
+      B('plain', hw * 0.3, -hd * 0.45, 0, hw * 0.4, hd * 0.3, 1.4, heap); B('plain', hw * 0.3, -hd * 0.45, 1.4, hw * 0.25, hd * 0.18, 1.2, heap); B('plain', hw * 0.3, -hd * 0.45, 2.6, hw * 0.1, hd * 0.08, 0.8, heap);
+      break;
+    }
+    case 'quarry':
+      for (let k = 0; k < 3; k++) B('plain', -hw * 0.1, -hd * 0.15, 0, hw * (0.8 - k * 0.2), hd * (0.6 - k * 0.15), 0.35 + k * 0.3, [0xb8b2a0, 0xa8a290, 0x98927e][k]);
+      B('ind', hw * 0.7, hd * 0.6, 0, 2, 1.5, 3, 0xc8c0a8, 0x7a7a72); B('plain', -hw * 0.6, hd * 0.6, 0, 1.2, 0.8, 1.1, 0xe8b830);
+      break;
+    case 'sawmill': case 'papermill': case 'furniture': {
+      const wall = b.svc === 'papermill' ? 0xd8d4c8 : b.svc === 'furniture' ? 0xb8845a : 0x9a7a52;
+      B('ind', 0, -hd * 0.1, 0, hw * 0.8, hd * 0.45, b.svc === 'furniture' ? 5 : 6, wall, 0x7a7a74);
+      if (b.svc === 'papermill') { C(-hw * 0.5, -hd * 0.65, 0, 1.4, 9, 10, 0xe8e4d8); C(-hw * 0.2, -hd * 0.65, 0, 1.4, 9, 10, 0xe8e4d8); C(hw * 0.6, -hd * 0.6, 0, 0.7, 16, 6, 0xb8b0a8); const [x, z] = pos(hw * 0.6, -hd * 0.6); P.emit.push([x, 16.5, z]); }
+      else for (let k = 0; k < 3; k++) for (let j = 0; j < 2; j++) B('plain', -hw * 0.5 + k * 3, hd * 0.6, j * 0.5, 1.2, 0.8, 0.45, b.svc === 'furniture' ? 0xc8a070 : 0x8a5a32);
+      break;
+    }
+    case 'cementworks':
+      B('ind', -hw * 0.3, 0, 0, hw * 0.4, hd * 0.4, 7, 0xb8b4ac, 0x8a8a86);
+      for (const u of [hw * 0.25, hw * 0.55]) C(u, -hd * 0.3, 0, 1.8, 13, 10, 0xd8d4cc, 0xa8a49c);
+      B('plain', 0, hd * 0.55, 3, hw * 0.8, 0.8, 0.8, 0x9a948c);   // the kiln
+      C(-hw * 0.7, -hd * 0.6, 0, 0.8, 18, 6, 0xb8b0a8); { const [x, z] = pos(-hw * 0.7, -hd * 0.6); P.emit.push([x, 18.5, z]); }
+      break;
+    case 'steelworks': case 'smelter': {
+      const big = b.svc === 'steelworks';
+      B('ind', hw * 0.25, 0, 0, hw * 0.55, hd * 0.45, big ? 10 : 7, 0x7a6a62, 0x4a4a4a);
+      C(-hw * 0.5, -hd * 0.2, 0, big ? 2.6 : 2, big ? 20 : 14, 10, 0x5a4a44, 0x3a2a24);   // furnace
+      for (const u of big ? [-hw * 0.75, -hw * 0.2, hw * 0.5] : [-hw * 0.75, hw * 0.5]) { C(u, -hd * 0.7, 0, 0.8, big ? 26 : 20, 6, 0xb8b0a8); C(u, -hd * 0.7, (big ? 26 : 20) - 1.2, 0.85, 1.2, 6, 0xc84a3a); const [x, z] = pos(u, -hd * 0.7); P.emit.push([x, big ? 26.5 : 20.5, z], [x, big ? 26.5 : 20.5, z]); }
+      B('plain', -hw * 0.5, hd * 0.6, 0, 2.5, 1.5, 1.6, big ? 0x8a4a32 : 0xb88a3a);
+      break;
+    }
+    case 'machinery':
+      B('ind', 0, -hd * 0.1, 0, hw * 0.85, hd * 0.55, 7, 0x8a9aa8, 0x5a6a78);
+      for (let k = -2; k <= 2; k++) B('plain', k * hw * 0.3, -hd * 0.1, 7, hw * 0.12, hd * 0.55, 1.4, 0xa8c0d0);   // sawtooth roof lights
+      B('plain', hw * 0.6, hd * 0.65, 0, 1.4, 1.2, 1.4, 0xe8a030); B('plain', -hw * 0.6, hd * 0.65, 0, 1.4, 1.2, 1.4, 0x3a6ab8);
+      break;
+    case 'exchange':
+      B('off', 0, -0.4, 0, hw * 0.75, hd * 0.6, 8, 0xe8e0cc, 0x8a8a86);
+      for (let k = -2; k <= 2; k++) C(k * hw * 0.3, hd * 0.25, 0, 0.45, 7.5, 8, 0xf2ecd8);
+      B('plain', 0, hd * 0.25, 7.5, hw * 0.75, 0.9, 1.2, 0xe8e0cc);
+      break;
+    case 'warehouse':
+      B('ind', 0, -hd * 0.1, 0, hw * 0.85, hd * 0.6, 6.5, 0xa8908a, 0x6a6a68);
+      for (let k = -2; k <= 2; k++) B('plain', k * hw * 0.32, hd * 0.52, 0, 1.3, 0.1, 3.2, 0x5a5a5a);
+      break;
     case 'busstop':
       B('plain', 0, -0.3, 2.1, 1.3, 0.6, 0.12, 0x3a6ac8); B('plain', 0, -0.8, 0, 1.2, 0.05, 2.1, 0xa8d0e8);
       B('plain', -1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777); B('plain', 1.1, -0.3, 0, 0.06, 0.06, 2.1, 0x777777);
       break;
   }
+}
+
+// plain facade boxes (another tile's buildings seen from next door), with window UVs:
+// list of { x, z, w, d, y0, h, key, col, roof } → parts by material
+export function genBoxes(list) {
+  const P = new Parts();
+  for (const b of list) box(P, b.key, { cx: b.x, cz: b.z, tx: 1, tz: 0, fx: 0, fz: 1 }, 0, 0, b.y0, b.w / 2, b.d / 2, b.h, hex(b.col), hex(b.roof));
+  return P.g;
 }
 
 // ---------------------------------------------------------------- entry

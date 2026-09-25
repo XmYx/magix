@@ -8,7 +8,7 @@ import { Sim, SANDBOX_DEFAULTS } from './sim.js';
 import { makeSave, loadSave } from './save.js';
 import { aiBuild } from './builder.js';
 import { applyPolicy } from './presidents.js';
-import { summarize } from './region.js';
+import { summarize, edgesOf } from './region.js';
 import { technology } from './eras.js';
 import { cityBlocks, viewSnapshot } from './tileview.js';
 
@@ -28,7 +28,14 @@ export function found(g) {
   return { world, sim };
 }
 
+// pregenerated land for a tile nobody has built on yet: its view from next door and its edges
+export function terrainTile(g) {
+  const world = new World(g.seed, g.preset); world.edgeMatch = g.edgeMatch || null; world.genTerrain();
+  return { view: viewSnapshot(world), edges: edgesOf(world) };
+}
+
 export function runTile(m) {
+  if (m.terrain) return terrainTile(m.terrain);
   let world, sim;
   if (m.generate) ({ world, sim } = found(m.generate));
   else ({ world, sim } = loadSave(m.save, { worker: false }));

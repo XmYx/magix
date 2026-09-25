@@ -17,6 +17,14 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d3ec; color: var(--ink); font: 14px/1.35 var(--font); }
 #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; image-rendering: pixelated; outline: none; touch-action: none; }
 button { font: inherit; color: inherit; cursor: pointer; }
+/* every panel button is dark unless styled otherwise (buttons outside a .row used the browser's white default) */
+#panel button:not(.x):not(.danger):not(.primary), #intro button:not(.primary), #worldmap button:not(.primary):not(.x):not(.ren), .games button:not(.primary) { background: var(--btn); color: var(--ink); border: 2px solid var(--line); padding: 3px 9px; }
+#panel button:not(.x):not(.danger):not(.primary):hover, #intro button:not(.primary):hover, #worldmap button:not(.primary):not(.x):not(.ren):hover, .games button:not(.primary):hover { background: var(--btn-hi); border-color: var(--line-hi); }
+#panel button.primary, .games button.primary { background: var(--acc); color: #1a1a1a; border: 2px solid #fff3c0; padding: 3px 9px; font-weight: 600; }
+#panel button:disabled, #intro button:disabled { opacity: 0.45; cursor: default; }
+#panel input[type=text], #panel input[type=number], #panel select, #panel textarea, #intro input[type=text], #intro textarea { background: #151a22; color: var(--ink); border: 2px solid var(--line); padding: 3px 6px; font: inherit; }
+#panel input[type=number] { width: 84px; }
+#panel select { max-width: 220px; }
 kbd { font: 11px var(--font); padding: 0 4px; border: 1px solid var(--line-hi); border-bottom-width: 2px; border-radius: 3px; color: var(--dim); background: rgba(0, 0, 0, 0.25); }
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
@@ -70,6 +78,29 @@ kbd { font: 11px var(--font); padding: 0 4px; border: 1px solid var(--line-hi); 
 #fly button:hover, #panel .row button:hover, .ovs button:hover { background: var(--btn-hi); border-color: var(--line-hi); }
 #fly button.on, .ovs button.on { border-color: var(--acc); background: #3a3220; }
 #fly button small, #panel .row button small { color: var(--dim); font-size: 11px; }
+#fly img.ico { width: 30px; height: 30px; image-rendering: pixelated; margin: -2px 0 -2px -4px; }
+#fly img.ico:not([src]) { visibility: hidden; }
+#card { position: fixed; z-index: 7; width: 272px; padding: 10px; background: var(--bg); border: 2px solid var(--line-hi); pointer-events: none; font-size: 12px; }
+#card[hidden] { display: none; }
+#dock button.unread .g { color: var(--acc); text-shadow: 0 0 6px var(--acc); }
+.chatlog { max-height: 180px; overflow-y: auto; padding: 4px 6px; background: #151a22; border: 2px solid var(--line); margin-bottom: 4px; }
+.chatlog p { margin: 2px 0; }
+#mpJoin { text-align: left; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+#mpJoin[hidden] { display: none; }
+#mpJoin textarea, #panel textarea { width: 100%; font: 11px monospace; background: #151a22; color: var(--ink); border: 2px solid var(--line); }
+.games { display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow-y: auto; margin: 6px 0; }
+.games .game { display: grid; grid-template-columns: 64px 1fr; gap: 4px 10px; align-items: center; padding: 6px; border: 2px solid var(--line); background: var(--btn); }
+.games .game.cur { border-color: var(--acc); }
+.games .game img { width: 64px; height: 64px; image-rendering: pixelated; background: #1c232e; grid-row: span 2; }
+.games .game small { color: var(--dim); display: block; }
+.games .game .row { grid-column: 2; }
+#intro .games { text-align: left; }
+#card canvas { display: block; width: 252px; height: 168px; image-rendering: pixelated; background: radial-gradient(#3a4a5e, #1c232e); margin-bottom: 6px; }
+#card h4 { margin: 0 0 4px; font-size: 14px; color: var(--acc); }
+#card table { width: 100%; border-collapse: collapse; }
+#card td { padding: 1px 0; vertical-align: top; }
+#card td:first-child { color: var(--dim); padding-right: 8px; white-space: nowrap; }
+#card p { margin: 6px 0 0; color: var(--dim); }
 .hint { margin: 0; color: var(--dim); font-size: 12px; }
 .sw { display: inline-block; width: 12px; height: 12px; border: 1px solid rgba(0, 0, 0, 0.5); vertical-align: -2px; }
 .sw.x { background: repeating-linear-gradient(45deg, #ff7a6a 0 3px, transparent 3px 6px); }
@@ -96,6 +127,8 @@ label.rng.wide input { width: 100%; }
 #panel p { margin: 6px 0; }
 table.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.kv td, table.kv th { padding: 2px 0; vertical-align: middle; }
+table.kv th { padding: 2px 4px; font-weight: normal; color: var(--dim); text-align: right; }
+table.kv th:first-child { text-align: left; padding-left: 0; }
 table.kv th { text-align: left; font-weight: 400; color: var(--dim); font-size: 11px; }
 table.kv td:first-child { color: var(--dim); padding-right: 8px; }
 table.kv td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
