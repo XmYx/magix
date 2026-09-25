@@ -48,7 +48,7 @@ export function buildableDef(B, pack, key) {
 // a scenario: a map, a scripted start and goals to reach, optionally by a deadline
 const STATS = ['pop', 'money', 'surplus', 'happiness', 'unemployment', 'jobs', 'buildings', 'transit', 'pollution', 'year'];
 export function scenarioDef(S, pack) {
-  const pt = (a) => (Array.isArray(a) ? a.map((v) => num(v, 0, 512, 0)) : []);
+  const pt = (a) => (Array.isArray(a) ? a.map((v) => num(v, 0, 1024, 0)) : []);
   const set = S?.setup || {};
   return {
     name: clean(S?.name) || 'Pack scenario', desc: clean(S?.desc, 240), pack: clean(pack) || 'Pack', seed: num(S?.seed, 0, 1e9, 1234) | 0,

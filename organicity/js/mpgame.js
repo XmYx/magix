@@ -3,16 +3,19 @@
 // their city on it at the same time as everyone else. The host's background runner keeps the AI
 // governors going and sends their cities; every player sends their own city each month, so the
 // world map, the tiles next door and the regional economy show everyone's progress.
-import { Session, Link, makeJoinCode, acceptAnswer, answerJoinCode, opened, signalJoin, signalHost, DEFAULT_ICE, COLORS, standings, isKey, cleanSummary, cleanView } from './mp.js';
+import { Session, Link, makeJoinCode, acceptAnswer, answerJoinCode, opened, DEFAULT_ICE, COLORS, standings, isKey, cleanSummary, cleanView, parseIce, makeRelay, HostGate, dialHost, newAccessCode, normCode } from './mp.js';
 import { saveRegion, loadRegion, summarize, addDeal, removeDeal, neighbours, cityKey } from './region.js';
 import { storeView, loadView } from './tilehost.js';
 import { viewSnapshot, cityBlocks } from './tileview.js';
 
-const ICE_KEY = 'organicity-stun', NAME_KEY = 'organicity-mp-name';
+const ICE_KEY = 'organicity-stun', NAME_KEY = 'organicity-mp-name', RELAY_KEY = 'organicity-relay';
 const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
-export function iceServers() { const v = ls.get(ICE_KEY); if (v == null) return DEFAULT_ICE; return v.trim() ? v.split(/[\s,]+/).filter((u) => /^(stun|turn)s?:/.test(u)).map((urls) => ({ urls })) : []; }
+export function iceServers() { const v = ls.get(ICE_KEY); return v == null ? DEFAULT_ICE : parseIce(v); }
 export const iceText = () => ls.get(ICE_KEY) ?? DEFAULT_ICE.map((s) => s.urls).join(' ');
 export const setIce = (text) => ls.set(ICE_KEY, String(text).slice(0, 400));
+// the signalling relay: empty for the public PeerJS relay, or a self-hosted organicity-signal.mjs (http…)
+export const relayText = () => ls.get(RELAY_KEY) || '';
+export const setRelay = (text) => ls.set(RELAY_KEY, String(text).trim().slice(0, 200));
 export const savedName = () => ls.get(NAME_KEY) || '';
 export const saveName = (n) => ls.set(NAME_KEY, String(n).slice(0, 24));
 
@@ -44,7 +47,7 @@ export function cleanTile(t) {
 }
 export function regionSnapshot(region, year) {
   const tiles = {}; for (const [k, t] of Object.entries(region.tiles)) tiles[k] = tileState(t);
-  return { id: region.id, seed: region.seed, size: region.size, day: region.day || 0, year, tiles, deals: region.deals || [], dealId: region.dealId || 0, host: region.mp?.host || null };
+  return { id: region.id, seed: region.seed, size: region.size, tileSize: region.tileSize || 512, day: region.day || 0, year, tiles, deals: region.deals || [], dealId: region.dealId || 0, host: region.mp?.host || null };
 }
 // merge a tile the host sent, as seen by this player (our own city stays ours to describe)
 export function mergeTile(region, key, raw, meName) {
@@ -101,7 +104,7 @@ export function adoptRegion(welcome) {
   const r = welcome.region, me = welcome.you;
   if (!r || typeof r.id !== 'string' || !r.tiles || !isKey(me?.tile) || !r.tiles[me.tile]) throw new Error('The host sent no land for you.');
   const prev = loadRegion(), keep = prev && prev.id === r.id ? prev : null;
-  const region = { id: r.id.slice(0, 40), seed: num(r.seed, 0, 1e9), size: num(r.size, 1, 9, 5), day: num(r.day, 0, 1e7), active: me.tile, tiles: {}, deals: Array.isArray(r.deals) ? r.deals.slice(0, 200) : [], dealId: num(r.dealId, 0, 1e6), mp: { host: String(r.host || '').slice(0, 24), player: me.name, myTile: me.tile } };
+  const region = { id: r.id.slice(0, 40), seed: num(r.seed, 0, 1e9), size: num(r.size, 1, 9, 5), tileSize: [512, 768, 1024].includes(r.tileSize) ? r.tileSize : 512, day: num(r.day, 0, 1e7), active: me.tile, tiles: {}, deals: Array.isArray(r.deals) ? r.deals.slice(0, 200) : [], dealId: num(r.dealId, 0, 1e6), mp: { host: String(r.host || '').slice(0, 24), player: me.name, myTile: me.tile } };
   if (keep?.econ) region.econ = keep.econ;   // our own view of the regional economy survives a rejoin
   for (const [k, t] of Object.entries(r.tiles)) { if (!isKey(k)) continue; const c = cleanTile(t); if (c) region.tiles[k] = c; }
   for (const k of Object.keys(region.tiles)) mergeTile(region, k, region.tiles[k], me.name);
@@ -111,16 +114,20 @@ export function adoptRegion(welcome) {
   for (const [k, v] of Object.entries(welcome.views || {})) if (k !== me.tile && cleanView(v)) storeView(region, k, v);
   return { region, tile: me.tile, year: num(r.year, 1800, 2400, 2000) };
 }
-// guest: connect (by pasted codes, or through a signalling server) and wait for the host's welcome
-export async function joinGame({ name, color, url, room, onCode, answer, onStatus = () => {} }) {
+// guest: connect (with the host's access code through the relay, or by pasted codes) and wait for the host's welcome
+export async function joinGame({ name, color, code, onCode, answer, onStatus = () => {} }) {
   const s = new Session({ role: 'guest', name, color });
-  onStatus('Making a join code…');
-  const { pc, ch, code } = await makeJoinCode(iceServers());
-  let ans;
-  if (url && room) { onStatus('Waiting for the host to let you in…'); ans = await signalJoin(url, room, code); }
-  else { onCode(code); onStatus('Send the join code to the host, then paste their answer code.'); ans = await answer(); }
-  await acceptAnswer(pc, ans); onStatus('Connecting…'); await opened(ch);
-  s.attach(new Link(ch));
+  if (code) {
+    const { pc, ch } = await dialHost({ relay: makeRelay(relayText()), code, ice: iceServers(), onStatus });
+    s.attach(new Link(ch, pc));
+  } else {   // no relay: a join code goes to the host, their answer code comes back
+    onStatus('Making a join code…');
+    const { pc, ch, code: join } = await makeJoinCode(iceServers());
+    onCode(join); onStatus('Send the join code to the host, then paste their answer code.');
+    await acceptAnswer(pc, await answer()); onStatus('Connecting…'); await opened(ch, pc);
+    s.attach(new Link(ch, pc));
+  }
+  onStatus('Connected. Asking the host for land…');
   const prev = loadRegion();
   const welcome = await new Promise((ok, fail) => {
     const t = setTimeout(() => fail(new Error('No answer from the host.')), 30000);
@@ -133,7 +140,7 @@ export async function joinGame({ name, color, url, room, onCode, answer, onStatu
 // ---------------------------------------------------------------- in the game
 // ctx: { region, econ, sim, world, rend, ui, tilehost, redrawRegion, syncRegion }
 export class Multiplayer {
-  constructor(ctx) { this.ctx = ctx; this.s = null; this.chat = []; this.offers = []; this.room = null; this.stopRoom = null; this.unread = 0; }
+  constructor(ctx) { this.ctx = ctx; this.s = null; this.chat = []; this.offers = []; this.gate = null; this.gateState = null; this.unread = 0; }
   get connected() { return !!this.s?.connected; }
   get active() { return !!this.s; }
   get role() { return this.s?.role || null; }
@@ -147,16 +154,33 @@ export class Multiplayer {
     const s = this.s = new Session({ role: 'host', name, color: COLORS.includes(color) ? color : COLORS[0], hooks: this.hooks() });
     s.me.tile = region.active;
     for (const t of Object.values(region.tiles)) if (t.owned || t === region.tiles[region.active]) Object.assign(t, { owner: s.me.name, color: s.me.color });
-    region.mp = { host: s.me.name, player: s.me.name, myTile: region.active }; saveRegion(region);
-    this.changed(); return s;
+    // the access code stays with the region, so friends can rejoin with the same code later
+    region.mp = { host: s.me.name, player: s.me.name, myTile: region.active, code: normCode(region.mp?.code) || newAccessCode() }; saveRegion(region);
+    this.openGate(); this.changed(); return s;
   }
+  get code() { return this.ctx.region.mp?.code || null; }
+  // listen on the relay under the access code; a code still held by a closed tab frees up within a minute
+  async openGate(tries = 6) {
+    this.gate?.close(); this.gateState = 'opening'; this.gateErr = null; this.changed();
+    const gate = this.gate = new HostGate({ relay: makeRelay(relayText()), code: this.code, ice: iceServers(),
+      onLink: (link) => { this.s?.addPeer(link); this.changed(); },
+      onFail: (e) => this.ctx.ui.toast(`A player could not connect. ${e.message}`, 'warn') });
+    gate.relay.onclose = () => { if (this.gate === gate && this.s) { this.gateState = 'closed'; this.changed(); setTimeout(() => { if (this.gate === gate && this.s) this.openGate(); }, 3000); } };
+    try { await gate.open(); if (this.gate === gate) { this.gateState = 'open'; this.changed(); } }
+    catch (e) {
+      if (this.gate !== gate) return;
+      if (e.taken && tries > 0) { setTimeout(() => { if (this.gate === gate && this.s) this.openGate(tries - 1); }, 10000); this.gateState = 'waiting'; }
+      else { this.gateState = 'error'; this.gateErr = e.message; }
+      this.changed();
+    }
+  }
+  closeGate() { this.gate?.close(); this.gate = null; this.gateState = null; }
+  // without a relay: answer a join code a player pasted to you
   async answer(code) {
     const r = await answerJoinCode(code, iceServers());
-    r.channel.then((ch) => opened(ch)).then((ch) => { this.s.addPeer(new Link(ch)); this.changed(); }).catch(() => this.ctx.ui.toast('A player could not connect.', 'warn'));
+    r.channel.then((ch) => opened(ch, r.pc, 120000)).then((ch) => { this.s.addPeer(new Link(ch, r.pc)); this.changed(); }).catch((e) => this.ctx.ui.toast(`A player could not connect. ${e.message}`, 'warn'));
     return r.code;
   }
-  openRoom(url, room) { this.closeRoom(); this.stopRoom = signalHost(url, room, (code) => this.answer(code)); this.room = { url, room }; this.changed(); }
-  closeRoom() { this.stopRoom?.(); this.stopRoom = null; this.room = null; }
   // ---- guest (the session was opened on the start screen)
   attachGuest(session) {
     this.s = session; Object.assign(session.hooks, this.hooks());
@@ -234,5 +258,5 @@ export class Multiplayer {
     if (!confirm(`Buy ${t?.name || 'this city'} from its AI governor for ₵${value.toLocaleString('en-US')}?`)) return;
     this.s?.buyCity(key, value);
   }
-  leave() { this.closeRoom(); this.s?.close(); this.s = null; if (this.ctx.tilehost) this.ctx.tilehost.disabled = false; this.changed(); }
+  leave() { this.closeGate(); this.s?.close(); this.s = null; if (this.ctx.tilehost) this.ctx.tilehost.disabled = false; this.changed(); }
 }

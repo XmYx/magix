@@ -1,26 +1,26 @@
 #!/usr/bin/env node
-// Organicity signalling server (optional). Multiplayer works without any server by pasting join
-// and answer codes; run this to swap them automatically instead. It only relays those short codes
-// (WebRTC connection offers) between players who know the same room name, keeps everything in
-// memory, and forgets a room after 30 minutes. No dependencies.
+// Organicity signalling relay (optional). By default players connect through the public PeerJS
+// relay; run this to use your own instead (give its address under Connection settings, host and
+// players alike). It only passes the short WebRTC handshake messages (offer, answer, network
+// candidates) between two ids until the players are connected, keeps everything in memory, and
+// forgets a mailbox a minute after its owner stops polling. No dependencies.
 //   node scripts/organicity-signal.mjs [port]          (default 8787)
-// Endpoints (CORS open, bodies are plain text up to 64 KB):
-//   POST /r/<room>/join            body: join code   → { "id": "…" }
-//   GET  /r/<room>/pending         → [{ "id", "code" }] joins not yet answered (the host polls)
-//   POST /r/<room>/answer/<id>     body: answer code
-//   GET  /r/<room>/answer/<id>     → 200 answer code, or 204 while waiting (the guest polls)
+// Endpoints (CORS open, JSON):
+//   GET  /m/<id>?wait=0      claim or touch the mailbox <id>, returns [] at once
+//   GET  /m/<id>             long-poll (up to 25 s) → [{ type, src, payload }, …]
+//   POST /m/<to>             { src, type, payload } → 204, or 404 when nobody holds <to>
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-const PORT = +(process.argv[2] || process.env.PORT || 8787), TTL = 30 * 60e3, MAX = 64 * 1024;
-const rooms = new Map();
-const room = (name) => { let r = rooms.get(name); if (!r) rooms.set(name, (r = { seen: Date.now(), joins: new Map() })); r.seen = Date.now(); return r; };
-setInterval(() => { const now = Date.now(); for (const [k, r] of rooms) if (now - r.seen > TTL) rooms.delete(k); }, 60e3).unref();
+const PORT = +(process.argv[2] || process.env.PORT || 8787), TTL = 60e3, MAX = 64 * 1024, QUEUE = 200, WAIT = 25e3;
+const ID = /^[\w-]{4,80}$/, TYPES = new Set(['OFFER', 'ANSWER', 'CANDIDATE', 'LEAVE']);
+const boxes = new Map();   // id → { seen, q: [], waiters: [] }
+const box = (id) => { let b = boxes.get(id); if (!b) boxes.set(id, (b = { seen: Date.now(), q: [], waiters: [] })); return b; };
+setInterval(() => { const now = Date.now(); for (const [k, b] of boxes) if (now - b.seen > TTL && !b.waiters.length) boxes.delete(k); }, 10e3).unref();
 
-const send = (res, code, body = '', type = 'text/plain') => {
-  res.writeHead(code, { 'content-type': type, 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type', 'cache-control': 'no-store' });
-  res.end(body);
+const send = (res, code, body = '') => {
+  res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type', 'cache-control': 'no-store' });
+  res.end(typeof body === 'string' ? body : JSON.stringify(body));
 };
 const readBody = (req) => new Promise((ok, fail) => {
   let n = 0; const parts = [];
@@ -30,24 +30,29 @@ const readBody = (req) => new Promise((ok, fail) => {
 
 export const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204);
-  const m = new URL(req.url, 'http://x').pathname.match(/^\/r\/([\w-]{1,48})\/(join|pending|answer)(?:\/([\w-]{1,48}))?$/);
-  if (!m) return send(res, 404, 'Organicity signalling server');
-  const [, name, what, id] = m, r = room(name);
+  const u = new URL(req.url, 'http://x'), m = u.pathname.match(/^\/m\/([^/]+)$/), id = m && decodeURIComponent(m[1]);
+  if (!id || !ID.test(id)) return send(res, 404, { error: 'Organicity signalling relay' });
   try {
-    if (what === 'join' && req.method === 'POST') {
-      if (r.joins.size > 32) return send(res, 429, 'room full');
-      const code = (await readBody(req)).trim(); if (!code.startsWith('OJ')) return send(res, 400, 'not a join code');
-      const jid = randomUUID(); r.joins.set(jid, { code, answer: null, t: Date.now() });
-      return send(res, 200, JSON.stringify({ id: jid }), 'application/json');
+    if (req.method === 'GET') {
+      const b = box(id); b.seen = Date.now();
+      if (b.q.length || u.searchParams.get('wait') === '0') return send(res, 200, b.q.splice(0));
+      let done = false;
+      const reply = (msgs) => { if (done) return; done = true; clearTimeout(t); b.seen = Date.now(); send(res, 200, msgs); };
+      const t = setTimeout(() => { b.waiters = b.waiters.filter((w) => w !== reply); reply([]); }, WAIT);
+      b.waiters.push(reply); req.on('close', () => { if (!done) { done = true; clearTimeout(t); b.waiters = b.waiters.filter((w) => w !== reply); } });
+      return;
     }
-    if (what === 'pending' && req.method === 'GET') return send(res, 200, JSON.stringify([...r.joins].filter(([, j]) => !j.answer).map(([jid, j]) => ({ id: jid, code: j.code }))), 'application/json');
-    if (what === 'answer' && id && r.joins.has(id)) {
-      const j = r.joins.get(id);
-      if (req.method === 'POST') { const a = (await readBody(req)).trim(); if (!a.startsWith('OA')) return send(res, 400, 'not an answer code'); j.answer = a; return send(res, 204); }
-      if (req.method === 'GET') { if (!j.answer) return send(res, 204); const a = j.answer; r.joins.delete(id); return send(res, 200, a); }
+    if (req.method === 'POST') {
+      const b = boxes.get(id); if (!b || Date.now() - b.seen > TTL) return send(res, 404, { error: 'nobody holds that id' });
+      const d = JSON.parse(await readBody(req));
+      if (!TYPES.has(d.type) || typeof d.src !== 'string' || !ID.test(d.src)) return send(res, 400, { error: 'not a handshake message' });
+      if (b.q.length >= QUEUE) return send(res, 429, { error: 'mailbox full' });
+      const msg = { type: d.type, src: d.src, payload: d.payload ?? null };
+      const w = b.waiters.shift(); if (w) w([msg]); else b.q.push(msg);
+      return send(res, 204);
     }
-    return send(res, 404, 'unknown');
-  } catch (e) { return send(res, 400, e.message); }
+    return send(res, 405, { error: 'method' });
+  } catch (e) { return send(res, 400, { error: e.message }); }
 });
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) server.listen(PORT, () => console.log(`Organicity signalling on http://localhost:${PORT}`));
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) server.listen(PORT, () => console.log(`Organicity signalling relay on http://localhost:${PORT}`));

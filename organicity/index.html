@@ -49,6 +49,7 @@
       <p class="keys"><kbd>Right-drag</kbd> rotate · <kbd>Middle-drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>WASD</kbd> move · <kbd>Space</kbd> pause · <kbd>Esc</kbd> cancel · <kbd>Ctrl+Z</kbd> undo · <kbd>P</kbd> photo mode · touch: one finger builds, two pan, pinch zooms, twist rotates</p>
       <div id="newOpts" class="opts">
         <label><span data-i18n="opt.map">Map</span> <select id="optMap"><option value="river">River plain</option><option value="hills">Rolling hills</option><option value="coast">Coastal hills</option><option value="islands">Island chain</option></select></label>
+        <label><span data-i18n="opt.size">Map size</span> <select id="optSize"><option value="512">512 × 512 (standard)</option><option value="768">768 × 768 (large)</option><option value="1024">1024 × 1024 (huge)</option></select></label>
         <label><span data-i18n="opt.lang">Language</span> <select id="optLang"></select></label>
         <label><span data-i18n="opt.era">Starting era</span> <select id="optEra"><option value="1800">1800s · Heritage</option><option value="1900">1900s · Industrial</option><option value="2000" selected>2000s · Modern → Cyberpunk</option></select></label>
         <label><span data-i18n="opt.pace">Technology pace</span> <select id="optPace"><option value="1">1 year per game year</option><option value="5" selected>5 years per game year</option><option value="10">10 years per game year</option></select></label>
@@ -61,21 +62,31 @@
         <button id="introLoad" hidden data-i18n="intro.continue">Continue saved city</button>
         <button id="introImport" title="Open a city shared as an .organicity file" data-i18n="intro.import">Import city…</button><input id="importFile" type="file" accept=".organicity,.json,application/json,text/plain" hidden>
         <button id="introGames" hidden>Load game…</button>
+        <button id="introGallery" hidden data-i18n="intro.gallery">Browse gallery</button>
         <button id="introMp">Join multiplayer…</button><input id="gameFile" type="file" accept=".organicity-game,.json,application/json" hidden>
         <button id="introBack" hidden>Cancel</button>
       </div>
       <div id="introList" class="games" hidden></div>
+      <div id="galleryList" class="games" hidden></div>
       <div id="mpJoin" hidden>
         <b>Join a multiplayer region</b>
         <label>Your name <input id="mpName" type="text" maxlength="24" autocomplete="off"></label>
         <div class="row" id="mpColors"></div>
-        <details><summary>Through a signalling server (optional)</summary><label>Server <input id="mpUrl" type="text" placeholder="http://localhost:8787"></label> <label>Room <input id="mpRoom" type="text" maxlength="48"></label></details>
+        <label>Access code from the host <input id="mpAccess" type="text" maxlength="12" placeholder="ABCD-EFGH" autocomplete="off" spellcheck="false"></label>
         <div class="row"><button id="mpStart" class="primary">Join</button></div>
         <p id="mpStatus" class="dim"></p>
-        <div id="mpCodes" hidden>
-          <label>1. Send this join code to the host <textarea id="mpCode" rows="3" readonly></textarea></label><div class="row"><button id="mpCopy">Copy join code</button></div>
-          <label>2. Paste the host's answer code <textarea id="mpAnswer" rows="3"></textarea></label><div class="row"><button id="mpConnect" class="primary">Connect</button></div>
-        </div>
+        <details><summary>Connection settings</summary>
+          <label>Signalling relay <input id="mpRelay" type="text" placeholder="public PeerJS relay"></label>
+          <label>STUN / TURN servers <input id="mpIce" type="text"></label>
+          <p class="dim">Use the same relay as the host. If you cannot connect, add a TURN server (turn:user:password@host:3478) here and on the host's side.</p>
+        </details>
+        <details id="mpManual"><summary>Without the relay: swap codes by hand</summary>
+          <div class="row"><button id="mpMakeCode">Make a join code</button></div>
+          <div id="mpCodes" hidden>
+            <label>1. Send this join code to the host <textarea id="mpCode" rows="3" readonly></textarea></label><div class="row"><button id="mpCopy">Copy join code</button></div>
+            <label>2. Paste the host's answer code <textarea id="mpAnswer" rows="3"></textarea></label><div class="row"><button id="mpConnect" class="primary">Connect</button></div>
+          </div>
+        </details>
       </div>
       <p class="dim"><a href="../index.html">← back to the site</a></p>
     </div>

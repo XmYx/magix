@@ -2,7 +2,7 @@ import { utilityPath } from './infrastructure.js';
 import { TRANSIT, transitMode } from './transit.js';
 import { routeLines } from './assign.js';
 // Organicity — input: camera controls and the player's tools.
-import { ROADS, SERVICES, ZONES, LAYERS, JUNCTIONS, ULINES } from './config.js';
+import { ROADS, SERVICES, ZONES, LAYERS, JUNCTIONS, ULINES, N } from './config.js';
 import { bezier, clamp, fmtMoney } from './util.js';
 import { undergroundY } from './grid.js';
 
@@ -210,10 +210,10 @@ export class Tools {
     }
     // a neighbour's road reaches the border here: snap onto it so the two roads meet
     if (!p.node && !p.edge) for (const st of this.w.edgeStubs || []) {
-      const sx = st.side === 'west' ? 0.5 : st.side === 'east' ? 511.5 : st.pos, sz = st.side === 'north' ? 0.5 : st.side === 'south' ? 511.5 : st.pos;
+      const sx = st.side === 'west' ? 0.5 : st.side === 'east' ? N - 0.5 : st.pos, sz = st.side === 'north' ? 0.5 : st.side === 'south' ? N - 0.5 : st.pos;
       if (Math.hypot(p.x - sx, p.z - sz) < 12) { p = { x: sx, z: sz, stub: st }; break; }
     }
-    p.x = clamp(p.x, 0, 511.9); p.z = clamp(p.z, 0, 511.9);
+    p.x = clamp(p.x, 0, N - 0.1); p.z = clamp(p.z, 0, N - 0.1);
     return p;
   }
   roadPlan(h) {

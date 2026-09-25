@@ -100,7 +100,7 @@ export class RegionSim {
   exitsFor(k) {
     const st = this.tiles.get(k);
     if (k === this.active) return exitsOf(this.world);
-    if (st.kind === 'ai') return neighbours(this.r, k).map(({ dir }) => ({ side: dir, pos: 256, virtual: true }));
+    if (st.kind === 'ai') return neighbours(this.r, k).map(({ dir }) => ({ side: dir, pos: N / 2, virtual: true }));
     return this.r.tiles[k].summary?.exits || [];
   }
   buildPortals() {
@@ -110,7 +110,7 @@ export class RegionSim {
       const mine = this.exitsFor(k).filter((x) => x.side === dir), theirs = this.exitsFor(nk).filter((x) => x.side === OPPOSITE[dir]);
       for (const x of mine) {
         let peer = null;
-        if (nst.kind === 'ai') peer = { side: OPPOSITE[dir], pos: x.virtual ? 256 : x.pos };
+        if (nst.kind === 'ai') peer = { side: OPPOSITE[dir], pos: x.virtual ? N / 2 : x.pos };
         else for (const y of theirs) if ((x.virtual || Math.abs(y.pos - x.pos) < 16) && (!peer || Math.abs(y.pos - x.pos) < Math.abs(peer.pos - x.pos))) peer = y;
         if (!peer) continue;
         const [ax, az] = edgePoint(dir, x.pos), [bx, bz] = edgePoint(OPPOSITE[dir], peer.pos);
@@ -275,7 +275,7 @@ export class RegionSim {
     d.home.occ++;
     if (d.tile !== from) {
       this.tiles.get(from).month.migOut++; this.tiles.get(d.tile).month.migIn++;
-      const p = this.portalBetween(from, d.tile, fromHome?.x ?? 256, fromHome?.z ?? 256);
+      const p = this.portalBetween(from, d.tile, fromHome?.x ?? N / 2, fromHome?.z ?? N / 2);
       if (p) { p.flow.migrants++; this.toll(d.tile, 1); }
       if (from === this.active) this.events.push({ type: 'move', out: true, building: f.home, node: p?.node, from, to: d.tile });
       else if (d.tile === this.active) this.events.push({ type: 'move', out: false, building: d.home.id, node: this.portalBetween(this.active, from, d.home.x, d.home.z)?.node, from, to: d.tile });
@@ -304,7 +304,7 @@ export class RegionSim {
           const f = newFamily(this.e.nextFamily++, to, dest.id, this.r.seed, { moved: this.day, next: this.day + 360 }); this.families.set(f.id, f);
           const j = bestJob(ctx, f, to, dest); if (j) this.takeJob(f, j);
           st.month.migOut++; dst.month.migIn++;
-          const p = this.portalBetween(k, to, 256, 256); if (p) { p.flow.migrants++; this.toll(to, 1); }
+          const p = this.portalBetween(k, to, N / 2, N / 2); if (p) { p.flow.migrants++; this.toll(to, 1); }
           if (to === this.active) { const b = this.world.buildings.get(dest.id); if (b) b.occ = Math.min(b.hh, (b.occ || 0) + 1); this.events.push({ type: 'move', out: false, building: dest.id, node: this.portalBetween(to, k, dest.x, dest.z)?.node, from: k, to }); }
         }
         this.vacant.set(to, [...dst.housing.values()].filter((h) => h.occ < h.units));

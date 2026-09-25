@@ -36,7 +36,7 @@ class CoreHost {
         this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
         this.worker.onmessage = (e) => this.done(e.data);
         this.worker.onerror = (e) => { console.warn('Sim worker failed; running in-thread.', e.message); this.fallback(); };
-        this.worker.postMessage({ type: 'init', seed: sim.w.seed });
+        this.worker.postMessage({ type: 'init', seed: sim.w.seed, size: N });
       } catch (err) { console.warn('Sim worker unavailable; running in-thread.', err); this.worker = null; }
     }
     if (!this.worker) this.local = new Core(sim.w.seed);
@@ -68,6 +68,7 @@ export class Sim {
     this.year = this.startYear; world.year = this.year; this.tech = technology(this.year);
     this.sky = {hubs:[],links:[],share:0}; this.skyVersion = 0;
     this.day = 0; this.acc = 0; this.speed = 1; this.paused = false;
+    this.perf = { dayMs: 0, requestMs: 0, coreMs: 0 };   // timings for Settings → Performance
     this.money = START_MONEY;
     this.serviceBudgets = {}; this.budgetVersion = 0; this.loans = []; this.loanId = 1;
     this.scenario = opts.scenario || null; this.scenarioWon = false; this.scenarioStart = null; this.tutorialFlags = {};
@@ -292,7 +293,7 @@ export class Sim {
     if (!this.paused) {
       this.acc += (dt * this.speed) / DAY_SECONDS;
       let guard = 0;
-      while (this.acc >= 1 && guard++ < 6) { this.acc -= 1; this.dailyTick(); }
+      while (this.acc >= 1 && guard++ < 6) { this.acc -= 1; const d0 = performance.now(); this.dailyTick(); this.perf.dayMs = this.perf.dayMs * 0.8 + (performance.now() - d0) * 0.2; }
       if (this.acc > 6) this.acc = 0;
     }
     const t = this.day + this.acc, t0 = performance.now(), deadline = t0 + this.budgetMs;
@@ -325,6 +326,7 @@ export class Sim {
   }
 
   requestCore(t, doCoverage, covKey) {
+    const r0 = performance.now();
     this.updateEra();
     const w = this.w, host = this.host, cj = this.coreJob;
     host.sync('static', w.terrainVersion || 0, () => ({ type: 'static', waterfront: this.f.waterfront, view: this.f.view }));
@@ -364,10 +366,11 @@ export class Sim {
     host.request({ roadConditions: [...w.net.edges.values()].map(e=>[e.id,e.cond]), residents, t, clock: t, infra: this.infra ?? 1, ord: { ...this.ordinances }, weather: this.weather, skyShare: this.sky.share, hubs: this.skyHubs(), lines, routeOrigin: this.routeOrigin, routeRevision: this.routeRevision, netVersion: w.net.version, bldVersion: w.bldVersion, budgets: { ...this.serviceBudgets }, doCoverage, blds, prio, busComps: [...(this.busComps || [])], stats: { employed: st.employed, pop: st.pop, commuters: st.commuters, filledI: st.filled.I, outJobs: st.outJobs || 0 }, exits: this.exitWeights(), terminals: this.terminals(), packDefs: Object.fromEntries([...new Set(blds.map((b) => b.svc).filter((k) => k && SERVICES[k]?.pack))].map((k) => [k, SERVICES[k]])) });   // the worker learns the pack buildings in play
     cj.next = t + 1;
     if (doCoverage) { cj.covNext = t + 5; cj.covKey = covKey; }
+    this.perf.requestMs = performance.now() - r0;   // the main thread's share of a core pass
   }
 
   applyCore(res) {
-    const w = this.w;
+    const w = this.w; if (res.ms) this.perf.coreMs = res.ms;
     if (res.routeRevision === this.routeRevision && res.netVersion === w.net.version && res.bldVersion === w.bldVersion) this.routes = res.routes;
     if (res.cov) this.cov = res.cov;
     const { waterfront, view } = this.f;
@@ -578,8 +581,9 @@ export class Sim {
 
   // A service in a neighbouring city of yours reaches this one when a road links the two.
   shared(svc) {
-    const sides = new Set([...this.w.net.nodes.values()].filter((n) => n.outside && n.edges.size).map(sideOf));
-    return (this.partnerCities || []).some((p) => p.services?.includes(svc) && sides.has(p.dir));
+    const net = this.w.net;   // asked for every home each day: the linked sides only change with the roads
+    if (this._sharedVer !== net.version) { this._sharedVer = net.version; this._sharedSides = new Set([...net.nodes.values()].filter((n) => n.outside && n.edges.size).map(sideOf)); }
+    return (this.partnerCities || []).some((p) => p.services?.includes(svc) && this._sharedSides.has(p.dir));
   }
 
   // ---------------------------------------------------------------- region exits & freight

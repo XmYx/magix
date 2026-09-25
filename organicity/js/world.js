@@ -5,7 +5,7 @@ import { BRIDGE_STYLES, lineTier, lineSegments, lineLength } from './infrastruct
 // "road Voronoi": cells that share a road, a side and a frontage slot form a lot,
 // so plot boundaries run perpendicular to curved streets and meet at the
 // bisector of angled junctions — wedges, triangles and slivers fall out naturally.
-import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS, ULINES } from './config.js';
+import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS, ULINES, onMapSize, setMapSize } from './config.js';
 import { generateHeights, roadProfile, flattenLot } from './terrain.js';
 import { landmarkDef, buildableDef } from './packs.js';
 import { depositNear, DEPOSITS } from './resources.js';
@@ -27,7 +27,8 @@ export function segNearest(l, x, z) {
 }
 
 export const CH = 64;                 // render chunk size
-export const CHN = N / CH;
+export let CHN = N / CH;
+onMapSize(() => { CHN = N / CH; });
 const SYL = ['ash', 'bel', 'cor', 'dun', 'el', 'fen', 'gar', 'hol', 'ive', 'kel', 'lin', 'mor', 'nor', 'oak', 'pen', 'quar', 'ros', 'sil', 'tor', 'vale', 'wick', 'yar'];
 const SUF = [' Heights', ' Park', ' Quarter', ' Row', ' Gardens', ' Point', ' End', ' Hill', ' Docks', ' Commons'];
 
@@ -95,7 +96,7 @@ export class World {
         const lx = x - N * 0.22, lz = z - N * 0.82;
         if (Math.hypot(lx * 1.3, lz) < 26 + fbm(x * 0.03, z * 0.03, s + 3) * 34) w = true;
         if(this.mapPreset==='coast')w=x>seaX-90;
-        if(this.mapPreset==='islands' && x>170)w=fbm(x*.012,z*.012,s+54)<.48;
+        if(this.mapPreset==='islands' && x>170*N/512)w=fbm(x*.012,z*.012,s+54)<.48;
         W[z * N + x] = w ? 1 : 0;
       }
     }
@@ -224,10 +225,11 @@ export class World {
 
   newGame() {
     this.genTerrain();
-    const A = this.net.addNode(0, 252, true);
-    const B = this.net.addNode(150, 262);
-    this.net.addEdge(A, B, { x: 75, z: 238 }, 'highway');
-    this.onRoadsChanged([0, 230, 160, 280]);
+    const k = N / 512;   // the highway comes in at the middle of the west edge on any tile size
+    const A = this.net.addNode(0, N / 2 - 4, true);
+    const B = this.net.addNode(150 * k, N / 2 + 6);
+    this.net.addEdge(A, B, { x: 75 * k, z: N / 2 - 18 }, 'highway');
+    this.onRoadsChanged([0, N / 2 - 26, 160 * k, N / 2 + 24]);
   }
 
   // ------------------------------------------------------------------ roads → land
@@ -912,7 +914,7 @@ export class World {
   // ------------------------------------------------------------------ save / load
   serialize() {
     return {
-      mapPreset: this.mapPreset, levees: rleEncode(this.levees), hazards: this.hazards, seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
+      size: N, mapPreset: this.mapPreset, levees: rleEncode(this.levees), hazards: this.hazards, seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
       nodes: [...this.net.nodes.values()].map((n) => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.outside ? 1 : 0, n.control || 'auto']),
       edges: [...this.net.edges.values()].map((e) => [e.id, e.a, e.b, +e.c.x.toFixed(2), +e.c.z.toFixed(2), e.type, +e.cond.toFixed(3), e.oneway || 0, e.layer || 0, e.busLane ? 1 : 0, e.bridgeStyle || 'auto']),
       lines: this.lines, lineId: this.lineId, ...(this.ulines.length ? { ulines: this.ulines, ulineId: this.ulineId } : {}),
@@ -936,6 +938,7 @@ export class World {
   }
 
   static load(d) {
+    setMapSize(d.size || 512);   // a save made on a bigger tile loads at its own size
     const w = new World(d.seed, d.mapPreset || 'river');
     w.edgeMatch = d.edgeMatch || null;
     for (const [k, def] of Object.entries(d.packDefs || {})) if (!SERVICES[k] && /^pk_[a-z0-9]{1,24}$/.test(k) && def && typeof def === 'object') SERVICES[k] = def.landmark ? landmarkDef(def, def.pack, k) : buildableDef({ ...def, effects: def }, def.pack, k);

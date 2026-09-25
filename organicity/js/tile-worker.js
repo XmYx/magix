@@ -1,3 +1,4 @@
+import { setMapSize, N } from './config.js';
 // Organicity — background tile worker. While you play one city, the others run here at full
 // simulation fidelity (no rendering): each job loads a city (or founds a new AI city),
 // applies its president's policy and the region's family moves, simulates some days (with the
@@ -21,7 +22,7 @@ export function found(g) {
   if (g.year > sim.year) { sim.startYear = g.year; sim.year = world.year = g.year; sim.tech = technology(g.year); }
   sim.money = 90000;
   for (const st of g.stubs || []) {   // roads to where the neighbours' roads reach the border
-    const e = st.side === 'west' ? [0.5, st.pos] : st.side === 'east' ? [511.5, st.pos] : st.side === 'north' ? [st.pos, 0.5] : [st.pos, 511.5];
+    const e = st.side === 'west' ? [0.5, st.pos] : st.side === 'east' ? [N - 0.5, st.pos] : st.side === 'north' ? [st.pos, 0.5] : [st.pos, N - 0.5];
     const i = st.side === 'west' ? [34, st.pos] : st.side === 'east' ? [478, st.pos] : st.side === 'north' ? [st.pos, 34] : [st.pos, 478];
     world.buildRoad(world.net.snap(e[0], e[1], 3), null, world.net.snap(i[0], i[1], 3), 'street', 0);
   }
@@ -35,6 +36,7 @@ export function terrainTile(g) {
 }
 
 export function runTile(m) {
+  setMapSize(m.size || 512);   // the region's tile size
   if (m.terrain) return terrainTile(m.terrain);
   let world, sim;
   if (m.generate) ({ world, sim } = found(m.generate));

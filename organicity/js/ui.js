@@ -5,15 +5,16 @@ import { TRANSIT, transitMode } from './transit.js';
 import { DEPOSITS, COMMODITIES, priceOf, IND_POLICIES } from './resources.js';
 import { Preview, propsOf } from './preview.js';
 import { cityValue } from './mpgame.js';
-import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS, ORDINANCES, ULINES } from './config.js';
+import { STYLES, LAYERS, JUNCTIONS, ROADS, ZONES, SERVICES, OVERLAYS, DISTRICT_COLORS, PRIORITIES, LEVEL_APPEAL, MONTH_DAYS, ORDINANCES, ULINES, N } from './config.js';
 import { fmtMoney, fmtInt, clamp } from './util.js';
 import { TERRACE_SERVICES, buildingFloors, massPlan } from './eras.js';
 import { WEATHER } from './weather.js';
 import { PROB } from './sim.js';
 import { TUTORIAL, SCENARIOS } from './scenarios.js';
 import { encodeSave, shareLink, download } from './share.js';
+import { galleryUrl, setGalleryUrl, submitCity, smallShot } from './gallery.js';
 import { makeSave } from './save.js';
-import { t, LANGS, getLang, setLang } from './i18n.js';
+import { t, LANGS, getLang, setLang, watchDom } from './i18n.js';
 import { loaded as packsLoaded, addUserPack, removeUserPack, userPacks } from './packs.js';
 import { canBuy, tileCost, neighbours as tileNeighbours } from './region.js';
 import { MAP_PRESETS } from './terrain.js';
@@ -336,12 +337,12 @@ export class UI {
     el.querySelector('.chatlog')?.scrollTo(0, 1e6);
     el.querySelector('[data-mp-host]')?.addEventListener('click', () => {
       const name = el.querySelector('[data-mp-name]').value.trim(); if (!name) { this.toast('Pick a name first.', 'warn'); return; }
-      this.actions.mpConfig?.setIce(el.querySelector('[data-mp-ice]').value); mp.host(name, el.querySelector('[data-mp-color]:checked')?.value); this.renderPanel(true);
+      this.actions.mpConfig?.setIce(el.querySelector('[data-mp-ice]').value); this.actions.mpConfig?.setRelay(el.querySelector('[data-mp-relay]').value); mp.host(name, el.querySelector('[data-mp-color]:checked')?.value); this.renderPanel(true);
     });
     el.querySelector('[data-mp-answer]')?.addEventListener('click', async () => { try { this.mpAnswerCode = await mp.answer(el.querySelector('[data-mp-join]').value); this.renderPanel(true); } catch (e) { this.toast(e.message, 'warn'); } });
     el.querySelector('[data-mp-copy]')?.addEventListener('click', () => { navigator.clipboard?.writeText(this.mpAnswerCode || ''); this.toast('Answer code copied.', 'info'); });
-    el.querySelector('[data-mp-open]')?.addEventListener('click', () => { const u = el.querySelector('[data-mp-url]').value.trim(), rm = el.querySelector('[data-mp-room]').value.trim(); if (!/^https?:\/\//.test(u) || !/^[\w-]{1,48}$/.test(rm)) { this.toast('Give a server address (http…) and a room name (letters, digits, - or _).', 'warn'); return; } mp.openRoom(u, rm); this.renderPanel(true); });
-    el.querySelector('[data-mp-close]')?.addEventListener('click', () => { mp.closeRoom(); this.renderPanel(true); });
+    el.querySelector('[data-mp-copycode]')?.addEventListener('click', () => { navigator.clipboard?.writeText(mp.code || ''); this.toast('Access code copied. Send it to your friends.', 'info'); });
+    el.querySelector('[data-mp-regate]')?.addEventListener('click', () => mp.openGate());
     el.querySelector('[data-mp-leave]')?.addEventListener('click', () => { if (confirm('Leave the multiplayer game? Your city stays yours; you can rejoin later with the same name.')) { mp.leave(); this.renderPanel(true); } });
     const say = el.querySelector('[data-mp-say]'), send = () => { if (say.value.trim()) { mp.say(say.value); say.value = ''; } };
     el.querySelector('[data-mp-send]')?.addEventListener('click', send); say?.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') send(); });
@@ -383,7 +384,20 @@ export class UI {
     el.querySelectorAll('[data-wm-rename]').forEach((b) => { b.onclick = () => { const n = prompt('Name this city', this.actions.region().tiles[b.dataset.wmRename].name || ''); if (n) this.actions.renameTile(b.dataset.wmRename, n); }; });
     el.querySelector('[data-share-file]')?.addEventListener('click', () => download(`organicity-${this.w.seed}-${this.sim.year}.organicity`, JSON.stringify(makeSave(this.w, this.sim)), 'application/json'));
     el.querySelectorAll('[data-set]').forEach((c) => { c.onchange = () => { const S = loadSettings(), k = c.dataset.set; S[k] = k === 'palette' ? (c.checked ? 'cb' : 'default') : c.type === 'checkbox' ? c.checked : c.type === 'range' || k === 'uiScale' ? +c.value : c.value; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch { /* ignore */ } this.applySettings(); }; });
-    el.querySelector('[data-lang]')?.addEventListener('change', (e) => { setLang(e.target.value); this.buildHud(); this.renderDock(); this.toolChanged(); this.hud(); this.renderPanel(true); });
+    el.querySelector('[data-gal-url]')?.addEventListener('change', (e) => { try { setGalleryUrl(e.target.value); this.toast(galleryUrl() ? 'Gallery on.' : 'Gallery off.', 'info'); } catch (err) { this.toast(err.message, 'warn'); } });
+    el.querySelector('[data-gal-submit]')?.addEventListener('click', async (e) => {
+      const q = (k) => el.querySelector(`[data-gal-${k}]`), title = q('title').value.trim();
+      if (!q('consent').checked) { this.toast('Tick the box to agree to it being shown publicly.', 'warn'); return; }
+      if (!title) { this.toast('Give the city a title.', 'warn'); return; }
+      e.target.disabled = true;
+      try {
+        const [code, shot] = await Promise.all([encodeSave(makeSave(this.w, this.sim)), smallShot(this.r.capture())]);
+        await submitCity(galleryUrl(), { title, author: q('author').value.trim(), code, shot, consent: true, stats: { pop: Math.round(this.sim.stats.pop || 0), buildings: this.w.buildings.size, year: this.sim.year, size: N } });
+        this.toast('Submitted. It shows in the gallery once a moderator approves it.', 'good');
+      } catch (err) { this.toast(`Could not submit: ${err.message}`, 'warn'); }
+      e.target.disabled = false;
+    });
+    el.querySelector('[data-lang]')?.addEventListener('change', (e) => { setLang(e.target.value); watchDom(); this.buildHud(); this.renderDock(); this.toolChanged(); this.hud(); this.renderPanel(true); });
     el.querySelector('[data-pack-add]')?.addEventListener('click', () => el.querySelector('[data-pack-file]').click());
     el.querySelector('[data-pack-file]')?.addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; try { const info = addUserPack(await f.text()); this.toast(`Pack "${info.name}" added: ${info.styles.length} styles, ${info.landmarks.length} landmarks, ${info.buildables.length} buildables, ${info.scenarios.length} scenarios.`, 'good'); } catch (err) { this.toast('Not a valid pack: ' + err.message, 'bad'); } this.renderPanel(true); });
     el.querySelectorAll('[data-pack-del]').forEach((b) => { b.onclick = () => { removeUserPack(b.dataset.packDel); this.toast('Pack removed; it disappears after a reload.', 'info'); this.renderPanel(true); }; });
@@ -486,7 +500,7 @@ export class UI {
       if (!confirm(`Dissolve ${D.name}? Buildings stay; the district and its policies are removed.`)) return;
       for (let i = 0; i < this.w.district.length; i++) if (this.w.district[i] === dId) this.w.district[i] = 0;
       for (const b of this.w.buildings.values()) if (b.district === dId) b.district = 0;
-      this.w.districts[dId] = null; this.w.markGround(0, 0, 512, 512);
+      this.w.districts[dId] = null; this.w.markGround(0, 0, N, N);
       if (this.tools.s.district === dId) this.tools.s.district = 0;
       this.closePanel();
     });
@@ -652,17 +666,22 @@ export class UI {
       <label class="txt">Your name <input type="text" data-mp-name maxlength="24" value="${esc(cfg.savedName?.() || '')}"></label>
       <div class="row">Colour ${(cfg.colors || []).map((c, i) => `<label class="chk"><input type="radio" name="mpc" data-mp-color value="${c}" ${i === 0 ? 'checked' : ''}>${dot(c)}</label>`).join('')}</div>
       <div class="row"><button class="primary" data-mp-host>Host this region</button></div>
-      <h3>Connection</h3><label class="txt">STUN servers <input type="text" data-mp-ice value="${esc(cfg.iceText?.() || '')}"></label>
-      <p class="dim">Friends join from the start screen with <b>Join multiplayer…</b>. A STUN server helps players behind home routers reach each other (it learns your IP address); leave it empty to play on a local network only. Some networks also need a TURN server.</p>`;
+      <p class="dim">You get an access code to give your friends; they join from the start screen with <b>Join multiplayer…</b> and that code.</p>
+      <details><summary>Connection settings</summary>
+      <label class="txt">Signalling relay <input type="text" data-mp-relay placeholder="public PeerJS relay" value="${esc(cfg.relayText?.() || '')}"></label>
+      <p class="dim">Passes only the short handshake between players; the game then runs directly between your computers. Leave empty for the public PeerJS relay, or give your own <code>scripts/organicity-signal.mjs</code> (http…). Players must use the same relay.</p>
+      <label class="txt">STUN / TURN servers <input type="text" data-mp-ice value="${esc(cfg.iceText?.() || '')}"></label>
+      <p class="dim">STUN lets players behind home routers find each other (it learns your IP address). If players cannot connect (some mobile and office networks), add a TURN server with its login as <code>turn:user:password@host:3478</code>, on every player's side. Leave empty to play on a local network only.</p></details>`;
     const players = mp.players, me = mp.me, tileName = (k) => (k && r?.tiles[k]?.name) || (k ? 'unbuilt land' : '—');
     const others = players.filter((p) => p.id !== me.id);
     const deals = (r?.deals || []).filter((d) => d.players?.length);
     return `<p>${dot(me.color)} <b>${esc(me.name)}</b> · ${mp.role === 'host' ? `hosting · ${players.length} player${players.length === 1 ? '' : 's'}` : 'connected to the host'} <button data-mp-leave>Leave</button></p>
       ${mp.role === 'host' ? `<h3>Let players in</h3>
+        <p>Access code <b class="acode">${esc(mp.code || '')}</b> <button data-mp-copycode>Copy</button></p>
+        <p class="dim">${{ open: 'Open: friends join from the start screen with <b>Join multiplayer…</b> and this code.', opening: 'Opening the code on the signalling relay…', waiting: 'The code is still held by an earlier session; trying again in a few seconds…', closed: 'Lost the signalling relay; reconnecting…', error: `Players cannot join yet: ${esc(mp.gateErr || '')} <button data-mp-regate>Try again</button>` }[mp.gateState] || ''}</p>
+        <details><summary>Without the relay: answer a pasted join code</summary>
         <label class="txt">A player's join code <textarea data-mp-join rows="2" placeholder="OJ…"></textarea></label><div class="row"><button data-mp-answer>Make answer code</button></div>
-        ${this.mpAnswerCode ? `<label class="txt">Send this answer code back <textarea readonly rows="2" data-mp-out>${esc(this.mpAnswerCode)}</textarea></label><div class="row"><button data-mp-copy>Copy</button></div>` : ''}
-        <details${mp.room ? ' open' : ''}><summary>Or let them in through a signalling server</summary><div class="row"><input type="text" data-mp-url placeholder="http://localhost:8787" value="${esc(mp.room?.url || '')}"><input type="text" data-mp-room placeholder="room name" value="${esc(mp.room?.room || '')}">${mp.room ? '<button data-mp-close>Close room</button>' : '<button data-mp-open>Open room</button>'}</div>
-        <p class="dim">Run <code>node scripts/organicity-signal.mjs</code> somewhere everyone can reach; players then join with the server address and room name.</p></details>` : ''}
+        ${this.mpAnswerCode ? `<label class="txt">Send this answer code back <textarea readonly rows="2" data-mp-out>${esc(this.mpAnswerCode)}</textarea></label><div class="row"><button data-mp-copy>Copy</button></div>` : ''}</details>` : ''}
       <h3>Standings</h3><table class="kv"><tr><th>Player</th><th>City</th><th>People</th><th>Funds</th><th>Score</th></tr>${players.map((p) => `<tr><td>${dot(p.color)}${esc(p.name)}${p.id === me.id ? ' (you)' : ''}</td><td>${esc(tileName(p.tile))}</td><td>${fmtInt(p.pop || 0)}</td><td>${fmtMoney(p.money || 0)}</td><td>${fmtInt(p.score)}</td>${mp.role === 'host' ? `<td>${p.id === me.id ? '' : `<button data-mp-kick="${esc(p.id)}" title="Remove this player from the game">Remove</button>`}</td>` : ''}</tr>`).join('')}</table>
       <h3>Chat</h3><div class="chatlog">${mp.chat.slice(-40).map((l) => `<p>${l.from ? `${dot(l.color)}<b>${esc(l.from)}</b> ` : '<i>'}${esc(l.text)}${l.from ? '' : '</i>'}</p>`).join('') || '<p class="dim">Say hello.</p>'}</div>
       <div class="row"><input type="text" data-mp-say maxlength="300" placeholder="Message"><button data-mp-send>Send</button></div>
@@ -725,7 +744,13 @@ export class UI {
   shareHtml() {
     return `<p>Send this city to someone: the whole save travels inside the link or file, so nothing is uploaded.</p>
       <div class="row"><button class="primary" data-share-link>Copy share link</button><button data-share-file>Download .organicity file</button></div>
-      <p class="dim">To open a shared city, visit its link, or use <b>Import city…</b> on the start screen. Large cities make long links; files work at any size. Use Photo mode (P) for screenshots.</p>`;
+      <p class="dim">To open a shared city, visit its link, or use <b>Import city…</b> on the start screen. Large cities make long links; files work at any size. Use Photo mode (P) for screenshots.</p>
+      <h3>Submit to gallery</h3>
+      ${galleryUrl() ? `<p class="dim">Sends this city (its save), a screenshot of the current view and its population to <b>${esc(galleryUrl())}</b>. A moderator checks it before it shows in the gallery.</p>
+      <label>Title <input type="text" maxlength="60" data-gal-title value="${esc(this.actions.region?.()?.tiles?.[this.actions.region().active]?.name || '')}"></label>
+      <label>Your name <input type="text" maxlength="40" data-gal-author placeholder="Anonymous"></label>
+      <label class="chk"><input type="checkbox" data-gal-consent> I made this city and agree to it being shown publicly</label>
+      <div class="row"><button class="primary" data-gal-submit>Submit to gallery</button></div>` : '<p class="dim">The gallery is off. To share cities with other players, give a gallery server in Settings.</p>'}`;
   }
 
   settingsHtml() {
@@ -740,7 +765,9 @@ export class UI {
       <label>Interface size <select data-set="uiScale">${[0.85, 1, 1.15, 1.3, 1.5].map((v) => `<option value="${v}" ${+S.uiScale === v ? 'selected' : ''}>${Math.round(v * 100)}%</option>`).join('')}</select></label>
       <h3>${t('set.language')}</h3><select data-lang>${Object.entries(LANGS).map(([k, n]) => `<option value="${k}" ${k === getLang() ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <p class="dim">Menus, tools and panel titles; changing it reloads the interface.</p>
-      <h3>${t('set.performance')}</h3><select data-set="perf">${[['auto', 'Automatic (phones get the light profile)'], ['low', 'Light: no shadows, fewer vehicles and raindrops, nearer simplification'], ['high', 'Full detail']].map(([k, n]) => `<option value="${k}" ${(S.perf || 'auto') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <h3>${t('set.gallery')}</h3><label>Gallery server <input type="text" data-gal-url placeholder="off" value="${esc(galleryUrl())}"></label>
+      <p class="dim">Optional: an Organicity gallery (scripts/organicity-gallery.mjs) to browse and submit cities. Leave empty to keep the gallery off; nothing is sent unless you submit a city.</p>
+      <h3>${t('set.performance')}</h3><p class="dim">Tile ${N} × ${N} · ${fmtInt(this.w.buildings.size)} buildings · core pass ${Math.round(this.sim.perf?.coreMs || 0)} ms in ${this.sim.host?.mode === 'worker' ? 'a worker' : 'this thread'} · main thread ${Math.round((this.sim.perf?.dayMs || 0) + (this.sim.perf?.requestMs || 0))} ms a day</p><select data-set="perf">${[['auto', 'Automatic (phones get the light profile)'], ['low', 'Light: no shadows, fewer vehicles and raindrops, nearer simplification'], ['high', 'Full detail']].map(([k, n]) => `<option value="${k}" ${(S.perf || 'auto') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <h3>${t('set.packs')}</h3>
       ${packsLoaded.map((p) => `<p>${esc(p.name)} · ${p.styles.length} styles, ${p.landmarks.length} landmarks${userPacks().some((u) => String(u.name).replace(/[<>&"'`]/g, '').trim().slice(0, 60) === p.name) ? ` <button data-pack-del="${esc(p.name)}">Remove</button>` : ''}</p>`).join('') || '<p class="dim">None loaded.</p>'}
       <div class="row"><button data-pack-add>Add a pack (.json)…</button><input type="file" accept=".json,application/json" data-pack-file hidden></div>

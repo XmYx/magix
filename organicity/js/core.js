@@ -4,14 +4,15 @@ import { parkingState } from './infrastructure.js';
 // & nuisance fields, and traffic assignment. They work on plain snapshots
 // (road network + packed buildings) so the same code runs inside a Web Worker,
 // on the main thread as a fallback, or headless in Node tests.
-import { FC, FN, SERVICES, ROADS } from './config.js';
+import { FC, FN, SERVICES, ROADS, onMapSize } from './config.js';
 import { frontAt } from './weather.js';
 import { commuteRoutes } from './routes.js';
 import { assignTraffic, routeLines, updateCosts, dirCapacity, netFromSnapshot } from './assign.js';
 import { RoadNet } from './roads.js';
 import { clamp, mulberry32 } from './util.js';
 
-export const F2 = FN * FN;
+export let F2 = FN * FN;
+onMapSize(() => { F2 = FN * FN; });
 export const HH = 2.6;               // people per household
 export const COVER = ['fire', 'police', 'clinic', 'school', 'college', 'university', 'landfill', 'depot', 'busstop', 'tramstop', 'railstation', 'metrostation'];
 const PRIO = [null, ['fire', 'police'], ['clinic'], ['school']]; // district priority codes 1..3

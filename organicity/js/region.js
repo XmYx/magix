@@ -3,7 +3,7 @@
 // (one beyond each highway exit, a few more further out). Buy a tile next to one
 // you own, found a city there and switch between cities; adjacent cities you run
 // trade workers with each other. Inactive cities are stored compressed per tile.
-import { N, NEIGHBOUR_NAMES } from './config.js';
+import { N, NEIGHBOUR_NAMES, onMapSize } from './config.js';
 import { hash2 } from './util.js';
 import { MAP_PRESETS } from './terrain.js';
 
@@ -24,7 +24,7 @@ export function exitDir(n) {
 
 export function createRegion(world, sim) {
   const seed = world.seed, c = Math.floor(SIZE / 2), home = tileKey(c, c);
-  const r = { id: `r${seed}-${(Date.now() % 1e7).toString(36)}`, seed, size: SIZE, active: home, tiles: {} };
+  const r = { id: `r${seed}-${(Date.now() % 1e7).toString(36)}`, seed, size: SIZE, tileSize: N, active: home, tiles: {} };
   for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
     const k = tileKey(x, z);
     r.tiles[k] = { x, z, seed: Math.floor(hash2(x, z, seed % 99991) * 1e6), preset: PRESETS[Math.floor(hash2(x, z, (seed % 99991) + 5) * PRESETS.length)], kind: 'wild', owned: false };
@@ -96,7 +96,9 @@ export function partnersOf(r, k) {
 // A city founded next to it blends its own edge toward these, so coastlines, rivers and
 // hills continue across the border. OPPOSITE maps my side to the neighbour's facing side.
 export const OPPOSITE = { west: 'east', east: 'west', north: 'south', south: 'north' };
-const SAMPLES = 128, STEP = N / SAMPLES;
+const SAMPLES = 128;
+let STEP = N / SAMPLES;
+onMapSize(() => { STEP = N / SAMPLES; });
 export const sideCell = (side, t, d = 0) => side === 'west' ? [d, t] : side === 'east' ? [N - 1 - d, t] : side === 'north' ? [t, d] : [t, N - 1 - d];
 export function edgeProfile(world, side) {
   const out = [];

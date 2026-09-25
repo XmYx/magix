@@ -2,12 +2,13 @@
 // off the main thread. GitHub Pages can't send COOP/COEP headers, so there is no
 // SharedArrayBuffer: state goes in and results come out as structured clones.
 import { Core } from './core.js';
+import { setMapSize } from './config.js';
 
 let core = null;
 
 self.onmessage = (e) => {
   const m = e.data;
-  if (m.type === 'init') { core = new Core(m.seed); return; }
+  if (m.type === 'init') { setMapSize(m.size || 512); core = new Core(m.seed); return; }
   if (!core) return;
   if (m.type === 'run') {
     const t0 = performance.now();

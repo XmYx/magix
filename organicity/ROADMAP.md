@@ -10,20 +10,23 @@ peer-to-peer multiplayer.
 - **Delivered phases:** A–T, the regional economy, U0 (governors build real cities),
   Y (utility networks, resources and a visible region), Z (infrastructure, industry
   and the visible region), AA (building, saving, desktop and multiplayer), AC
-  (living citizens), AD (infrastructure depth), AF (presentation), and AG2 (richer
-  content packs). A short history is at the end
-  of this file.
+  (living citizens), AD (infrastructure depth), AE (scale and performance), AF
+  (presentation) and AG (content, community and release). A short history is at the
+  end of this file.
 - **Saves:** single-city saves are at v10. Older saves migrate step by step
   (`save.js`), and fields added since v10 are optional. Saved games (whole regions)
   live in IndexedDB and export to `.organicity-game` files.
 - **Tests:**
-  - `node scripts/organicity-test.mjs`: 115 headless tests covering simulation,
-    saves, region, economy, residents and elections, infrastructure, multiplayer
-    protocol and signalling.
+  - `node scripts/organicity-test.mjs`: 122 headless tests covering simulation,
+    saves, map sizes, region, economy, residents and elections, infrastructure, the
+    tile worker pool, translations, the release setup, multiplayer protocol,
+    signalling and the gallery server.
   - Playwright browser scripts: `scripts/organicity-browser-test.mjs` and
     `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` and `scripts/organicity-acad-browser-test.mjs`. They need a server on port 8777;
     `CITY_URL` overrides the address.
-  - The desktop app has a smoke test (`ORGANICITY_SMOKE=1`) that runs in CI.
+  - CI (`.github/workflows/organicity-desktop.yml`) runs the headless tests and all
+    four Playwright scripts, then builds the three platforms and smoke-tests the Linux
+    app (`ORGANICITY_SMOKE=1`).
 
 ---
 
@@ -219,11 +222,18 @@ peer-to-peer multiplayer.
   - All 24 other tiles are drawn around your city, blended onto its edges and
     tinted by the weather.
   - Adjacent tiles get lit window facades, traffic and seasonal woods.
+  - Up close, any tile's buildings get their kinds' details, drawn instanced: gable
+    roofs on houses, crowns and masts on towers, sheds and chimneys on industry,
+    awnings on shops and plant rooms on flat roofs. Tiles beyond the adjacent ones swap
+    their plain boxes for lit facades. Details stream in, one tile at a time, as the
+    camera nears a tile, and are dropped when it leaves.
   - Full texture (in Settings) draws their lots, roads and shores pixel by pixel.
 - **AI governors:** they build real cities (streets, zoning, utilities, services,
   industry chains, and lines to remote plants).
-  - Cities within two tiles run at full simulation in a background worker; those
-    further out are aggregates.
+  - Cities within two tiles run at full simulation on a pool of background workers
+    (half the machine's cores, up to three), never two jobs on the same tile; those
+    further out are aggregates. The runner is driven by a timer, so in the desktop app
+    the region, and your own city, keep going while the window is minimised.
   - You can take over an AI city, or hand one of yours to an AI.
 - **Regional economy:**
   - Portals with toll booths, and families that live, work, commute and migrate
@@ -235,10 +245,19 @@ peer-to-peer multiplayer.
 
 ### Multiplayer
 - **Connecting:** peer-to-peer over WebRTC.
-  - The host opens their region from the Multiplayer panel (J).
-  - Friends join from the start screen by pasting codes (no server needed), or
-    through the optional signalling server `scripts/organicity-signal.mjs`.
-  - STUN and TURN servers are settable, or left empty for play on a local network.
+  - Hosting (Multiplayer panel, J) gives the region an access code such as
+    `6J4M-8HLN`, kept with the region. Friends type it on the start screen under
+    **Join multiplayer…**; nobody else has to send anything back.
+  - The two browsers find each other through a signalling relay, which passes only
+    the offer, the answer and the network candidates, trickled as they are found. The
+    default is the public PeerJS relay; `scripts/organicity-signal.mjs` is a
+    self-hosted alternative. The game itself then runs directly between the players.
+  - A wrong code, a host who isn't online, a relay that can't be reached and a
+    connection the networks won't allow each end with their own message, instead of
+    waiting forever.
+  - STUN servers are preset. TURN servers take a login
+    (`turn:user:password@host:3478`) for networks that block direct connections.
+  - Without any relay, join and answer codes can still be pasted both ways.
 - **Playing together:**
   - Each player gets land and builds their own city at the same time. Every month
     their city's numbers and view go to everyone.
@@ -277,13 +296,37 @@ peer-to-peer multiplayer.
   - Colour-blind palette, UI scale and reduced motion.
   - Performance profile: automatic, light or full.
 - **Content packs:** district styles, landmarks, buildables and scenarios, checked and saved with the city. Models support roofs, windows and emissive signs; see [the modding guide](packs/README.md).
-- **Languages:** English, Hungarian and German.
+- **Languages:** English, Hungarian, German, French, Spanish and Arabic.
+  - Keyed strings cover the HUD, dock, menus, panel titles and start screen.
+  - A live layer (`i18n.js` `watchDom`, with its phrase table in `phrases.js`)
+    translates the headings, buttons, labels and tooltips that the game builds in
+    code, as they appear.
+  - Arabic lays the page out right to left: the dock and panel swap sides.
+- **Map size:** 512 (standard), 768 (large) or 1024 (huge) per tile, chosen on the
+  new-game screen and kept by the region. Settings → Performance shows the tile size,
+  building count and how long the core pass and daily ticks take.
+- **Gallery (opt-in):**
+  - Off until you give a gallery server in Settings.
+  - The Share panel submits the city (its share code, a screenshot and its
+    population), after you tick a consent box.
+  - The start screen's **Browse gallery** opens approved cities and lets you report
+    them.
+  - The server, `scripts/organicity-gallery.mjs`, has no dependencies. It queues
+    submissions for a moderator (`GALLERY_ADMIN_TOKEN`, page at `/admin`), limits
+    sizes and rates, keeps only salted hashes of addresses, and hides an entry after
+    three reports until a moderator looks again.
 - **Platforms:**
   - An installable offline web app (PWA).
   - Desktop packages built with Electron: AppImage, deb and tar.gz for Linux; dmg
     and zip for macOS (x64 and arm64); installer and portable for Windows. They
     bundle three.js and run fully offline.
-  - GitHub workflow: `.github/workflows/organicity-desktop.yml`.
+  - GitHub workflow: `.github/workflows/organicity-desktop.yml`. A `desktop-v*` tag
+    publishes a GitHub release, and installed apps update themselves from it
+    (`electron-updater`).
+  - Builds are signed, and on macOS notarised, when the repository has the secrets:
+    `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
+    `APPLE_TEAM_ID`, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`. Without them the builds
+    are unsigned.
 
 ### Keys
 `1`–`7` tools · `I` industry · `L` transit · `T` terrain · `8` overlays · `9` budget ·
@@ -297,16 +340,22 @@ peer-to-peer multiplayer.
 ## Known limits
 
 - **Scale:**
-  - A tile is 512×512 and holds about 1,500 buildings at current lot sizes.
-  - The simulation's core pass runs on the main thread for large cities (about 0.2 s
-    at 1,500 buildings).
+  - A 1024 tile holds 5,000 or more buildings. At 5,007 buildings and 25,000 people,
+    the measurements are:
+    - the core pass takes about 1.1 s in its worker;
+    - the main thread spends about 15 ms building and sending each request, plus
+      about 35 ms of daily ticks per simulated day.
+  - Fields (land value, pollution and so on) are one grid per tile at 8 cells per
+    unit and grow with the tile. Buildings are meshed per chunk as before; the ground
+    is one mesh per tile.
+  - The map size is fixed when a city or region is founded.
 - **Other tiles:**
   - Background cities simulate without vehicles.
-  - The background runner does one job at a time, and only while the game is on
-    screen.
+  - In a browser tab, background work slows while the tab is hidden; only the desktop
+    app keeps full speed when minimised.
   - Tiles more than two steps away are aggregates, drawn as a skyline.
-  - Other tiles are drawn from 128×128 snapshots: boxes rather than procedural
-    buildings.
+  - Other tiles are drawn from 128×128 snapshots. Up close their buildings get
+    archetype details, not each building's own procedural model.
 - **Residents:**
   - Schedules cover a sample of residents, not the whole population.
   - One resident at a time can be followed, on the visual clock rather than the
@@ -324,11 +373,19 @@ peer-to-peer multiplayer.
   - No co-op on the same tile, and no host migration: the session ends if the host
     leaves.
   - Each player's regional economy is their own projection.
-  - Strict networks need a TURN server.
-- **Translation:** menus, dock, HUD, panel titles and start screen only; help and
-  panel contents are English.
+  - Strict networks (some mobile and office connections) need a TURN server, which
+    each player sets up themselves; none is bundled.
+  - The public PeerJS relay is a free third-party service; for guaranteed
+    availability, run `scripts/organicity-signal.mjs`.
+- **Translation:** keyed strings plus 114 common phrases. Sentences with
+  numbers in them (toasts, hints, help and the intro list) stay in English.
 - **Photo tours:** silent WebM exports use the current render resolution and real-time frame rate; paths are kept for the current session.
-- **Desktop builds:** unsigned; macOS packages must be built on a Mac or in CI.
+- **Desktop builds:** signed only when the signing secrets are set. macOS packages
+  must be built on a Mac or in CI, and macOS auto-update needs a signed build.
+  Auto-update reads the repository's latest release, so that release must be a
+  desktop one.
+- **Gallery:** there are no accounts. Moderation is one shared token, and rate
+  limits are kept in memory per server process.
 
 ---
 
@@ -352,7 +409,7 @@ migratable, and adds headless tests (and browser checks where it shows on screen
    as commands in a lockstep order. The owner's simulation stays authoritative, and
    visitors see a streamed view.
 5. **Session tools.**
-   - Room codes and lobby listing on the signalling server.
+   - Lobby listing on the signalling relay (access codes are delivered).
    - Spectators.
    - Rules for a session: sandbox, start year, win condition such as first to 50k
      people or the best treasury after 10 years.
@@ -399,14 +456,26 @@ Also fixed in this phase: the Ubuntu desktop build failed at the `.deb` step for
 of a project homepage. `desktop/package.json` now sets `homepage`, and all three
 platform builds complete.
 
-### AE — Scale and performance
-1. **Bigger tiles:** 768 or 1024, with chunked fields and rendering.
-2. **Core pass in the worker:** move it entirely off the main thread and profile at
-   5,000 or more buildings.
-3. **Richer neighbours:** instanced procedural buildings for other tiles when viewed
-   up close, and streaming of their views.
-4. **Lighter background runner:** a shared worker pool for background tiles, and
-   progress while the game is minimised (desktop).
+### AE — Scale and performance — delivered
+1. **Delivered — Bigger tiles:**
+   - Tiles can be 512, 768 or 1024; the map size is a runtime setting (`config.js`
+     `setMapSize`).
+   - Every raster, field, chunk grid, the highway, the camera and the edge stubs
+     follow it.
+   - Saves, regions, multiplayer snapshots and the workers carry the size.
+2. **Delivered — Core pass in the worker, profiled:**
+   - In browsers the core pass runs entirely in its worker.
+   - The main thread only builds the request (the linked sides are now cached per
+     road network) and runs the daily ticks.
+   - Profiled at 5,007 buildings (see Known limits); timings are shown in Settings.
+3. **Delivered — Richer neighbours:** instanced archetype details (roofs, crowns,
+   masts, chimneys, awnings, plant rooms) and lit facades for other tiles near the
+   camera. They stream in one tile at a time and are dropped when the camera leaves.
+4. **Delivered — Lighter background runner:**
+   - A pool of tile workers (up to three), never two jobs on one tile.
+   - Ticked by a timer rather than drawn frames.
+   - The desktop app turns off background throttling and steps the city on a timer
+     while minimised.
 
 ### AF — Presentation — delivered
 1. **Delivered — Water:** a water shader with flow direction on rivers; ferries and boats in
@@ -416,17 +485,35 @@ platform builds complete.
 3. **Delivered — Camera tours:** capture up to 16 viewpoints, preview eased camera paths, choose a 2–120 second duration, cancel and restore the camera, and export silent WebM video on desktop or supported browsers.
 4. **Delivered — Sound:** positional sound for industry, trains and crowds.
 
-### AG — Content, community and release
-1. **Translations:** the remaining texts, right-to-left support, and more languages.
+### AG — Content, community and release — delivered
+1. **Delivered — Translations:**
+   - French, Spanish and Arabic join English, Hungarian and German.
+   - A live phrase layer translates the texts built in code.
+   - Right-to-left layout for Arabic.
 2. **Delivered — Richer packs:** roof shapes, windows and emissive signs in pack models;
    pack-defined scenarios and buildables; a documented modding format.
-3. **Release pipeline:**
-   - Signed and notarised desktop builds.
-   - Auto-update.
-   - GitHub releases from `desktop-v*` tags.
-   - The Playwright scripts running in CI.
-4. **Gallery:** an opt-in gallery of shared cities and screenshots. This needs a
-   backend and moderation.
+3. **Delivered — Release pipeline:**
+   - Signing and notarisation driven by secrets, with the hardened runtime and
+     entitlements.
+   - `electron-updater` auto-update from GitHub releases.
+   - `desktop-v*` tags publish a release with the update manifests.
+   - The Playwright scripts run in CI before the builds.
+4. **Delivered — Gallery:** an opt-in gallery of shared cities and screenshots, with a
+   zero-dependency server, moderation queue, reports and an admin page.
+
+### AH — Next candidates
+1. **Help in every language:** move the tutorial, advisors, toasts and hover cards to
+   keyed strings with placeholders, so sentences with numbers translate too; add
+   community translation files to packs.
+2. **Huge maps, lighter:** split the ground mesh and the per-tile fields into chunks
+   updated where the city changes; move the daily ticks into the core worker.
+3. **Neighbours in full:** stream each nearby building's own procedural model from
+   the tile worker (not only archetypes), and let background cities run vehicles
+   at a coarse rate.
+4. **Gallery depth:** likes and sorting, search by map size or era, links from a
+   gallery entry into the game, and a hosted instance with sign-in for moderators.
+5. **Release polish:** delta updates, release notes shown in the app, and a Flatpak
+   or Snap for Linux stores.
 
 ---
 
@@ -451,3 +538,4 @@ platform builds complete.
 | AA | Icons and 3D hover cards, road levels and bridges, desktop packages, saved games, peer-to-peer multiplayer (chat, trade, contracts, claims, standings, removing players, buying AI cities at their value) | 105 |
 | AF / AG2 | Flowing water and boats, mountain and seasonal ground textures, positional audio, richer packs and modding guide; photo camera tours and WebM export | v10 · 108 |
 | AC / AD | Residents with schedules, family stories, approval and elections; utility tiers, transformers and treatment, curved and routed runs, maintenance crews, parking, bridge styles and lift bridges; Ubuntu `.deb` packaging fixed | v10 · 115 |
+| AE / AG | 768 and 1024 tiles, core pass profiled at 5,000 buildings, instanced neighbour details streamed up close, a tile worker pool and play while minimised; French, Spanish and Arabic with a live phrase layer and right-to-left layout, signed and auto-updating desktop releases with browser tests in CI, and an opt-in moderated gallery | v10 · 122 |

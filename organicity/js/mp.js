@@ -3,14 +3,26 @@
 // runs their own city at full fidelity and sends its numbers and view each month, so everyone
 // sees everyone's cities grow next door. Chat, trades (money, commodity and utility contracts),
 // tile claims and a leaderboard ride along.
-// Connecting needs no server: a guest makes a join code, the host pastes it and hands back an
-// answer code. Optionally a tiny self-hosted signalling server (scripts/organicity-signal.mjs)
-// swaps the codes automatically. Everything a peer sends is checked before it is used.
+// Connecting: the host gets a short access code (ABCD-EFGH) and gives it to friends; a guest
+// types it in and the two browsers find each other through a signalling relay (the public
+// PeerJS server by default, or scripts/organicity-signal.mjs), which only passes the WebRTC
+// offer, answer and network candidates. After that the game runs peer to peer. Without any
+// relay, codes can still be pasted both ways. Everything a peer sends is checked before use.
 import { encodeSave, decodeSave } from './share.js';
 
 export const PROTOCOL = 1;
 export const COLORS = ['#e05a4a', '#3a8ae0', '#e8c040', '#5ab86a', '#9a5ac8', '#e07a30', '#40c0c0', '#e060a8'];
-export const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+export const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
+// STUN and TURN servers as typed: space-separated, a TURN server's login as turn:user:password@host:port
+export function parseIce(text) {
+  const out = [];
+  for (const tok of String(text || '').split(/[\s,]+/)) {
+    const m = /^(stuns?|turns?):(?:([^:@\s]+):([^@\s]+)@)?([^@\s]+)$/.exec(tok); if (!m) continue;
+    const s = { urls: `${m[1]}:${m[4]}` }; if (m[2]) { s.username = decodeURIComponent(m[2]); s.credential = decodeURIComponent(m[3]); }
+    out.push(s);
+  }
+  return out;
+}
 const CHUNK = 48000, MAX_MSG = 8e6;
 
 // ---------------------------------------------------------------- checking what peers send
@@ -24,7 +36,7 @@ export function cleanSummary(s) {
   out.name = str(s.name, 24);
   out.thumb = typeof s.thumb === 'string' && s.thumb.startsWith('data:image/png;base64,') && s.thumb.length < 60000 ? s.thumb : null;
   if (s.edges && typeof s.edges === 'object') { out.edges = {}; for (const side of ['west', 'east', 'north', 'south']) if (Array.isArray(s.edges[side]) && s.edges[side].length <= 512) out.edges[side] = s.edges[side].map((v) => num(v, -100, 1000)); }
-  if (Array.isArray(s.exits)) out.exits = s.exits.slice(0, 32).map((e) => ({ side: ['west', 'east', 'north', 'south'].includes(e?.side) ? e.side : 'west', pos: num(e?.pos, 0, 512) }));
+  if (Array.isArray(s.exits)) out.exits = s.exits.slice(0, 32).map((e) => ({ side: ['west', 'east', 'north', 'south'].includes(e?.side) ? e.side : 'west', pos: num(e?.pos, 0, 1024) }));
   if (s.surplus) out.surplus = { power: num(s.surplus.power), water: num(s.surplus.water) };
   if (Array.isArray(s.services)) out.services = s.services.filter((x) => typeof x === 'string').slice(0, 16).map((x) => x.slice(0, 24));
   if (s.industry && typeof s.industry === 'object') {
@@ -50,10 +62,12 @@ export function cleanBlocks(b) {
 
 // ---------------------------------------------------------------- links: JSON messages over a channel, chunked
 export class Link {
-  constructor(ch) {
-    this.ch = ch; this.parts = new Map(); this.onmsg = null; this.onclose = null;
+  constructor(ch, pc = null) {
+    this.ch = ch; this.pc = pc; this.parts = new Map(); this.onmsg = null; this.onclose = null; this.closed = false;   // (holding pc keeps it from being collected)
+    const gone = () => { if (this.closed) return; this.closed = true; this.onclose?.(); };
     ch.onmessage = (e) => this.recv(typeof e === 'string' ? e : e.data);
-    ch.onclose = () => this.onclose?.();
+    ch.onclose = gone;
+    if (pc) pc.addEventListener('connectionstatechange', () => { if (['failed', 'closed'].includes(pc.connectionState)) gone(); });
   }
   send(msg) {
     const s = JSON.stringify(msg);
@@ -74,7 +88,7 @@ export class Link {
     }
     this.onmsg?.(m);
   }
-  close() { try { this.ch.close(); } catch { /* already closed */ } }
+  close() { try { this.ch.close(); } catch { /* already closed */ } try { this.pc?.close(); } catch { /* already closed */ } }
 }
 // two connected in-memory channels (tests)
 export function channelPair() {
@@ -83,13 +97,20 @@ export function channelPair() {
   return [a, b];
 }
 
-// ---------------------------------------------------------------- WebRTC with pasted codes
+// ---------------------------------------------------------------- WebRTC with pasted codes (no relay)
 const iceDone = (pc) => new Promise((ok) => {
   if (pc.iceGatheringState === 'complete') return ok();
-  const t = setTimeout(ok, 5000);
+  const t = setTimeout(ok, 8000);
   pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); ok(); } });
 });
-export const opened = (ch) => new Promise((ok, fail) => { if (ch.readyState === 'open') return ok(ch); ch.onopen = () => ok(ch); ch.onerror = (e) => fail(e); });
+export const NO_ROUTE = 'Could not connect: your networks would not let the two computers reach each other directly. Add a TURN server under Connection settings (both players), or play on the same network.';
+// the channel opens, or the connection fails (or takes too long) with a reason
+export const opened = (ch, pc = null, ms = 30000) => new Promise((ok, fail) => {
+  if (ch.readyState === 'open') return ok(ch);
+  const t = setTimeout(() => fail(new Error(NO_ROUTE)), ms), done = (f, v) => { clearTimeout(t); f(v); };
+  ch.onopen = () => done(ok, ch); ch.onerror = () => done(fail, new Error('The connection broke while opening.'));
+  pc?.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'failed') done(fail, new Error(NO_ROUTE)); });
+});
 // guest: a join code to send to the host; then accept the host's answer code
 export async function makeJoinCode(ice = DEFAULT_ICE) {
   const pc = new RTCPeerConnection({ iceServers: ice }), ch = pc.createDataChannel('organicity', { ordered: true });
@@ -109,29 +130,144 @@ export async function answerJoinCode(code, ice = DEFAULT_ICE) {
   return { pc, channel, code: 'OA' + await encodeSave({ v: PROTOCOL, sdp: pc.localDescription.sdp }) };
 }
 
-// ---------------------------------------------------------------- the optional signalling server
-const roomUrl = (url, room) => `${String(url).replace(/\/+$/, '')}/r/${encodeURIComponent(room)}`;
-export async function signalJoin(url, room, joinCode, { tries = 120 } = {}) {
-  const r = await fetch(`${roomUrl(url, room)}/join`, { method: 'POST', body: joinCode }); if (!r.ok) throw new Error('The signalling server refused the join.');
-  const { id } = await r.json();
-  for (let i = 0; i < tries; i++) { const a = await fetch(`${roomUrl(url, room)}/answer/${id}`); if (a.status === 200) return a.text(); await new Promise((ok) => setTimeout(ok, 1500)); }
-  throw new Error('The host did not answer.');
+// ---------------------------------------------------------------- relays: passing the handshake
+// A relay carries short messages { type, src, payload } between two ids until the peers are
+// connected. PeerRelay speaks the public PeerJS server's protocol over a WebSocket; HttpRelay
+// long-polls a self-hosted scripts/organicity-signal.mjs. Both: open(id), send(to, type,
+// payload), onmsg, close(). A message to an id nobody holds comes back as { type: 'EXPIRE' }.
+export const PEERJS_HOST = 'wss://0.peerjs.com/peerjs';
+const rid = (n = 12) => { const b = new Uint8Array(n); crypto.getRandomValues(b); return [...b].map((x) => 'abcdefghijklmnopqrstuvwxyz0123456789'[x % 36]).join(''); };
+// The public server checks every message against the PeerJS client's own shapes (and silently
+// stops relaying for a socket that sends anything else), so ours travel dressed as those.
+export function toPeerJs(type, p = {}, conn = 'dc_organicity') {
+  if (type === 'OFFER') return { sdp: { sdp: str(p.sdp, 20000), type: 'offer' }, type: 'data', connectionId: conn, label: conn, reliable: true, serialization: 'json', metadata: { v: p.v } };
+  if (type === 'ANSWER') return { sdp: { sdp: str(p.sdp, 20000) || 'v=0\r\n', type: 'answer' }, type: 'data', connectionId: conn, browser: 'organicity', metadata: { v: p.v, err: p.err || null } };
+  if (type === 'CANDIDATE') return { candidate: p.c, type: 'data', connectionId: conn };
+  return p;
 }
-export function signalHost(url, room, answer) {
-  let stop = false; const seen = new Set();
-  (async () => {
-    while (!stop) {
-      try {
-        const r = await fetch(`${roomUrl(url, room)}/pending`);
-        if (r.ok) for (const { id, code } of await r.json()) {
-          if (seen.has(id)) continue; seen.add(id);
-          try { const ans = await answer(code); await fetch(`${roomUrl(url, room)}/answer/${id}`, { method: 'POST', body: ans }); } catch { /* a bad join code */ }
-        }
-      } catch { /* server away: keep trying */ }
-      await new Promise((ok) => setTimeout(ok, 1500));
+export function fromPeerJs(type, p) {
+  if (!p || typeof p !== 'object') return {};
+  if (type === 'OFFER') return { v: p.metadata?.v, sdp: p.sdp?.sdp };
+  if (type === 'ANSWER') return p.metadata?.err ? { v: p.metadata?.v, err: p.metadata.err } : { v: p.metadata?.v, sdp: p.sdp?.sdp };
+  if (type === 'CANDIDATE') return { c: p.candidate };
+  return p;
+}
+export class PeerRelay {
+  constructor(url = PEERJS_HOST) { this.url = url; this.ws = null; this.onmsg = null; this.onclose = null; this.beat = null; this.conn = `dc_${rid(10)}`; }
+  open(id) {
+    return new Promise((ok, fail) => {
+      let opened = false;
+      const ws = this.ws = new WebSocket(`${this.url}?key=peerjs&id=${encodeURIComponent(id)}&token=${rid()}&version=1.5.4`);
+      const t = setTimeout(() => { if (!opened) { fail(new Error('The signalling relay did not answer. Check your internet connection.')); try { ws.close(); } catch { /* */ } } }, 12000);
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m.type === 'OPEN') { opened = true; clearTimeout(t); this.beat = setInterval(() => { try { ws.send('{"type":"HEARTBEAT"}'); } catch { /* closing */ } }, 5000); ok(this); }
+        else if (m.type === 'ID-TAKEN') { clearTimeout(t); fail(Object.assign(new Error('That access code is already in use.'), { taken: true })); }
+        else if (m.type === 'ERROR' && !opened) { clearTimeout(t); fail(new Error(`The signalling relay refused: ${m.payload?.msg || 'error'}`)); }
+        else if (m.type !== 'HEARTBEAT') this.onmsg?.({ type: m.type, src: m.src, payload: fromPeerJs(m.type, m.payload) });
+      };
+      ws.onerror = () => { if (!opened) { clearTimeout(t); fail(new Error('Could not reach the signalling relay. Check your internet connection.')); } };
+      ws.onclose = () => { clearInterval(this.beat); if (opened) this.onclose?.(); };
+    });
+  }
+  send(to, type, payload) { if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type, payload: toPeerJs(type, payload, this.conn), dst: to })); }
+  close() { clearInterval(this.beat); this.onclose = null; try { this.ws?.close(); } catch { /* already closed */ } }
+}
+export class HttpRelay {
+  constructor(url) { this.url = String(url).replace(/\/+$/, ''); this.onmsg = null; this.onclose = null; this.stop = false; }
+  async open(id) {
+    this.id = id;
+    const r = await fetch(`${this.url}/m/${encodeURIComponent(id)}?wait=0`).catch(() => null);
+    if (!r?.ok) throw new Error(r?.status === 409 ? 'That access code is already in use.' : 'Could not reach the signalling server.');
+    (async () => {   // long-poll for messages until closed
+      while (!this.stop) {
+        try {
+          const q = await fetch(`${this.url}/m/${encodeURIComponent(id)}`);
+          if (q.ok) for (const m of await q.json()) this.onmsg?.(m); else await new Promise((ok) => setTimeout(ok, 1500));
+        } catch { await new Promise((ok) => setTimeout(ok, 1500)); }
+      }
+    })();
+    return this;
+  }
+  async send(to, type, payload) {
+    try {
+      const r = await fetch(`${this.url}/m/${encodeURIComponent(to)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ src: this.id, type, payload }) });
+      if (r.status === 404) this.onmsg?.({ type: 'EXPIRE', src: to });
+    } catch { /* the server is away: the handshake times out */ }
+  }
+  close() { this.stop = true; }
+}
+export const makeRelay = (url) => (url && /^https?:\/\//.test(url) ? new HttpRelay(url) : new PeerRelay(url && /^wss?:\/\//.test(url) ? url : undefined));
+
+// ---------------------------------------------------------------- access codes and the handshake
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // no 0/O or 1/I to mix up
+export function newAccessCode() { const b = new Uint8Array(8); crypto.getRandomValues(b); const c = [...b].map((x) => CODE_CHARS[x % CODE_CHARS.length]).join(''); return `${c.slice(0, 4)}-${c.slice(4)}`; }
+export function normCode(c) { const t = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return t.length === 8 && [...t].every((x) => CODE_CHARS.includes(x)) ? `${t.slice(0, 4)}-${t.slice(4)}` : null; }
+export const hostId = (code) => `organicity-${normCode(code).replace('-', '').toLowerCase()}`;
+const cand = (c) => (c ? { candidate: str(c.candidate, 2000), sdpMid: c.sdpMid == null ? null : str(c.sdpMid, 64), sdpMLineIndex: c.sdpMLineIndex == null ? null : num(c.sdpMLineIndex, 0, 64) } : null);
+// candidates can arrive before the description they belong to: hold them until it is set
+function candidateQueue(pc) {
+  const q = []; let ready = false;
+  return {
+    add(c) { if (!c?.candidate) return; if (ready) pc.addIceCandidate(c).catch(() => { /* a stale candidate */ }); else q.push(c); },
+    ready() { ready = true; for (const c of q.splice(0)) pc.addIceCandidate(c).catch(() => { /* a stale candidate */ }); },
+  };
+}
+
+// host: listens on the relay under its access code and answers every guest's offer
+export class HostGate {
+  constructor({ relay, code, ice = DEFAULT_ICE, onLink, onFail = () => {} }) { this.relay = relay; this.code = normCode(code); this.ice = ice; this.onLink = onLink; this.onFail = onFail; this.peers = new Map(); this.early = new Map(); }
+  async open() { this.relay.onmsg = (m) => this.msg(m).catch(() => { /* a broken handshake is dropped */ }); await this.relay.open(hostId(this.code)); return this; }
+  async msg(m) {
+    const src = typeof m.src === 'string' ? m.src.slice(0, 80) : null; if (!src) return;
+    const p = m.payload || {};
+    if (m.type === 'OFFER') {
+      if (p.v !== PROTOCOL) { this.relay.send(src, 'ANSWER', { v: PROTOCOL, err: 'The host runs a different version of the game.' }); return; }
+      this.peers.get(src)?.pc.close();
+      const pc = new RTCPeerConnection({ iceServers: this.ice }), q = candidateQueue(pc), peer = { pc, q }; this.peers.set(src, peer);
+      for (const c of this.early.get(src) || []) q.add(c); this.early.delete(src);
+      pc.onicecandidate = (e) => { if (e.candidate) this.relay.send(src, 'CANDIDATE', { c: e.candidate.toJSON() }); };
+      pc.ondatachannel = (e) => opened(e.channel, pc).then((ch) => { this.peers.delete(src); this.onLink(new Link(ch, pc)); }, (err) => { this.peers.delete(src); pc.close(); this.onFail(err); });
+      await pc.setRemoteDescription({ type: 'offer', sdp: str(p.sdp, 20000) }); q.ready();
+      await pc.setLocalDescription(await pc.createAnswer());
+      this.relay.send(src, 'ANSWER', { v: PROTOCOL, sdp: pc.localDescription.sdp });
+    } else if (m.type === 'CANDIDATE') {
+      const peer = this.peers.get(src);
+      if (peer) peer.q.add(cand(p.c));
+      else if (this.early.size < 64) { const l = this.early.get(src) || []; if (l.length < 32) l.push(cand(p.c)); this.early.set(src, l); }   // ahead of its offer
     }
-  })();
-  return () => { stop = true; };
+  }
+  close() { this.relay.close(); for (const p of this.peers.values()) p.pc.close(); this.peers.clear(); }
+}
+// guest: reach the host with this access code; resolves with the open channel and its connection
+export async function dialHost({ relay, code, ice = DEFAULT_ICE, onStatus = () => {}, answerMs = 20000, openMs = 30000 }) {
+  const c = normCode(code); if (!c) throw new Error('That is not an access code (it looks like ABCD-EFGH).');
+  onStatus('Reaching the signalling relay…');
+  await relay.open(`organicity-g${rid(14)}`);
+  const to = hostId(c), pc = new RTCPeerConnection({ iceServers: ice }), ch = pc.createDataChannel('organicity', { ordered: true }), q = candidateQueue(pc);
+  try {
+    const answer = new Promise((ok, fail) => {
+      const t = setTimeout(() => fail(new Error('No host answered with that code. Check the code, and that the host is in the game with Multiplayer open.')), answerMs);
+      relay.onmsg = (m) => {
+        if (m.src !== to) return;
+        if (m.type === 'ANSWER') { clearTimeout(t); if (m.payload?.err) fail(new Error(str(m.payload.err, 200))); else ok(m.payload); }
+        else if (m.type === 'CANDIDATE') q.add(cand(m.payload?.c));
+        else if (m.type === 'EXPIRE') { clearTimeout(t); fail(new Error('No host is online with that code.')); }
+      };
+    });
+    let held = [];   // our candidates follow the offer
+    pc.onicecandidate = (e) => { if (!e.candidate) return; const c = { c: e.candidate.toJSON() }; if (held) held.push(c); else relay.send(to, 'CANDIDATE', c); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await relay.send(to, 'OFFER', { v: PROTOCOL, sdp: pc.localDescription.sdp });
+    for (const c of held) relay.send(to, 'CANDIDATE', c); held = null;
+    onStatus('Waiting for the host…');
+    const a = await answer;
+    await pc.setRemoteDescription({ type: 'answer', sdp: str(a.sdp, 20000) }); q.ready();
+    onStatus('Connecting to the host…');
+    await opened(ch, pc, openMs);
+    return { pc, ch };
+  } catch (e) { pc.close(); throw e; }
+  finally { setTimeout(() => relay.close(), 3000); }   // late candidates are harmless once connected
 }
 
 // ---------------------------------------------------------------- the session

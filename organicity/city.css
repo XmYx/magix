@@ -274,3 +274,14 @@ body.reduced-motion * { transition: none !important; animation: none !important;
 table.term td { vertical-align: top; }
 #panel details { margin: 4px 0; } #panel summary { cursor: pointer; color: var(--acc); }
 .wt.aigov { border-color: #5c6f8a; } .wt small.gov { color: #c8d4ff; }
+/* right-to-left languages: the dock and the panel swap sides, text reads from the right */
+[dir=rtl] #dock { left: auto; right: 8px; }
+[dir=rtl] #panel { right: auto; left: 8px; }
+[dir=rtl] #fly { left: 344px; right: 92px; }
+[dir=rtl] #dock kbd { right: auto; left: 2px; }
+[dir=rtl] #top .brand { margin-right: 0; margin-left: 4px; }
+[dir=rtl] #panel, [dir=rtl] #fly, [dir=rtl] #intro, [dir=rtl] #card, [dir=rtl] .toast { text-align: right; }
+[dir=rtl] #top .stat b, [dir=rtl] input[type=number] { direction: ltr; unicode-bidi: isolate; }
+/* multiplayer access codes */
+.acode { font: 600 18px monospace; letter-spacing: 2px; color: var(--acc); user-select: all; }
+#mpAccess { font: 600 16px monospace; letter-spacing: 2px; text-transform: uppercase; width: 12ch; }

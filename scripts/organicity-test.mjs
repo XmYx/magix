@@ -1159,7 +1159,7 @@ test('platform: offline app files, content packs (sanitised, saved with the city
   const man = JSON.parse(readFileSync(new URL('manifest.webmanifest', root), 'utf8'));
   assert(man.display === 'standalone' && man.icons.length && existsSync(new URL('sw.js', root)) && existsSync(new URL('icon.svg', root)), 'PWA files missing');
   const sw = readFileSync(new URL('sw.js', root), 'utf8');
-  for (const f of ['js/packs.js', 'js/i18n.js', 'js/region.js']) assert(sw.includes(f.replace('js/', '').replace('.js', '')), `service worker misses ${f}`);
+  for (const f of ['js/packs.js', 'js/i18n.js', 'js/region.js', 'js/phrases.js', 'js/gallery.js']) assert(sw.includes(f.replace('js/', '').replace('.js', '')), `service worker misses ${f}`);
   const pack = JSON.parse(readFileSync(new URL('packs/sample-pack.json', root), 'utf8'));
   const info = registerPack(pack);
   assert(info.styles.length === 2 && info.landmarks.length === 2 && SERVICES.pk_lighthouse?.model.length === 6 && info.buildables.length === 3, 'sample pack not registered');
@@ -1171,7 +1171,7 @@ test('platform: offline app files, content packs (sanitised, saved with the city
   const save = JSON.parse(JSON.stringify(makeSave(w, s))); delete SERVICES.pk_lighthouse;
   const back = loadSave(save, { worker: false });
   assert(back.world.buildings.get(lh.id) && SERVICES.pk_lighthouse, 'city with a pack landmark did not load without the pack');
-  for (const l of ['en', 'hu', 'de']) assert(Object.keys(STRINGS[l]).length === Object.keys(STRINGS.en).length, `${l} strings incomplete`);
+  for (const l of ['en', 'hu', 'de', 'fr', 'es', 'ar']) assert(Object.keys(STRINGS[l]).length === Object.keys(STRINGS.en).length, `${l} strings incomplete`);
   assert(tr('no.such.key', 'fallback') === 'fallback', 'translation fallback wrong');
 });
 
@@ -1641,17 +1641,68 @@ test('multiplayer: join, region and views (chunked), city updates relayed, chat,
   assert(!cleanView({ S: 128, cls: '<script>', hgt: '', boxes: '' }) && !cleanView({ S: 64 }), 'a bad view was accepted');
 });
 
-test('multiplayer signalling server: a guest join code reaches the host and the answer comes back', async () => {
+test('multiplayer relay: mailboxes pass handshake messages and refuse unknown ids', async () => {
   const { server } = await import('./organicity-signal.mjs');
   await new Promise((ok) => server.listen(0, ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  const post = (id, body) => fetch(`${url}/m/${id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   try {
-    const j = await (await fetch(`${url}/r/room1/join`, { method: 'POST', body: 'OJabc' })).json();
-    const pending = await (await fetch(`${url}/r/room1/pending`)).json(); assert(pending.length === 1 && pending[0].code === 'OJabc', 'join not pending');
-    assert((await fetch(`${url}/r/room1/answer/${j.id}`)).status === 204, 'answer before it was given');
-    await fetch(`${url}/r/room1/answer/${j.id}`, { method: 'POST', body: 'OAxyz' });
-    const a = await fetch(`${url}/r/room1/answer/${j.id}`); assert(a.status === 200 && (await a.text()) === 'OAxyz', 'answer not relayed');
-    assert((await fetch(`${url}/r/room1/join`, { method: 'POST', body: 'nope' })).status === 400, 'a bad join code was accepted');
-  } finally { server.close(); }
+    assert((await post('organicity-nobody', { src: 'guest-1', type: 'OFFER', payload: {} })).status === 404, 'message to nobody accepted');
+    assert((await (await fetch(`${url}/m/organicity-host1?wait=0`)).json()).length === 0, 'mailbox not claimed');
+    assert((await post('organicity-host1', { src: 'guest-1', type: 'OFFER', payload: { sdp: 'x' } })).status === 204, 'offer not queued');
+    assert((await post('organicity-host1', { src: 'guest-1', type: 'NOPE' })).status === 400 && (await post('organicity-host1', { src: 'bad id!', type: 'OFFER' })).status === 400, 'bad message accepted');
+    const got = await (await fetch(`${url}/m/organicity-host1`)).json(); assert(got.length === 1 && got[0].type === 'OFFER' && got[0].src === 'guest-1' && got[0].payload.sdp === 'x', 'offer not delivered');
+    const wait = fetch(`${url}/m/organicity-host1`).then((r) => r.json()); await new Promise((ok) => setTimeout(ok, 50));
+    await post('organicity-host1', { src: 'guest-1', type: 'CANDIDATE', payload: { c: 1 } });
+    const late = await wait; assert(late.length === 1 && late[0].type === 'CANDIDATE', 'long poll missed a message');
+  } finally { server.closeAllConnections?.(); server.close(); }
+});
+
+test('multiplayer access codes: the host shares one code, the guest dials it through the relay and joins', async () => {
+  const mp = await import('../organicity/js/mp.js');
+  const code = mp.newAccessCode(); assert(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(code), `code ${code}`);
+  assert(mp.normCode(code.toLowerCase().replace('-', ' ')) === code && mp.normCode('ABCD-EFG') === null && mp.normCode('ABCD-EFG0') === null, 'normalising codes');
+  assert(mp.hostId(code) === `organicity-${code.replace('-', '').toLowerCase()}`, 'host id');
+  // the public relay only passes the PeerJS client's own message shapes: ours round-trip through them
+  const o = mp.toPeerJs('OFFER', { v: 1, sdp: 'v=0' }), an = mp.toPeerJs('ANSWER', { v: 1, err: 'nope' }), ca = mp.toPeerJs('CANDIDATE', { c: { candidate: 'c1' } });
+  assert(o.sdp.type === 'offer' && o.type === 'data' && o.connectionId && o.label && o.serialization && an.sdp.sdp && an.sdp.type === 'answer' && ca.candidate.candidate === 'c1', 'PeerJS shapes');
+  assert(mp.fromPeerJs('OFFER', o).sdp === 'v=0' && mp.fromPeerJs('OFFER', o).v === 1 && mp.fromPeerJs('ANSWER', an).err === 'nope' && !mp.fromPeerJs('ANSWER', an).sdp && mp.fromPeerJs('CANDIDATE', ca).c.candidate === 'c1', 'PeerJS round trip');
+  const ice = mp.parseIce('stun:stun.example.org:3478 turn:alice:s3cret@turn.example.org:3478?transport=udp junk');
+  assert(ice.length === 2 && ice[1].urls === 'turn:turn.example.org:3478?transport=udp' && ice[1].username === 'alice' && ice[1].credential === 's3cret' && !ice[0].username, 'ICE parsing');
+  // a stand-in for WebRTC: a guest's answer connects it to the host that made that answer
+  const made = new Map(); let n = 0;
+  class FakePC {
+    constructor() { this.id = ++n; this.ls = {}; this.connectionState = 'new'; this.added = []; }
+    addEventListener(t, f) { (this.ls[t] ||= []).push(f); }
+    createDataChannel() { [this.ch, this.peerCh] = mp.channelPair(); this.ch.readyState = 'connecting'; return this.ch; }
+    async createOffer() { return { type: 'offer', sdp: `offer-${this.id}` }; }
+    async createAnswer() { return { type: 'answer', sdp: `answer-${this.id}` }; }
+    async setLocalDescription(d) { this.localDescription = d; if (d.type === 'answer') made.set(d.sdp, this); setTimeout(() => this.onicecandidate?.({ candidate: { toJSON: () => ({ candidate: `cand-${this.id}`, sdpMid: '0', sdpMLineIndex: 0 }) } }), 5); }
+    async setRemoteDescription(d) {
+      this.remote = d; if (d.type !== 'answer') return;
+      const host = made.get(d.sdp); if (!host) return;
+      setTimeout(() => { this.connectionState = host.connectionState = 'connected'; this.peerCh.readyState = 'open'; host.ondatachannel?.({ channel: this.peerCh }); this.ch.readyState = 'open'; this.ch.onopen?.(); }, 30);
+    }
+    async addIceCandidate(c) { if (!this.remote) throw new Error('candidate before description'); this.added.push(c); }
+    close() { this.connectionState = 'closed'; for (const f of this.ls.connectionstatechange || []) f(); }
+  }
+  const { server } = await import('./organicity-signal.mjs');
+  await new Promise((ok) => server.listen(0, ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  globalThis.RTCPeerConnection = FakePC;
+  const hostS = new Session({ role: 'host', name: 'Host', hooks: { assignTile: () => '1,2', regionSnapshot: () => ({ id: 'r1' }) } });
+  const gate = new mp.HostGate({ relay: new mp.HttpRelay(url), code, onLink: (l) => hostS.addPeer(l) });
+  try {
+    await gate.open();
+    let bad = null; try { await mp.dialHost({ relay: new mp.HttpRelay(url), code: mp.newAccessCode(), answerMs: 3000 }); } catch (e) { bad = e.message; }
+    assert(/No host is online|No host answered/.test(bad || ''), `unknown code: ${bad}`);
+    const status = [], { pc, ch } = await mp.dialHost({ relay: new mp.HttpRelay(url), code: code.toLowerCase(), onStatus: (t) => status.push(t) });
+    assert(ch.readyState === 'open' && status.at(-1).startsWith('Connecting'), 'channel not open');
+    await new Promise((ok) => setTimeout(ok, 200));
+    assert(pc.added.some((c) => c.candidate.startsWith('cand-')), 'guest did not get the host\'s candidates');
+    const g = new Session({ role: 'guest', name: 'Guest' }), welcome = new Promise((ok) => { g.hooks.onWelcome = ok; });
+    g.attach(new Link(ch, pc)); g.hello({});
+    const w = await welcome; assert(w.you.name === 'Guest' && w.you.tile === '1,2' && hostS.players.length === 2, 'no welcome over the dialled link');
+    const left = new Promise((ok) => { hostS.hooks.onPlayers = (ps) => { if (ps.length === 1) ok(); }; }); g.close(); await left;   // leaving frees the player's slot
+  } finally { gate.close(); delete globalThis.RTCPeerConnection; server.closeAllConnections?.(); server.close(); }
 });
 
 test('multiplayer regions: host assigns land, a guest adopts the region from their side, tiles merge, land is claimed', async () => {
@@ -1885,6 +1936,114 @@ test('AD: bridge styles price spans, survive split/save, and lift windows stop v
   const lift={bridgeStyle:'movable'};assert(bridgeOpen(lift,8.25) && !bridgeOpen(lift,8.75),'shipping window');
   const {AgentSim}=await import('../organicity/js/agents.js');const agent=new AgentSim();agent.handle({type:'net',net:netSnapshot(w.net)});const edge=[...agent.net.edges.values()][0];
   agent.handle({type:'spawn',list:[{segs:[{edge:edge.id,from:1,to:edge.len-1}],kind:'car',col:1}]});agent.handle({type:'bridges',closed:[edge.id]});agent.step(1);assert(agent.T.agents[0].s===1,'car drove onto raised bridge');agent.handle({type:'bridges',closed:[]});agent.step(1);assert(agent.T.agents[0].s>1,'bridge did not reopen');
+});
+
+test('AE1: a 1024 map generates, simulates, saves and loads at its size', async () => {
+  const { setMapSize, MAP_SIZES } = await import('../organicity/js/config.js');
+  assert(MAP_SIZES.join() === '512,768,1024', 'map sizes');
+  try {
+    setMapSize(1024); assert(N === 1024, 'N is not live');
+    const w = new World(77); w.newGame?.(); assert(w.elevation.length === 1024 * 1024 && w.water.length === 1024 * 1024, 'rasters not sized');
+    const s = new Sim(w); for (let i = 0; i < 3; i++) s.dailyTick();
+    const r = createRegion(w, s); assert(r.tileSize === 1024, 'region forgot the tile size');
+    const data = w.serialize(); assert(data.size === 1024, 'save forgot the size');
+    setMapSize(512); const w2 = World.load(JSON.parse(JSON.stringify(data)));
+    assert(N === 1024 && w2.elevation.length === 1024 * 1024 && w2.net.edges.size === w.net.edges.size, 'load did not restore the size');
+    setMapSize(640); assert(N === 512, 'unknown size not refused');
+  } finally { setMapSize(512); }
+  assert(N === 512 && new World(3).elevation.length === 512 * 512, 'size did not reset');
+});
+
+test('AE2: sim reports its timings, the core pass runs off the main thread in browsers', () => {
+  const w = new World(12), s = new Sim(w); s.update?.(0.1); s.dailyTick();
+  assert(s.perf && 'dayMs' in s.perf && 'coreMs' in s.perf && 'requestMs' in s.perf, 'no perf counters');
+  const a = s.shared('clinic'), b = s.shared('clinic'); assert(a === b, 'linked sides not cached per network version');
+});
+
+test('AE3: neighbour buildings get their kinds\' details up close', async () => {
+  const { archetypes } = await import('../organicity/js/tileview.js');
+  const bx = new Int16Array([10, 10, 20, 18, 0, 6 * 4, 3,   40, 40, 60, 60, 0, 60 * 4, 7,   80, 80, 110, 100, 0, 8 * 4, 6,   130, 130, 140, 140, 0, 5 * 4, 8]);
+  const A = archetypes(bx);
+  assert(A.prism.length === 2, 'house and industry roofs');
+  assert(A.cyl.length === 1 && A.cyl[0][4] > 8, 'industry chimney');
+  assert(A.box.length === 3, 'tower crown and mast, shop awning');
+  assert(A.prism[0][6] === 0 && A.box.every((p) => p.length === 8), 'part layout');
+  const w = new World(9); w.newGame?.(); const v = viewSnapshot(w); assert(archetypes(unb64(v.boxes, Int16Array)).box !== undefined, 'view boxes decode');
+});
+
+test('AE4: the tile host runs a pool of workers, never two jobs on one tile', async () => {
+  const sent = []; class FakeWorker { constructor() { this.msgs = []; } postMessage(m) { this.msgs.push(m); sent.push({ w: this, m }); } }
+  const m = new Map(); globalThis.localStorage = { get length() { return m.size; }, key: (i) => [...m.keys()][i] ?? null, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+  const w = new World(21), s = new Sim(w), r = createRegion(w, s), here = r.tiles[r.active];   // (the sim's own core worker is not the fake)
+  globalThis.Worker = FakeWorker;
+  try {
+    const { TileHost, POOL } = await import('../organicity/js/tilehost.js?pool');
+    assert(POOL >= 1 && POOL <= 3, 'pool size');
+    for (const t of Object.values(r.tiles)) if (t !== here && Math.abs(t.x - here.x) + Math.abs(t.z - here.z) === 1) { t.kind = 'ai'; t.gov = 'ai'; }
+    const econ = { tile: () => null, occupancy: () => [], background: null };
+    const host = new TileHost(r, econ, { year: 2000, eraPace: 5 });
+    assert(host.pool.length === POOL, 'workers not pooled');
+    await host.tick();
+    const keys = sent.map((x) => x.m.key), ws = new Set(sent.map((x) => x.w));
+    assert(sent.length === POOL && new Set(keys).size === keys.length && ws.size === POOL, `jobs ${keys} on ${ws.size} workers`);
+    await host.tick(); assert(sent.length === POOL, 'busy workers took more jobs');
+    assert(sent.every((x) => x.m.size === 512), 'tile size not sent');
+    await host.done({ id: sent[0].m.id, key: sent[0].m.key, ok: false, err: 'test' });
+    assert(host.inflight.size === POOL - 1 && !host.busy, 'finished job did not free its worker');
+  } finally { delete globalThis.localStorage; delete globalThis.Worker; }
+});
+
+test('AG1: every language covers every key and phrase; Arabic reads right to left', async () => {
+  const { LANGS, RTL, phrase } = await import('../organicity/js/i18n.js');
+  const { PHRASES, PHRASE_LANGS } = await import('../organicity/js/phrases.js');
+  for (const l of Object.keys(LANGS)) assert(STRINGS[l] && Object.keys(STRINGS[l]).length === Object.keys(STRINGS.en).length, `${l} keys incomplete`);
+  for (const l of PHRASE_LANGS) assert(LANGS[l], `phrase language ${l} missing`);
+  for (const [en, tr2] of Object.entries(PHRASES)) assert(tr2.length === PHRASE_LANGS.length && tr2.every((x) => typeof x === 'string' && x), `phrase “${en}” incomplete`);
+  assert(RTL.has('ar') && !RTL.has('fr'), 'direction');
+  assert(phrase('Cancel', 'fr') === 'Annuler' && phrase('Cancel', 'ar') === 'إلغاء' && phrase('Cancel', 'en') === null && phrase('No such phrase', 'de') === null, 'phrase lookup');
+});
+
+test('AG3: desktop builds sign, notarise and update from GitHub releases', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../desktop/package.json', import.meta.url), 'utf8'));
+  assert(pkg.dependencies['electron-updater'], 'no updater');
+  assert(pkg.build.publish?.url?.includes('github.com/XmYx/magix/releases/latest/download'), 'no update feed');
+  assert(pkg.build.mac.hardenedRuntime && existsSync(new URL('../desktop/' + pkg.build.mac.entitlements, import.meta.url)), 'mac signing');
+  const main = readFileSync(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
+  assert(main.includes('backgroundThrottling: false') && main.includes('checkForUpdatesAndNotify') && main.includes('ORGANICITY_SMOKE'), 'main process');
+  const wf = readFileSync(new URL('../.github/workflows/organicity-desktop.yml', import.meta.url), 'utf8');
+  assert(wf.includes("desktop-v*") && wf.includes('contents: write') && wf.includes('action-gh-release') && wf.includes('playwright install') && wf.includes('APPLE_ID'), 'workflow');
+});
+
+test('AG4: gallery server queues, moderates, lists, serves and hides reported cities', async () => {
+  const { createGallery, clean } = await import('./organicity-gallery.mjs');
+  const { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os'), { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'gal-')), g = createGallery({ dir, token: 'sekrit', limits: { hideAfter: 2 } });
+  await new Promise((ok) => g.server.listen(0, ok));
+  const base = `http://127.0.0.1:${g.server.address().port}`, req = async (p, o = {}) => { const r = await fetch(base + p, o); return { status: r.status, body: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.arrayBuffer() }; };
+  const post = (p, body, h = {}) => req(p, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(body) });
+  const png = 'data:image/png;base64,' + Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40)]).toString('base64');
+  try {
+    const code = await encodeSave(makeSave(new World(4), new Sim(new World(4))));
+    assert((await post('/api/gallery', { title: 'x', code, shot: png })).status === 400, 'accepted without consent');
+    assert((await post('/api/gallery', { title: 'x', code, shot: 'data:image/png;base64,AAAA', consent: true })).status === 400, 'accepted a non-PNG');
+    assert((await post('/api/gallery', { title: 'x', code: 'bad code!', shot: png, consent: true })).status === 400, 'accepted a bad code');
+    const sub = await post('/api/gallery', { title: '<b>Riverside</b>', author: 'Tester', code, shot: png, consent: true, stats: { pop: 1234, year: 2001, size: 768, evil: 'x' } });
+    assert(sub.status === 202 && sub.body.status === 'pending', 'submission not queued');
+    const id = sub.body.id;
+    assert((await req('/api/gallery')).body.length === 0 && (await req(`/api/gallery/${id}`)).status === 404, 'pending entry visible');
+    assert((await post(`/api/admin/${id}/approve`, {})).status === 401 && (await post(`/api/admin/${id}/approve`, {}, { authorization: 'Bearer wrong' })).status === 401, 'moderation without token');
+    assert((await post(`/api/admin/${id}/approve`, {}, { authorization: 'Bearer sekrit' })).body.status === 'approved', 'approve');
+    const list = (await req('/api/gallery')).body; assert(list.length === 1 && list[0].title === 'bRiverside/b' && list[0].stats.size === 768 && !('evil' in list[0].stats) && !('by' in list[0]), 'listing');
+    const got = (await req(`/api/gallery/${id}`)).body; assert(got.code === code && (await decodeSave(got.code)).world, 'code round trip');
+    assert(new Uint8Array((await req(`/api/gallery/${id}/shot.png`)).body)[1] === 0x50, 'screenshot');
+    await post(`/api/gallery/${id}/report`, { reason: 'spam' }, { 'x-forwarded-for': '10.0.0.1' });
+    await post(`/api/gallery/${id}/report`, { reason: 'spam again' }, { 'x-forwarded-for': '10.0.0.1' });
+    assert((await req('/api/gallery')).body.length === 1, 'one reporter hid it');
+    await post(`/api/gallery/${id}/report`, { reason: 'rude' }, { 'x-forwarded-for': '10.0.0.2' });
+    assert((await req('/api/gallery')).body.length === 0 && g.entries()[0].status === 'hidden', 'reports did not hide it');
+    assert((await req(`/api/admin/${id}`, { method: 'DELETE', headers: { authorization: 'Bearer sekrit' } })).status === 200 && g.entries().length === 0, 'delete');
+    assert(clean('a\u0000b<c>  d', 10) === 'abc d', 'clean');
+  } finally { g.server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ------------------------------------------------------------------ runner

@@ -43,7 +43,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 900, minHeight: 600, title: 'Organicity', backgroundColor: '#161b24',
     icon: path.join(__dirname, 'resources', 'icon.png'),
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },   // the city keeps running when minimised
   });
   win.loadURL(`app://${HOST}/organicity/index.html`);
   // ORGANICITY_SMOKE=1: found a city, check it runs without errors, print the result and quit (CI)
@@ -75,9 +75,21 @@ Menu.setApplicationMenu(Menu.buildFromTemplate([
   { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, ...(app.isPackaged ? [] : [{ type: 'separator' }, { role: 'toggleDevTools' }])] },
 ]));
 
+// auto-update from GitHub releases (packaged builds only; never during the CI smoke run)
+function checkForUpdates() {
+  if (!app.isPackaged || process.env.ORGANICITY_SMOKE || process.env.ORGANICITY_NO_UPDATE) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = true; autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('error', (e) => console.warn('Update check failed:', e?.message || e));
+    autoUpdater.checkForUpdatesAndNotify().catch(() => { /* offline: try again next start */ });
+  } catch (e) { console.warn('Updater unavailable:', e.message); }
+}
+
 app.whenReady().then(() => {
   protocol.handle('app', serve);
   createWindow();
+  checkForUpdates();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

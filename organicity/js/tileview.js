@@ -4,7 +4,7 @@
 //    ground classes and heights, plus a box per building (base, height, class)
 // Used by the background tile worker and by the played city; no DOM, no three.js.
 import { N, ZONES, FLOOR_H } from './config.js';
-import { clamp } from './util.js';
+import { clamp, hash2 } from './util.js';
 import { buildingFloors } from './eras.js';
 
 export function cityBlocks(world, sim) {
@@ -42,4 +42,30 @@ export function viewSnapshot(world) {
     boxes.push(Math.round(b.x0), Math.round(b.z0), Math.round(b.x1), Math.round(b.z1), Math.round((b.baseY || 0) * 4), Math.min(32000, Math.round(h * 4)), b.svc ? 9 : 2 + b.zone);
   }
   return { S, cls: b64(cls), hgt: b64(hgt), boxes: b64(new Uint8Array(new Int16Array(boxes).buffer)), n: boxes.length / 7 };
+}
+
+// ---------------------------------------------------------------- neighbours up close
+// The procedural details that turn a neighbour's building boxes (a view's Int16 run of
+// x0 z0 x1 z1 base×4 height×4 class) into recognisable kinds of building when the camera comes
+// near: gable roofs on houses, crowns and masts on towers, chimneys and sheds on industry,
+// awnings on shops. Three shared shapes, drawn instanced: a prism (a roof, its ridge along x),
+// a box and a cylinder; each part is [x, y, z, sx, sy, sz, turn, colour].
+const ROOFS = [0x9a4a3a, 0x7a5a48, 0x5a5e66, 0xa0643e], AWNINGS = [0xc8423a, 0x3a7ac8, 0x3aa05a, 0xd8a038];
+export function archetypes(bx) {
+  const out = { prism: [], box: [], cyl: [] };
+  for (let i = 0; i + 6 < bx.length; i += 7) {
+    const x0 = bx[i], z0 = bx[i + 1], x1 = bx[i + 2], z1 = bx[i + 3], y0 = bx[i + 4] / 4, h = Math.max(0.6, bx[i + 5] / 4), cls = bx[i + 6];
+    const w = Math.max(1, (x1 - x0) * 0.8), d = Math.max(1, (z1 - z0) * 0.8), x = (x0 + x1) / 2, z = (z0 + z1) / 2, top = y0 + h, r = hash2(x0, z0, 431);
+    const turn = d > w ? Math.PI / 2 : 0, long = Math.max(w, d), short = Math.min(w, d);
+    if (cls === 3 && h <= 10) out.prism.push([x, top, z, long, Math.min(4, short * 0.45), short, turn, ROOFS[(r * ROOFS.length) | 0]]);   // houses: a pitched roof
+    else if (cls === 6) {   // industry: a low shed roof and a chimney
+      out.prism.push([x, top, z, long, 1.4, short, turn, 0x8a8e92]);
+      out.cyl.push([x + w * 0.3, y0, z + d * 0.3, 1.3, h + 4 + r * 5, 1.3, 0, 0x9a6a58]);
+    } else if (h >= 18) {   // towers: a set-back crown, the tallest a mast
+      out.box.push([x, top, z, w * 0.62, Math.max(1.2, h * 0.07), d * 0.62, 0, 0xb8bcc4]);
+      if (h >= 30) out.box.push([x, top + Math.max(1.2, h * 0.07), z, 0.35, h * 0.14, 0.35, 0, 0xd0d0d0]);
+    } else if ((cls === 5 || cls === 8) && h <= 12) out.box.push([x, y0 + 2.4, z + d / 2 + 0.55, w * 0.9, 0.25, 1.1, 0, AWNINGS[(r * AWNINGS.length) | 0]]);   // shops: an awning over the street side
+    else if (cls !== 9 && h > 3) out.box.push([x, top, z, w * 0.3, 1.2, d * 0.3, 0, 0x9aa0a8]);   // flat roofs: a plant room
+  }
+  return out;
 }

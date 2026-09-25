@@ -1,3 +1,4 @@
+import { N, setMapSize } from './config.js';
 // Organicity — boot, save/load and the frame loop.
 import { World } from './world.js';
 import { Sim } from './sim.js';
@@ -16,12 +17,13 @@ import { RegionSim } from './regionsim.js';
 import { regionMarket, aiOffers } from './resources.js';
 import { TileHost, loadView, storeView } from './tilehost.js';
 import * as saves from './saves.js';
-import { Multiplayer, joinGame, adoptRegion, savedName, saveName, iceText, setIce } from './mpgame.js';
+import { Multiplayer, joinGame, adoptRegion, savedName, saveName, iceText, setIce, relayText, setRelay } from './mpgame.js';
 import { COLORS } from './mp.js';
 import { viewSnapshot, unb64 } from './tileview.js';
 import { newPresident } from './presidents.js';
 import { fastestRoute } from './routes.js';
-import { t, LANGS, getLang, setLang } from './i18n.js';
+import { t, LANGS, getLang, setLang, watchDom } from './i18n.js';
+import { galleryUrl, listCities, fetchCity, shotUrl, reportCity } from './gallery.js';
 
 // content packs register their styles and landmarks before any city is built
 const packsReady = loadPacks();
@@ -35,8 +37,9 @@ const $ = (id) => document.getElementById(id);
 if (window.organicityDesktop) for (const a of document.querySelectorAll('#intro a[href="../index.html"]')) a.parentElement.hidden = true;
 // start screen language
 for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n, el.textContent);
+watchDom();   // the rest of the interface, as the game draws it (and right to left for Arabic)
 $('optLang').innerHTML = Object.entries(LANGS).map(([k, n]) => `<option value="${k}" ${k === getLang() ? 'selected' : ''}>${n}</option>`).join('');
-$('optLang').onchange = (e) => { setLang(e.target.value); for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n, el.textContent); };
+$('optLang').onchange = (e) => { setLang(e.target.value); for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n, el.textContent); watchDom(); };
 
 function readSave() {
   try { const s = localStorage.getItem(SAVE_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
@@ -46,6 +49,9 @@ function readSave() {
 async function boot(opts) {
   await packsReady;
   let world, sim;
+  // the tile size comes first: from the save, the region, or the new-game choice (scenarios are drawn for 512)
+  const saved = opts.mode === 'load' ? readSave() : opts.save, reg = ['tile', 'found', 'load'].includes(opts.mode) ? loadRegion() : null;
+  setMapSize(saved?.world?.size || (opts.mode === 'found' || opts.mode === 'tile' ? reg?.tileSize : null) || (opts.scenario ? 512 : opts.mapSize) || 512);
   if (opts.mode === 'load' || opts.mode === 'shared' || opts.mode === 'tile') {
     try { ({ world, sim } = loadSave(opts.mode === 'load' ? readSave() : opts.save)); }
     catch (e) { alert(`Could not load the ${opts.mode === 'shared' ? 'shared' : 'saved'} city: ${e.message}\nStarting a new one instead.`); opts = { mode: 'new' }; }
@@ -75,7 +81,7 @@ async function boot(opts) {
   world.edgeStubs = stubsFor(region, region.active);
   if (opts.mode === 'found') {
     for (const st of world.edgeStubs) {
-      const edge = st.side === 'west' ? [0.5, st.pos] : st.side === 'east' ? [511.5, st.pos] : st.side === 'north' ? [st.pos, 0.5] : [st.pos, 511.5];
+      const edge = st.side === 'west' ? [0.5, st.pos] : st.side === 'east' ? [N - 0.5, st.pos] : st.side === 'north' ? [st.pos, 0.5] : [st.pos, N - 0.5];
       const inward = st.side === 'west' ? [34, st.pos] : st.side === 'east' ? [478, st.pos] : st.side === 'north' ? [st.pos, 34] : [st.pos, 478];
       const res = world.buildRoad(world.net.snap(edge[0], edge[1], 3), null, world.net.snap(inward[0], inward[1], 3), 'street', 0);
       if (!res.edges.length) continue;
@@ -130,7 +136,7 @@ async function boot(opts) {
   // saved games: the whole region, kept in the browser's (or the desktop app's) own database
   const gameMeta = () => { const t = region.tiles[region.active]; return { meta: { city: t.name, pop: Math.round(sim.stats.pop || 0), money: Math.round(sim.money), year: sim.year, day: sim.day, cities: Object.values(region.tiles).filter((q) => q.kind === 'city' && q.gov !== 'ai').length, sandbox: !!sim.sandbox }, thumb: t.summary?.thumb || null }; };
   const ui = new UI(world, sim, rend, {
-    mp: () => mp, mpConfig: { iceText, setIce, savedName, colors: COLORS },
+    mp: () => mp, mpConfig: { iceText, setIce, relayText, setRelay, savedName, colors: COLORS },
     save() {
       persist().then(() => ui.toast('City saved in this browser.', 'good'), (e) => ui.toast('Could not save: ' + e.message, 'bad'));
     },
@@ -241,28 +247,39 @@ async function boot(opts) {
   if (sim.sandbox) ui.toast(`Sandbox mode · seed ${world.seed}`, 'info');
   if (sim.scenario && SCENARIOS[sim.scenario]) ui.toast(`${SCENARIOS[sim.scenario].name}: ${SCENARIOS[sim.scenario].desc}`, 'info');
 
-  let last = performance.now(), saveT = 0, hostT = 0, autoT = 0;
-  function loop(now) {
-    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  let last = performance.now(), saveT = 0, autoT = 0, lastFrame = performance.now();
+  // the simulation, saves and autosaves; drawn frames add the view on top
+  function step(dt) {
     sim.update(dt);
+    saveT += dt;
+    if (saveT > 120 && world.buildings.size) { saveT = 0; persist().catch(() => { /* quota exceeded — keep playing */ }); }
+    autoT = (autoT || 0) + dt;
+    if (autoT > 300 && world.buildings.size) { autoT = 0; persist().then(() => saves.saveGame({ id: saves.AUTOSAVE_ID, name: 'Autosave', ...gameMeta() })).catch(() => { /* keep playing */ }); }   // every five minutes
+  }
+  function loop(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now; lastFrame = performance.now();
+    step(dt);
     tools.update(dt);
     rend.frame(dt);
     ui.update(dt);
     audio.update(dt);
-    saveT += dt; hostT = (hostT || 0) + dt;
-    if (hostT > 1) { hostT = 0; host.tick(); }
-    if (saveT > 120 && world.buildings.size) { saveT = 0; persist().catch(() => { /* quota exceeded — keep playing */ }); }
-    autoT = (autoT || 0) + dt;
-    if (autoT > 300 && world.buildings.size) { autoT = 0; persist().then(() => saves.saveGame({ id: saves.AUTOSAVE_ID, name: 'Autosave', ...gameMeta() })).catch(() => { /* keep playing */ }); }   // every five minutes
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+  // the region's other cities run on a timer, not on drawn frames, so they keep going while the window is hidden
+  setInterval(() => host.tick(), 1000);
+  // minimised in the desktop app (which keeps its timers running): no frames are drawn, so the city steps on a timer
+  if (window.organicityDesktop) setInterval(() => {
+    const now = performance.now(); if (now - lastFrame < 600) return;
+    const dt = Math.min(1, (now - last) / 1000); last = now;
+    for (let left = dt; left > 1e-3; left -= 0.1) step(Math.min(0.1, left));
+  }, 250);
 }
 
 function newOpts() {
   const raw = $('optSeed').value.trim();
   const seed = raw === '' ? NaN : /^\d+$/.test(raw) ? +raw : [...raw].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 1e6;
-  return { mode: 'new', seed, mapPreset: $('optMap').value, sandbox: $('optSandbox').checked, scenario: $('optScenario').value || null, startYear: +$('optEra').value, eraPace: +$('optPace').value };
+  return { mode: 'new', seed, mapPreset: $('optMap').value, mapSize: +($('optSize')?.value || 512), sandbox: $('optSandbox').checked, scenario: $('optScenario').value || null, startYear: +$('optEra').value, eraPace: +$('optPace').value };
 }
 
 const fillScenarios = () => { $('optScenario').innerHTML = `<option value="">Free play</option>${Object.entries(SCENARIOS).map(([k, s]) => `<option value="${k}" title="${esc(s.desc)}">${esc(s.name)}${s.def ? ` · ${esc(s.def.pack)}` : ''}</option>`).join('')}`; };
@@ -279,6 +296,24 @@ async function importCity(text) {
 }
 $('introImport').onclick = () => $('importFile').click();
 $('importFile').onchange = async (e) => { const f = e.target.files[0]; if (f) importCity(await f.text()); };
+
+// the opt-in gallery: cities other players shared, approved by a moderator (gallery.js)
+if (galleryUrl()) $('introGallery').hidden = false;
+$('introGallery').onclick = async () => {
+  const el = $('galleryList'), url = galleryUrl(); el.hidden = !el.hidden; if (el.hidden) return;
+  el.innerHTML = '<p class="dim">Loading the gallery…</p>';
+  try {
+    const list = await listCities(url);
+    el.innerHTML = list.length ? list.map((c) => `<div class="game"><img src="${esc(shotUrl(url, c.id))}" alt="" loading="lazy"><div><b>${esc(c.title)}</b><small>by ${esc(c.author)} · ${(c.stats?.pop || 0).toLocaleString('en-US')} people · ${c.stats?.year || ''}${c.stats?.size > 512 ? ` · ${c.stats.size} map` : ''}</small></div><div class="row"><button class="primary" data-gal-open="${esc(c.id)}">Open</button><button data-gal-report="${esc(c.id)}">Report</button></div></div>`).join('') : '<p class="dim">No cities in the gallery yet.</p>';
+  } catch (e) { el.innerHTML = `<p class="dim">The gallery could not be reached: ${esc(e.message)}</p>`; }
+};
+$('galleryList').onclick = async (e) => {
+  const b = e.target.closest('button'); if (!b) return; const url = galleryUrl();
+  try {
+    if (b.dataset.galOpen) { b.disabled = true; importCity((await fetchCity(url, b.dataset.galOpen)).code); }
+    if (b.dataset.galReport) { const why = prompt('What is wrong with this city? A moderator will look at it.'); if (why != null) { await reportCity(url, b.dataset.galReport, why); b.textContent = 'Reported'; b.disabled = true; } }
+  } catch (err) { alert(err.message); b.disabled = false; }
+};
 
 let pending = null;
 try { pending = JSON.parse(sessionStorage.getItem(BOOT_KEY) || 'null'); } catch { pending = null; }
@@ -299,22 +334,28 @@ else {
   $('introMp').onclick = () => { $('mpJoin').hidden = !$('mpJoin').hidden; };
   $('mpName').value = savedName();
   $('mpColors').innerHTML = 'Colour ' + COLORS.map((c, i) => `<label class="chk"><input type="radio" name="mpcol" value="${c}" ${i === 1 ? 'checked' : ''}><span class="sw" style="background:${c}"></span></label>`).join('');
-  $('mpStart').onclick = async () => {
+  $('mpRelay').value = relayText(); $('mpIce').value = iceText();
+  $('mpAccess').oninput = (e) => { const v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); e.target.value = v.length > 4 ? `${v.slice(0, 4)}-${v.slice(4)}` : v; };
+  $('mpAccess').onkeydown = (e) => { if (e.key === 'Enter') $('mpStart').click(); };
+  const join = async (manual) => {
     const name = $('mpName').value.trim(); if (!name) { $('mpStatus').textContent = 'Pick a name first.'; return; }
-    saveName(name); $('mpStart').disabled = true;
-    const url = $('mpUrl').value.trim(), room = $('mpRoom').value.trim();
+    const code = manual ? null : $('mpAccess').value.trim(); if (!manual && !code) { $('mpStatus').textContent = 'Type the access code the host gave you.'; return; }
+    saveName(name); setRelay($('mpRelay').value); setIce($('mpIce').value);
+    $('mpStart').disabled = $('mpMakeCode').disabled = true;
     let give; const answer = () => new Promise((ok) => { give = ok; });
     $('mpConnect').onclick = () => give?.($('mpAnswer').value.trim());
     $('mpCopy').onclick = () => { navigator.clipboard?.writeText($('mpCode').value); $('mpStatus').textContent = 'Join code copied. Send it to the host.'; };
     try {
-      const { session, welcome } = await joinGame({ name, color: document.querySelector('input[name=mpcol]:checked')?.value, url: url && room ? url : null, room, answer,
+      const { session, welcome } = await joinGame({ name, color: document.querySelector('input[name=mpcol]:checked')?.value, code, answer,
         onCode: (c) => { $('mpCodes').hidden = false; $('mpCode').value = c; }, onStatus: (t) => { $('mpStatus').textContent = t; } });
-      const { region: r, tile, year } = adoptRegion(welcome), t = r.tiles[tile], code = localStorage.getItem(cityKey(r, tile));
+      const { region: r, tile, year } = adoptRegion(welcome), t = r.tiles[tile], saved = localStorage.getItem(cityKey(r, tile));
       $('intro').hidden = true;
-      if (code) boot({ mode: 'tile', tileKey: tile, save: await decodeSave(code), mp: session });
+      if (saved) boot({ mode: 'tile', tileKey: tile, save: await decodeSave(saved), mp: session });
       else boot({ mode: 'found', tileKey: tile, seed: t.seed, mapPreset: t.preset, year, startYear: [...START_ERAS].reverse().find((y) => y <= year) || 2000, eraPace: 1, mp: session });
-    } catch (e) { $('mpStatus').textContent = 'Could not join: ' + e.message; $('mpStart').disabled = false; }
+    } catch (e) { $('mpStatus').textContent = 'Could not join: ' + e.message; $('mpStart').disabled = $('mpMakeCode').disabled = false; }
   };
+  $('mpStart').onclick = () => join(false);
+  $('mpMakeCode').onclick = () => join(true);
   // saved games on the start screen
   saves.listGames().then((list) => {
     $('introGames').hidden = false;

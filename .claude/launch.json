@@ -4,14 +4,31 @@
     {
       "name": "site",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765"
+      ],
       "port": 8765
     },
     {
       "name": "site-alt",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8777"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8777"
+      ],
       "port": 8777
+    },
+    {
+      "name": "gallery",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "GALLERY_ADMIN_TOKEN=devtoken node scripts/organicity-gallery.mjs 8788"
+      ],
+      "port": 8788
     }
   ]
 }

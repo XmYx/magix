@@ -12,7 +12,7 @@ import { genBuilding, genBoxes, rgb, hex } from './procgen.js';
 import { hash2, clamp, fbm } from './util.js';
 import { technology, buildingFloors } from './eras.js';
 import { frontAt, WEATHER } from './weather.js';
-import { unb64 } from './tileview.js';
+import { unb64, archetypes } from './tileview.js';
 import { deposits, DEPOSITS, DEP_BY_ID } from './resources.js';
 import { coverageMask, undergroundY } from './grid.js';
 import { flowField, flowAt, flowTexture, waterRoute, routeLen, routeAt, ferryPairs } from './water.js';
@@ -163,7 +163,7 @@ export class Renderer {
     this.scene.background = new THREE.Color(SKY);
     this.scene.fog = new THREE.Fog(SKY, 400, 1200);
     this.camera = new THREE.PerspectiveCamera(30, 1, 2, 3000);
-    this.cam = { x: 150, z: 262, yaw: 0.75, pitch: 0.9, dist: 210 };
+    this.cam = { x: 150 * N / 512, z: N / 2 + 6, yaw: 0.75, pitch: 0.9, dist: 210 };
     this.hemi = new THREE.HemisphereLight(0xe8f2ff, 0x6a7a4a, 1.35);
     this.sun = new THREE.DirectionalLight(0xfff0d8, 2.3);
     this.sun.castShadow = true;
@@ -242,7 +242,7 @@ export class Renderer {
 
   // ---------------------------------------------------------------- ground
   initGround() {
-    const S = 256, st = N / S;   // a vertex every 2 cells, fine enough to show levelled road bands
+    const S = N / 2, st = N / S;   // a vertex every 2 cells, fine enough to show levelled road bands
     this.groundS = S;
     const pos = new Float32Array((S + 1) * (S + 1) * 3), uv = new Float32Array((S + 1) * (S + 1) * 2);
     for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) { const k = j * (S + 1) + i; pos.set([i * st, 0, j * st], k * 3); uv.set([(i * st) / N, (j * st) / N], k * 2); }
@@ -1365,8 +1365,8 @@ export class Renderer {
   // sized by their population (AI neighbours and your own other cities alike).
   setRegion(region, views = {}) {
     this.regionArgs = [region, views];
-    if (this.regionGroup) { this.regionGroup.traverse((o) => { o.geometry?.dispose(); if (!o.userData.shared) { o.material?.map?.dispose(); o.material?.dispose?.(); } }); this.scene.remove(this.regionGroup); }
-    this.nbRoads = [];
+    if (this.regionGroup) { this.regionGroup.traverse((o) => { if (o.isInstancedMesh) o.dispose(); else o.geometry?.dispose(); if (!o.userData.shared) { o.material?.map?.dispose(); o.material?.dispose?.(); } }); this.scene.remove(this.regionGroup); }
+    this.nbRoads = []; this.nbTiles = []; this.nbStats = { tiles: 0, detailed: 0, parts: 0 };
     const g = this.regionGroup = new THREE.Group(), here = region?.tiles[region.active]; this.scene.add(g);
     if (!here) return;
     const boxes = [];
@@ -1433,13 +1433,17 @@ export class Renderer {
     if (this.fullTiles) { mat.map = this.tileTexture(cls, S, GROUND); mat.vertexColors = false; }
     const ground = new THREE.Mesh(geo, mat); ground.receiveShadow = true; ground.userData.ground = true; grp.add(ground);
     const WALL = { 3: 0xd8cfb8, 4: 0xc8c2b4, 5: 0x9fb4d8, 6: 0xd8cc9a, 7: 0xb4b8cc, 8: 0xd8b8c0, 9: 0xd0d0cc };
-    const boxes = [], facades = [], KEY = { 3: 'res', 4: 'res', 5: 'com', 6: 'ind', 7: 'off', 8: 'shop' };
+    const boxes = [], plain = [], facades = [], KEY = { 3: 'res', 4: 'res', 5: 'com', 6: 'ind', 7: 'off', 8: 'shop' };
     for (let i = 0; i < bx.length; i += 7) {
       const x0 = bx[i], z0 = bx[i + 1], x1 = bx[i + 2], z1 = bx[i + 3], y0 = bx[i + 4] / 4, h = Math.max(0.6, bx[i + 5] / 4), w = Math.max(1, (x1 - x0) * 0.8), d = Math.max(1, (z1 - z0) * 0.8);
       // the tiles next door get windows (lit at night) and roofs; farther ones plain boxes
       if (side && KEY[bx[i + 6]]) facades.push({ x: ox + (x0 + x1) / 2, z: oz + (z0 + z1) / 2, w, d, y0, h, key: KEY[bx[i + 6]], col: WALL[bx[i + 6]], roof: 0x8a8580 });
-      else boxes.push(coloredBox(w, h, d, ox + (x0 + x1) / 2, y0 + h / 2, oz + (z0 + z1) / 2, WALL[bx[i + 6]] || 0xcccccc));
+      else plain.push(coloredBox(w, h, d, ox + (x0 + x1) / 2, y0 + h / 2, oz + (z0 + z1) / 2, WALL[bx[i + 6]] || 0xcccccc));
     }
+    const plainMesh = plain.length ? new THREE.Mesh(mergeGeometries(plain), this.lodMat ||= new THREE.MeshLambertMaterial({ vertexColors: true })) : null;
+    if (plainMesh) { plainMesh.userData.shared = true; plainMesh.castShadow = false; grp.add(plainMesh); }
+    // up close its buildings get their kinds' details (streamNeighbours)
+    if (bx.length) { this.nbTiles.push({ ox, oz, bx, side, grp, plainMesh, detail: null }); this.nbStats.tiles++; }
     if (facades.length) for (const [key, gp] of Object.entries(genBoxes(facades))) {
       if (!gp.p.length) continue;
       const g2 = new THREE.BufferGeometry();
@@ -1458,6 +1462,52 @@ export class Renderer {
     }
     if (boxes.length) { const m = new THREE.Mesh(mergeGeometries(boxes), new THREE.MeshLambertMaterial({ vertexColors: true })); m.castShadow = false; grp.add(m); }
     return grp;
+  }
+
+  // Neighbours up close: the tiles near the camera get their buildings' procedural details
+  // (and, beyond the tiles next door, lit facades in place of plain boxes); the details are
+  // built one tile at a time as the camera comes near and dropped again when it leaves.
+  streamNeighbours(dt) {
+    this.nbT = (this.nbT || 0) + dt; if (this.nbT < 0.4 || !this.nbTiles?.length) return; this.nbT = 0;
+    const cx = this.cam.x, cz = this.cam.z, reach = Math.max(140, this.cam.dist * 1.1);
+    const gap = (t) => Math.hypot(Math.max(t.ox - cx, 0, cx - (t.ox + N)), Math.max(t.oz - cz, 0, cz - (t.oz + N)));
+    let built = false;
+    for (const t of [...this.nbTiles].sort((a, b) => gap(a) - gap(b))) {
+      const near = this.cam.dist < 700 && gap(t) < reach;
+      if (near && !t.detail && !built) { t.detail = this.neighbourDetail(t); t.grp.add(t.detail); if (t.plainMesh && t.detail.userData.facades) t.plainMesh.visible = false; built = true; }
+      else if (!near && t.detail && gap(t) > reach * 1.25) { t.grp.remove(t.detail); t.detail.traverse((o) => { if (o.isInstancedMesh) o.dispose(); else o.geometry?.dispose(); }); t.detail = null; if (t.plainMesh) t.plainMesh.visible = true; }
+    }
+    this.nbStats.detailed = this.nbTiles.filter((t) => t.detail).length;
+    this.nbStats.parts = this.nbTiles.reduce((n, t) => n + (t.detail?.userData.parts || 0), 0);
+  }
+  neighbourDetail(t) {
+    const g = new THREE.Group(), A = archetypes(t.bx), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
+    if (!this.nbShapes) {
+      const prism = new THREE.BufferGeometry();   // a roof: unit base, ridge along x at height 1
+      prism.setAttribute('position', new THREE.Float32BufferAttribute([-.5,0,-.5, .5,0,-.5, .5,1,0, -.5,0,-.5, .5,1,0, -.5,1,0,  .5,0,.5, -.5,0,.5, -.5,1,0, .5,0,.5, -.5,1,0, .5,1,0,  -.5,0,-.5, -.5,1,0, -.5,0,.5,  .5,0,-.5, .5,0,.5, .5,1,0], 3));
+      prism.computeVertexNormals();
+      this.nbShapes = { prism, box: new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 6).translate(0, 0.5, 0), mat: new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }) };
+    }
+    let parts = 0;
+    for (const kind of ['prism', 'box', 'cyl']) {
+      const L = A[kind]; if (!L.length) continue;
+      const im = new THREE.InstancedMesh(this.nbShapes[kind], this.nbShapes.mat, L.length); im.userData.shared = true;
+      L.forEach(([x, y, z, sx, sy, sz, turn, c], i) => { q.setFromAxisAngle(up, turn); m4.compose(new THREE.Vector3(t.ox + x, y, t.oz + z), q, new THREE.Vector3(sx, sy, sz)); im.setMatrixAt(i, m4); im.setColorAt(i, col.setHex(c)); });
+      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); g.add(im); parts += L.length;
+    }
+    if (!t.side) {   // tiles beyond the ones next door: lit facades up close, like the neighbours'
+      const WALL = { 3: 0xd8cfb8, 4: 0xc8c2b4, 5: 0x9fb4d8, 6: 0xd8cc9a, 7: 0xb4b8cc, 8: 0xd8b8c0 }, KEY = { 3: 'res', 4: 'res', 5: 'com', 6: 'ind', 7: 'off', 8: 'shop' }, bx = t.bx, facades = [];
+      for (let i = 0; i + 6 < bx.length; i += 7) if (KEY[bx[i + 6]]) facades.push({ x: t.ox + (bx[i] + bx[i + 2]) / 2, z: t.oz + (bx[i + 1] + bx[i + 3]) / 2, w: Math.max(1, (bx[i + 2] - bx[i]) * 0.8), d: Math.max(1, (bx[i + 3] - bx[i + 1]) * 0.8), y0: bx[i + 4] / 4, h: Math.max(0.6, bx[i + 5] / 4), key: KEY[bx[i + 6]], col: WALL[bx[i + 6]], roof: 0x8a8580 });
+      for (const [key, gp] of Object.entries(genBoxes(facades))) {
+        if (!gp.p.length) continue;
+        const g2 = new THREE.BufferGeometry();
+        g2.setAttribute('position', new THREE.Float32BufferAttribute(gp.p, 3)); g2.setAttribute('normal', new THREE.Float32BufferAttribute(gp.n, 3));
+        g2.setAttribute('color', new THREE.Float32BufferAttribute(gp.c, 3)); g2.setAttribute('uv', new THREE.Float32BufferAttribute(gp.u, 2));
+        g.add(new THREE.Mesh(g2, this.mats[key] || this.mats.plain));   // material shared, geometry this tile's own
+      }
+      g.userData.facades = true;
+    }
+    g.userData.parts = parts; return g;
   }
 
   // Full texture for another tile: its map drawn pixel by pixel at 4× the view (ground grain,
@@ -1799,7 +1849,7 @@ export class Renderer {
     if(this.liftState !== liftState) { this.liftState=liftState; this.roadVer=-1; }
     if (this.roadVer !== w.net.version || this.roadEra !== this.sim.tech.style) this.buildRoads();
     if (this.flowVer !== this.sim.flowVersion && (this.overlay === 'traffic' || this.flowVer === -1)) this.colorTraffic();
-    this.syncBuildings(); this.updateLod();
+    this.syncBuildings(); this.updateLod(); this.streamNeighbours(dt);
     this.updateBuildingTints(); this.updateRoute();
     if (this.treeSeason && this.treeSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) w.dirty.trees = true;
     if (this.regionArgs && this.regionSeason && this.regionSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) this.setRegion(...this.regionArgs);   // woods next door change with the seasons

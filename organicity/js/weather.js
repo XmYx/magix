@@ -1,3 +1,4 @@
+import { N } from './config.js';
 // Seeded weather uses its own random stream: simulation workload cannot change it.
 import { mulberry32 } from './util.js';
 export const WEATHER = {
@@ -27,7 +28,7 @@ export function frontAt(w, x, z, t) {
   if (!w || !w.front) return 1;
   if (w.type === 'clear') return 0;
   if (w.type !== 'rain' && w.type !== 'snow' && w.type !== 'storm') return 1;
-  const F = w.front, dx = Math.sin(w.direction), dz = Math.cos(w.direction), N2 = 256;
+  const F = w.front, dx = Math.sin(w.direction), dz = Math.cos(w.direction), N2 = N / 2;
   const p = (x - N2) * dx + (z - N2) * dz, q = (x - N2) * dz - (z - N2) * dx, L = 900 + 2 * F.width;
   const pos = ((t * F.speed + F.phase) % L) - L / 2, band = Math.exp(-(((p - pos) / F.width) ** 2));
   if (w.type !== 'storm') return 0.15 + 0.85 * band;

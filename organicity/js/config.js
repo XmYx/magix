@@ -1,9 +1,20 @@
 // Organicity — shared constants and definitions.
 // World units: 1 grid cell = 1 unit (~1.5 m). The world is N × N cells.
 
-export const N = 512;              // fine land grid (zoning, occupancy, lots)
+// The tile size is chosen per game (512, 768 or 1024 cells a side) and set before a world is
+// built; every module reads these live bindings, and modules with values derived from the size
+// register for onMapSize.
+export const MAP_SIZES = [512, 768, 1024];
+export let N = 512;                // fine land grid (zoning, occupancy, lots)
 export const FC = 8;               // coarse field cell size (land value, pollution, coverage…)
-export const FN = N / FC;          // coarse field resolution
+export let FN = N / FC;            // coarse field resolution
+const sizeListeners = [];
+export function onMapSize(f) { sizeListeners.push(f); }
+export function setMapSize(n) {
+  n = MAP_SIZES.includes(+n) ? +n : 512;
+  if (n !== N) { N = n; FN = N / FC; for (const f of sizeListeners) f(N); }
+  return N;
+}
 export const DEPTH = 18;           // max zonable distance from a road's kerb
 export const FLOOR_H = 1.6;        // storey height
 export const BAY_W = 2.0;          // facade bay width (window texture repeat)
