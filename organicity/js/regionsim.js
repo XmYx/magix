@@ -217,7 +217,7 @@ export class RegionSim {
     return this._ctx ||= {
       get day() { return self.day; },
       portal: (a, b, x, z) => self.portalBetween(a, b, x, z),
-      toll: (k) => self.tiles.get(k)?.policy.toll ?? 0,
+      toll: (k, from) => self.tollOf(k, from),
       reachable: (k) => self.reach.get(k) || [k],
       openJobs: (k) => self.open.get(k) || [],
       vacantHomes: (k) => self.vacant.get(k) || [],
@@ -228,7 +228,7 @@ export class RegionSim {
 
   // ---------------------------------------------------------------- the month
   month(sim) {
-    this.day = sim.day; const ctx = this.ctx();
+    this.day = sim.day; this.freeBorders(); const ctx = this.ctx();
     for (const st of this.tiles.values()) st.month = { tolls: 0, crossings: 0, migIn: 0, migOut: 0 };
     // 1–3. policy is in force; the played city's blocks refresh; rents, salaries and services follow policy
     if (this.world.net.version !== this.netVersion) { this.netVersion = this.world.net.version; this.buildPortals(); }
@@ -276,7 +276,7 @@ export class RegionSim {
     if (d.tile !== from) {
       this.tiles.get(from).month.migOut++; this.tiles.get(d.tile).month.migIn++;
       const p = this.portalBetween(from, d.tile, fromHome?.x ?? N / 2, fromHome?.z ?? N / 2);
-      if (p) { p.flow.migrants++; this.toll(d.tile, 1); }
+      if (p) { p.flow.migrants++; this.toll(d.tile, 1, from); }
       if (from === this.active) this.events.push({ type: 'move', out: true, building: f.home, node: p?.node, from, to: d.tile });
       else if (d.tile === this.active) this.events.push({ type: 'move', out: false, building: d.home.id, node: this.portalBetween(this.active, from, d.home.x, d.home.z)?.node, from, to: d.tile });
     }
@@ -284,7 +284,10 @@ export class RegionSim {
     f.tile = d.tile; f.home = d.home.id;
     if (d.tile === this.active) { const b = this.world.buildings.get(d.home.id); if (b) b.occ = Math.min(b.hh, (b.occ || 0) + 1); }
   }
-  toll(k, crossings) { const st = this.tiles.get(k); if (!st) return; st.month.crossings += crossings; st.month.tolls += crossings * st.policy.toll; }
+  toll(k, crossings, from = null) { const st = this.tiles.get(k); if (!st) return; st.month.crossings += crossings; st.month.tolls += crossings * this.tollOf(k, from); }
+  // toll-free agreements (deals of kind 'tollfree'): crossings between the two tiles pay nothing, either way
+  freeBorders() { this.free = new Set((this.r.deals || []).filter((d) => d.kind === 'tollfree').flatMap((d) => [`${d.seller}|${d.buyer}`, `${d.buyer}|${d.seller}`])); }
+  tollOf(k, from = null) { if (from != null && this.free?.has(`${k}|${from}`)) return 0; return this.tiles.get(k)?.policy.toll ?? 0; }
 
   // AI cities send migrants to a linked tile of yours when an ordinary family would be
   // clearly better off there (aggregate flow; each migrant becomes a family agent).
@@ -304,7 +307,7 @@ export class RegionSim {
           const f = newFamily(this.e.nextFamily++, to, dest.id, this.r.seed, { moved: this.day, next: this.day + 360 }); this.families.set(f.id, f);
           const j = bestJob(ctx, f, to, dest); if (j) this.takeJob(f, j);
           st.month.migOut++; dst.month.migIn++;
-          const p = this.portalBetween(k, to, N / 2, N / 2); if (p) { p.flow.migrants++; this.toll(to, 1); }
+          const p = this.portalBetween(k, to, N / 2, N / 2); if (p) { p.flow.migrants++; this.toll(to, 1, k); }
           if (to === this.active) { const b = this.world.buildings.get(dest.id); if (b) b.occ = Math.min(b.hh, (b.occ || 0) + 1); this.events.push({ type: 'move', out: false, building: dest.id, node: this.portalBetween(to, k, dest.x, dest.z)?.node, from: k, to }); }
         }
         this.vacant.set(to, [...dst.housing.values()].filter((h) => h.occ < h.units));
@@ -338,25 +341,25 @@ export class RegionSim {
       if (f.wt == null || f.wt === f.tile) continue;
       const home = this.tiles.get(f.tile)?.housing.get(f.home), p = home && this.portalBetween(f.tile, f.wt, home.x, home.z); if (!p) continue;
       p.flow.out += 1;
-      this.toll(f.wt, WORKDAYS); this.toll(f.tile, WORKDAYS);
+      this.toll(f.wt, WORKDAYS, f.tile); this.toll(f.tile, WORKDAYS, f.wt);
     }
     // freight: each tile's industry ships to linked neighbours, favouring low tolls and big markets
     for (const [k, st] of this.tiles) {
       const out = k === this.active ? sim.stats.filled?.I || 0 : [...st.jobs.values()].filter((j) => j.kind === 'I').reduce((s, j) => s + j.filled, 0);
       const trucks = out / 8; if (trucks < 0.5) continue;
-      const opts = (this.reach.get(k) || []).filter((to) => to !== k).map((to) => [to, ((this.tiles.get(to).occ || 0) + 50) * Math.exp(-this.tiles.get(to).policy.toll / 10)]);
+      const opts = (this.reach.get(k) || []).filter((to) => to !== k).map((to) => [to, ((this.tiles.get(to).occ || 0) + 50) * Math.exp(-this.tollOf(to, k) / 10)]);
       const tot = opts.reduce((s, [, wgt]) => s + wgt, 0); if (!tot) continue;
       for (const [to, wgt] of opts) {
         const n = trucks * wgt / tot, ps = this.between.get(`${k}>${to}`) || [];
         for (const p of ps) p.flow.freight += n / ps.length;
-        this.toll(to, n);
+        this.toll(to, n, k);
       }
     }
     // the played city's exits: commuters out and in, freight, migrants
     const flows = new Map(), perDay = 1 / WORKDAYS;
     for (const p of this.portals) {
       if (p.tile !== this.active || p.node == null) continue;
-      const f = flows.get(p.node) || { in: 0, out: 0, freight: 0, migrants: 0, to: p.to, toll: this.tiles.get(p.to).policy.toll };
+      const f = flows.get(p.node) || { in: 0, out: 0, freight: 0, migrants: 0, to: p.to, toll: this.tollOf(p.to, this.active) };
       f.out += p.flow.out; f.freight += p.flow.freight * perDay; f.migrants += p.flow.migrants;
       flows.set(p.node, f);
     }

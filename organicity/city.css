@@ -285,3 +285,6 @@ table.term td { vertical-align: top; }
 /* multiplayer access codes */
 .acode { font: 600 18px monospace; letter-spacing: 2px; color: var(--acc); user-select: all; }
 #mpAccess { font: 600 16px monospace; letter-spacing: 2px; text-transform: uppercase; width: 12ch; }
+#panel .final { border: 2px solid var(--acc); padding: 6px 8px; margin-bottom: 8px; background: #2a2618; }
+#panel .final h3 { margin-top: 0; color: var(--acc); }
+#mpGames .game { grid-template-columns: 1fr; } #mpGames .game .row { grid-column: 1; }

@@ -63,8 +63,8 @@ export function cleanBlocks(b) {
 // ---------------------------------------------------------------- links: JSON messages over a channel, chunked
 export class Link {
   constructor(ch, pc = null) {
-    this.ch = ch; this.pc = pc; this.parts = new Map(); this.onmsg = null; this.onclose = null; this.closed = false;   // (holding pc keeps it from being collected)
-    const gone = () => { if (this.closed) return; this.closed = true; this.onclose?.(); };
+    this.ch = ch; this.pc = pc; this.parts = new Map(); this.onmsg = null; this.onclose = null; this.closed = false; this.lastSeen = Date.now();   // (holding pc keeps it from being collected)
+    const gone = this.gone = () => { if (this.closed) return; this.closed = true; this.onclose?.(); };
     ch.onmessage = (e) => this.recv(typeof e === 'string' ? e : e.data);
     ch.onclose = gone;
     if (pc) pc.addEventListener('connectionstatechange', () => { if (['failed', 'closed'].includes(pc.connectionState)) gone(); });
@@ -76,6 +76,7 @@ export class Link {
     for (let i = 0; i < n; i++) this.ch.send(JSON.stringify({ type: '_chunk', id, i, n, d: s.slice(i * CHUNK, (i + 1) * CHUNK) }));
   }
   recv(s) {
+    this.lastSeen = Date.now();
     if (typeof s !== 'string' || s.length > CHUNK * 2 + 200) return;
     let m; try { m = JSON.parse(s); } catch { return; }
     if (!m || typeof m !== 'object') return;
@@ -89,6 +90,7 @@ export class Link {
     this.onmsg?.(m);
   }
   close() { try { this.ch.close(); } catch { /* already closed */ } try { this.pc?.close(); } catch { /* already closed */ } }
+  drop() { this.close(); this.gone(); }   // closed from our side, and reported like a lost link
 }
 // two connected in-memory channels (tests)
 export function channelPair() {
@@ -197,6 +199,10 @@ export class HttpRelay {
   }
   close() { this.stop = true; }
 }
+// the self-hosted relay's lobby of open games (the public PeerJS relay has none)
+export const hasLobby = (url) => !!url && /^https?:\/\//.test(url);
+export async function lobbyList(url) { const r = await fetch(`${String(url).replace(/\/+$/, '')}/lobby`); if (!r.ok) throw new Error('The relay has no lobby.'); const l = await r.json(); return Array.isArray(l) ? l.slice(0, 100).filter((g) => normCode(g.code)) : []; }
+export async function lobbyPost(url, listing) { try { await fetch(`${String(url).replace(/\/+$/, '')}/lobby`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(listing) }); } catch { /* the relay is away: try again next time */ } }
 export const makeRelay = (url) => (url && /^https?:\/\//.test(url) ? new HttpRelay(url) : new PeerRelay(url && /^wss?:\/\//.test(url) ? url : undefined));
 
 // ---------------------------------------------------------------- access codes and the handshake
@@ -274,16 +280,32 @@ export async function dialHost({ relay, code, ice = DEFAULT_ICE, onStatus = () =
 // hooks (all optional): regionSnapshot(), views(), assignTile(player, want) → key|null,
 // applyCity(key, summary, view, blocks), tileState(key), applyTile(key, tile, view), onWelcome(msg),
 // onPlayers(list), onChat(line), onOffer(offer, from), onDecision(offer, accept), setDeals(deals),
-// addDeal(deal) → deals, pay(amount, note), claim(player, key) → bool, onBye(reason)
+// addDeal(deal) → deals, pay(amount, note), claim(player, key) → bool, onBye(reason),
+// onDrop() (guest: the link died without a goodbye; the game reconnects)
+export const BEAT_MS = 5000, STALE_MS = 20000;
 export class Session {
   constructor({ role, name, color = COLORS[0], hooks = {} }) {
     this.role = role; this.hooks = hooks; this.links = new Map(); this.nextId = 2; this.offers = new Map(); this.chat = []; this.banned = new Set();
+    this.tokens = new Map(); this.token = null; this.beat = null;   // rejoin tokens: host keeps one per player name, a guest its own
     this.me = { id: role === 'host' ? 'p1' : null, name: str(name, 24) || 'Mayor', color, tile: null };
     this.players = role === 'host' ? [this.me] : [];
   }
   get connected() { return this.role === 'host' ? this.links.size > 0 : !!this.host; }
   // ---- host
+  // both sides ping every few seconds; a link that stays silent is closed, which a guest takes as a drop
+  startBeat() {
+    if (this.beat) return;
+    this.beat = setInterval(() => this.pulse(), BEAT_MS);
+    this.beat.unref?.();
+  }
+  pulse(now = Date.now()) {
+    for (const l of this.role === 'host' ? [...this.links.values()] : this.host ? [this.host] : []) {
+      if (now - (l.lastSeen || now) > STALE_MS) { l.drop(); continue; }
+      try { l.send({ type: 'ping' }); } catch { /* closing */ }
+    }
+  }
   addPeer(link) {
+    this.startBeat();
     const id = 'p' + this.nextId++; this.links.set(id, link);
     link.onmsg = (m) => this.fromGuest(id, m);
     link.onclose = () => {
@@ -299,15 +321,22 @@ export class Session {
       if (p) return;
       if (m.v !== PROTOCOL) { this.links.get(id)?.send({ type: 'bye', reason: 'Different game version.' }); return; }
       if (this.banned.has(str(m.name, 24).trim().toLowerCase())) { this.links.get(id)?.send({ type: 'bye', reason: 'The host removed you from this game.' }); setTimeout(() => this.links.get(id)?.close(), 200); return; }
+      // a player coming back with their token takes over their old place (the old link may not have noticed it died)
+      const nameKey = str(m.name, 24).trim().toLowerCase(), tok = str(m.want?.token, 40), resumed = !!tok && this.tokens.get(nameKey) === tok;
+      if (resumed) {
+        const old = this.players.find((q) => q.id !== this.me.id && q.name.toLowerCase() === nameKey);
+        if (old) { const ol = this.links.get(old.id); this.links.delete(old.id); this.players = this.players.filter((q) => q !== old); if (ol) { ol.onclose = null; ol.close(); } }
+      }
       const taken = new Set(this.players.map((q) => q.color));
       let nm = str(m.name, 24).trim() || `Mayor ${id}`; while (this.players.some((q) => q.name === nm)) nm = `${nm.slice(0, 21)} ${id}`;   // names are unique: they own land
       const player = { id, name: nm, color: COLORS.includes(m.color) && !taken.has(m.color) ? m.color : COLORS.find((c) => !taken.has(c)) || COLORS[0], tile: null };
       player.tile = H.assignTile?.(player, { tile: isKey(m.want?.tile) ? m.want.tile : null, rid: str(m.want?.rid, 40) }) ?? null;
       this.players.push(player);
-      this.links.get(id)?.send({ type: 'welcome', v: PROTOCOL, you: player, region: H.regionSnapshot?.(), views: H.views?.(), players: this.players, chat: this.chat.slice(-30) });
+      const token = resumed ? tok : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); this.tokens.set(player.name.toLowerCase(), token); if (!resumed) H.tokensChanged?.(Object.fromEntries(this.tokens));
+      this.links.get(id)?.send({ type: 'welcome', v: PROTOCOL, you: player, token, region: H.regionSnapshot?.(), views: H.views?.(), players: this.players, chat: this.chat.slice(-30), rules: H.rules?.() || null });
       this.broadcast({ type: 'players', players: this.players }, id); H.onPlayers?.(this.players);
       if (player.tile) this.broadcast({ type: 'tile', key: player.tile, tile: H.tileState?.(player.tile) }, id);
-      this.say(`${player.name} joined the region${player.tile ? '' : ' (no free tile)'}.`, null);
+      this.say(resumed ? `${player.name} reconnected.` : `${player.name} joined the region${player.tile ? '' : ' (no free tile)'}.`, null);
       return;
     }
     if (!p) return;
@@ -356,7 +385,7 @@ export class Session {
       const deal = { seller: o.deal.role === 'sell' ? f.tile : t.tile, buyer: o.deal.role === 'sell' ? t.tile : f.tile, kind: o.deal.kind, amount: o.deal.amount, price: o.deal.price, players: [f.name, t.name] };
       const deals = this.hooks.addDeal?.(deal); this.broadcast({ type: 'deals', deals });
     }
-    this.say(`${t?.name} accepted ${f?.name}'s ${o.deal ? `${o.deal.kind} contract` : `payment of ₵${Math.round(o.money).toLocaleString('en-US')}`}.`, null);
+    this.say(`${t?.name} accepted ${f?.name}'s ${o.deal ? (o.deal.kind === 'tollfree' ? 'toll-free border' : `${o.deal.kind} contract`) : `payment of ₵${Math.round(o.money).toLocaleString('en-US')}`}.`, null);
   }
   onDecisionLocal(o, accept) { if (accept && o.money && !o.deal) this.hooks.pay?.(-o.money, 'sent'); this.hooks.onDecision?.(o, accept); }
   // host: remove a player (they can't rejoin under that name this session; their land stays theirs)
@@ -378,18 +407,22 @@ export class Session {
   }
   // ---- guest
   attach(link) {
-    this.host = link;
+    this.host = link; this.ended = false; this.startBeat();
     link.onmsg = (m) => this.fromHost(m);
-    link.onclose = () => { this.host = null; this.hooks.onBye?.('The host left the game.'); };
+    link.onclose = () => {
+      if (this.host !== link) return; this.host = null;
+      if (this.ended) return;
+      if (this.hooks.onDrop) this.hooks.onDrop(); else this.hooks.onBye?.('The host left the game.');
+    };
   }
   hello(want = {}) { this.host?.send({ type: 'hello', v: PROTOCOL, name: this.me.name, color: this.me.color, want }); }
   fromHost(m) {
     const H = this.hooks;
     if (m.type === 'welcome') {
-      this.me = { ...this.me, ...m.you }; this.players = Array.isArray(m.players) ? m.players.slice(0, 16) : [];
+      this.me = { ...this.me, ...m.you }; if (typeof m.token === 'string') this.token = m.token.slice(0, 40); this.players = Array.isArray(m.players) ? m.players.slice(0, 16) : [];
       this.chat = Array.isArray(m.chat) ? m.chat.slice(-30) : [];
       const views = {}; for (const [k, v] of Object.entries(m.views || {})) { const cv = cleanView(v); if (isKey(k) && cv) views[k] = cv; }
-      H.onWelcome?.({ you: this.me, region: m.region, views, players: this.players });
+      H.onWelcome?.({ you: this.me, token: this.token, region: m.region, views, players: this.players, chat: this.chat, rules: m.rules && typeof m.rules === 'object' ? m.rules : null });
     } else if (m.type === 'tile' && isKey(m.key)) H.applyTile?.(m.key, m.tile || {}, cleanView(m.view));
     else if (m.type === 'players' && Array.isArray(m.players)) { this.players = m.players.slice(0, 16); const me = this.players.find((p) => p.id === this.me.id); if (me) this.me = { ...this.me, tile: me.tile }; H.onPlayers?.(this.players); }
     else if (m.type === 'chat' && m.line) { const line = { from: str(m.line.from, 24) || null, color: COLORS.includes(m.line.color) ? m.line.color : null, text: str(m.line.text, 300), t: num(m.line.t) }; this.chat.push(line); H.onChat?.(line); }
@@ -397,13 +430,15 @@ export class Session {
     else if (m.type === 'decision' && m.offer) { const o = { ...this.cleanOffer(m.offer), from: this.me.id }; this.onDecisionLocal(o, !!m.accept); }
     else if (m.type === 'deals' && Array.isArray(m.deals)) H.setDeals?.(m.deals.slice(0, 200));
     else if (m.type === 'bought' && isKey(m.key)) H.onBought?.({ key: m.key, ok: !!m.ok, price: num(m.price, 0, 1e12), err: str(m.err, 200), code: typeof m.code === 'string' && m.code.length < 4e6 ? m.code : null });
-    else if (m.type === 'bye') H.onBye?.(str(m.reason, 200));
+    else if (m.type === 'rules' && m.rules && typeof m.rules === 'object') H.onRules?.(m.rules);
+    else if (m.type === 'bye') { this.ended = true; H.onBye?.(str(m.reason, 200)); }
   }
   // ---- either side
   sendCity(key, summary, view, blocks) {
     if (this.role === 'host') { this.me.pop = summary?.pop; this.me.money = summary?.money; this.broadcast({ type: 'tile', key, tile: this.hooks.tileState?.(key), view }); this.broadcast({ type: 'players', players: this.players }); this.hooks.onPlayers?.(this.players); }
     else this.host?.send({ type: 'city', key, summary, view, blocks });
   }
+  sendRules(rules) { if (this.role === 'host') this.broadcast({ type: 'rules', rules }); }
   sendTile(key, view) { if (this.role === 'host') this.broadcast({ type: 'tile', key, tile: this.hooks.tileState?.(key), view }); }
   sendChat(text) { text = str(text, 300).trim(); if (!text) return; if (this.role === 'host') this.say(text, this.me); else this.host?.send({ type: 'chat', text }); }
   propose(to, { money = 0, deal = null } = {}) {
@@ -424,7 +459,7 @@ export class Session {
     if (r.ok) { this.sendTile(key); this.say(`${this.me.name} bought the city of ${r.name || 'an AI governor'} for ₵${Math.round(r.price).toLocaleString('en-US')}.`, null); }
   }
   claim(key) { if (this.role === 'host') { if (this.hooks.claim?.(this.me, key)) this.sendTile(key); } else this.host?.send({ type: 'claim', key }); }
-  close() { for (const l of this.links.values()) l.close(); this.host?.close(); }
+  close() { clearInterval(this.beat); this.beat = null; this.ended = true; for (const l of this.links.values()) l.close(); this.host?.close(); }
 }
 
 // a leaderboard from the players' cities

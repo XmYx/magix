@@ -5,11 +5,13 @@
 // looks again. Data lives in plain files under ./gallery-data. No dependencies.
 //   GALLERY_ADMIN_TOKEN=… node scripts/organicity-gallery.mjs [port]     (default 8788)
 // Public endpoints (CORS open):
-//   GET  /api/gallery                   → [{ id, title, author, stats, created }] approved, newest first
+//   GET  /api/gallery                   → [{ id, title, author, stats, created, likes }] approved
+//        ?sort=new|top  &size=512|768|1024  &era=1800|1900|2000|2100 (the century of its year)  &q=text in title or author
 //   GET  /api/gallery/<id>              → { …entry, code } the city's share code
 //   GET  /api/gallery/<id>/shot.png     → the screenshot
 //   POST /api/gallery                   { title, author, code, shot: 'data:image/png;base64,…', stats, consent: true } → 202 { id, status: 'pending' }
 //   POST /api/gallery/<id>/report       { reason } → { ok }
+//   POST /api/gallery/<id>/like         → { likes } (one like per visitor; again takes it back)
 // Moderation (Authorization: Bearer <GALLERY_ADMIN_TOKEN>), and a page for it at /admin:
 //   GET  /api/admin/entries             → every entry with its status and reports
 //   POST /api/admin/<id>/<approve|reject|hide>
@@ -20,7 +22,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, unlinkS
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const LIMITS = { body: 3 * 1024 * 1024, code: 2 * 1024 * 1024, shot: 1024 * 1024, title: 60, author: 40, reason: 200, perHour: 6, reportsPerHour: 30, hideAfter: 3, pending: 200 };
+export const LIMITS = { body: 3 * 1024 * 1024, code: 2 * 1024 * 1024, shot: 1024 * 1024, title: 60, author: 40, reason: 200, perHour: 6, reportsPerHour: 30, likesPerHour: 120, hideAfter: 3, pending: 200 };
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // plain text: no control characters or markup, trimmed to a length
@@ -37,7 +39,13 @@ export function createGallery({ dir = 'gallery-data', token = process.env.GALLER
   const hits = new Map();   // rate limits: key → times in the last hour
   const limited = (key, n) => { const now = Date.now(), t = (hits.get(key) || []).filter((x) => now - x < 3600e3); if (t.length >= n) { hits.set(key, t); return true; } t.push(now); hits.set(key, t); return false; };
   const isAdmin = (req) => { if (!token) return false; const a = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, '')), b = Buffer.from(token); return a.length === b.length && timingSafeEqual(a, b); };
-  const pub = ({ id, title, author, stats, created }) => ({ id, title, author, stats, created });
+  const pub = ({ id, title, author, stats, created, likes }) => ({ id, title, author, stats, created, likes: likes?.length || 0 });
+  // the approved list, filtered and sorted as asked
+  function listing(q) {
+    const size = +q.get('size') || 0, era = +q.get('era') || 0, text = clean(q.get('q'), 60).toLowerCase(), top = q.get('sort') === 'top';
+    return entries.filter((e) => e.status === 'approved' && (!size || e.stats.size === size) && (!era || Math.floor(e.stats.year / 100) * 100 === era) && (!text || `${e.title} ${e.author}`.toLowerCase().includes(text)))
+      .sort((a, b) => (top ? (b.likes?.length || 0) - (a.likes?.length || 0) : 0) || b.created.localeCompare(a.created)).slice(0, 200).map(pub);
+  }
   const send = (res, code, body = '', type = 'application/json') => {
     res.writeHead(code, { 'content-type': type, 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, authorization', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -69,16 +77,21 @@ export function createGallery({ dir = 'gallery-data', token = process.env.GALLER
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'OPTIONS') return send(res, 204);
-      const path = new URL(req.url, 'http://x').pathname;
+      const url = new URL(req.url, 'http://x'), path = url.pathname;
       if (path === '/admin' && req.method === 'GET') return send(res, 200, ADMIN_PAGE, 'text/html; charset=utf-8');
-      if (path === '/api/gallery' && req.method === 'GET') return send(res, 200, entries.filter((e) => e.status === 'approved').sort((a, b) => b.created.localeCompare(a.created)).slice(0, 200).map(pub));
+      if (path === '/api/gallery' && req.method === 'GET') return send(res, 200, listing(url.searchParams));
       if (path === '/api/gallery' && req.method === 'POST') return await submit(req, res);
-      let m = path.match(/^\/api\/gallery\/([0-9a-f]{12})(\/shot\.png|\/report)?$/);
+      let m = path.match(/^\/api\/gallery\/([0-9a-f]{12})(\/shot\.png|\/report|\/like)?$/);
       if (m) {
         const e = entries.find((x) => x.id === m[1]), admin = isAdmin(req);
         if (!e || (e.status !== 'approved' && !admin)) return send(res, 404, { error: 'not found' });
         if (!m[2] && req.method === 'GET') return send(res, 200, { ...pub(e), code: readFileSync(join(files, e.id + '.code'), 'utf8') });
         if (m[2] === '/shot.png' && req.method === 'GET') return send(res, 200, readFileSync(join(files, e.id + '.png')), 'image/png');
+        if (m[2] === '/like' && req.method === 'POST') {
+          const r = who(req); if (limited('l' + r, L.likesPerHour)) return send(res, 429, { error: 'too many likes' });
+          e.likes ||= []; const i = e.likes.indexOf(r); if (i >= 0) e.likes.splice(i, 1); else e.likes.push(r);
+          save(); return send(res, 200, { likes: e.likes.length, liked: i < 0 });
+        }
         if (m[2] === '/report' && req.method === 'POST') {
           const d = await readJson(req).catch(() => ({})), r = who(req);
           if (limited('r' + r, L.reportsPerHour)) return send(res, 429, { error: 'too many reports' });

@@ -63,6 +63,7 @@
         <button id="introImport" title="Open a city shared as an .organicity file" data-i18n="intro.import">Import city…</button><input id="importFile" type="file" accept=".organicity,.json,application/json,text/plain" hidden>
         <button id="introGames" hidden>Load game…</button>
         <button id="introGallery" hidden data-i18n="intro.gallery">Browse gallery</button>
+        <button id="introRejoin" class="primary" hidden>Rejoin game</button>
         <button id="introMp">Join multiplayer…</button><input id="gameFile" type="file" accept=".organicity-game,.json,application/json" hidden>
         <button id="introBack" hidden>Cancel</button>
       </div>
@@ -73,7 +74,8 @@
         <label>Your name <input id="mpName" type="text" maxlength="24" autocomplete="off"></label>
         <div class="row" id="mpColors"></div>
         <label>Access code from the host <input id="mpAccess" type="text" maxlength="12" placeholder="ABCD-EFGH" autocomplete="off" spellcheck="false"></label>
-        <div class="row"><button id="mpStart" class="primary">Join</button></div>
+        <div class="row"><button id="mpStart" class="primary">Join</button><button id="mpLobby">Find open games</button></div>
+        <div id="mpGames" class="games" hidden></div>
         <p id="mpStatus" class="dim"></p>
         <details><summary>Connection settings</summary>
           <label>Signalling relay <input id="mpRelay" type="text" placeholder="public PeerJS relay"></label>

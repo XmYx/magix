@@ -17,8 +17,8 @@ import { RegionSim } from './regionsim.js';
 import { regionMarket, aiOffers } from './resources.js';
 import { TileHost, loadView, storeView } from './tilehost.js';
 import * as saves from './saves.js';
-import { Multiplayer, joinGame, adoptRegion, savedName, saveName, iceText, setIce, relayText, setRelay } from './mpgame.js';
-import { COLORS } from './mp.js';
+import { Multiplayer, joinGame, adoptRegion, savedName, saveName, iceText, setIce, relayText, setRelay, GOALS } from './mpgame.js';
+import { COLORS, hasLobby, lobbyList } from './mp.js';
 import { viewSnapshot, unb64 } from './tileview.js';
 import { newPresident } from './presidents.js';
 import { fastestRoute } from './routes.js';
@@ -128,7 +128,9 @@ async function boot(opts) {
   };
   for (const q of Object.values(region.tiles)) if (q.kind === 'ai' && q.exitNode != null && q.home == null) q.home = region.active;
   const leave = async (next) => {
-    if (mp?.active && !confirm('Leaving this city ends your multiplayer session (you can rejoin later with the same name). Continue?')) return;
+    // in multiplayer the session resumes by itself after the switch: a guest rejoins with its token,
+    // a host opens the region again under the same code (guests reconnect meanwhile)
+    if (mp?.active) next = { ...next, resume: mp.role === 'host' ? { rehost: { name: mp.me.name, color: mp.me.color, listed: !!mp.listed } } : { rejoin: true } };
     mp?.leave();
     try { await persist(); } catch (e) { ui.toast('Could not store this city: ' + e.message, 'bad'); return; }
     sessionStorage.setItem(BOOT_KEY, JSON.stringify(next)); location.reload();
@@ -136,7 +138,7 @@ async function boot(opts) {
   // saved games: the whole region, kept in the browser's (or the desktop app's) own database
   const gameMeta = () => { const t = region.tiles[region.active]; return { meta: { city: t.name, pop: Math.round(sim.stats.pop || 0), money: Math.round(sim.money), year: sim.year, day: sim.day, cities: Object.values(region.tiles).filter((q) => q.kind === 'city' && q.gov !== 'ai').length, sandbox: !!sim.sandbox }, thumb: t.summary?.thumb || null }; };
   const ui = new UI(world, sim, rend, {
-    mp: () => mp, mpConfig: { iceText, setIce, relayText, setRelay, savedName, colors: COLORS },
+    mp: () => mp, mpConfig: { iceText, setIce, relayText, setRelay, savedName, colors: COLORS, goals: GOALS },
     save() {
       persist().then(() => ui.toast('City saved in this browser.', 'good'), (e) => ui.toast('Could not save: ' + e.message, 'bad'));
     },
@@ -156,7 +158,7 @@ async function boot(opts) {
     deleteGame: (id) => saves.deleteGame(id),
     async exportGame(id, name) { try { download(`${(name || 'city').replace(/[^\w-]+/g, '-')}.organicity-game`, await saves.exportGame(id), 'application/json'); } catch (e) { ui.toast('Could not export: ' + e.message, 'bad'); } },
     async importGame(file) { try { await saves.importGame(await file.text()); ui.toast('Saved game imported.', 'good'); } catch (e) { ui.toast('Could not import: ' + e.message, 'bad'); } },
-    region: () => region,
+    region: () => region, saveRegion: () => saveRegion(region),
     renameTile(key, name) { const t = region.tiles[key]; if (!t || !name?.trim()) return; t.name = name.trim().slice(0, 24); saveRegion(region); syncRegion(); ui.renderWorldMap(); },
     addDeal(deal) { addDeal(region, deal); saveRegion(region); syncRegion(); },
     removeDeal(id) { removeDeal(region, id); saveRegion(region); syncRegion(); },
@@ -244,6 +246,8 @@ async function boot(opts) {
   mp = new Multiplayer({ region, econ, sim, world, rend, ui, tilehost: host, redrawRegion, syncRegion });
   window.city.mp = mp;
   if (opts.mp) mp.attachGuest(opts.mp);
+  if (opts.resume?.rejoin) mp.rejoin((t) => ui.toast(t, 'info')).then(() => ui.toast('Back in the multiplayer game.', 'good'), (e) => ui.toast(`Could not rejoin: ${e.message} (Multiplayer panel to try again)`, 'warn'));
+  else if (opts.resume?.rehost) { mp.host(opts.resume.rehost.name, opts.resume.rehost.color, null, { listed: !!opts.resume.rehost.listed }); ui.toast('Hosting again: players reconnect by themselves.', 'info'); }
   if (sim.sandbox) ui.toast(`Sandbox mode · seed ${world.seed}`, 'info');
   if (sim.scenario && SCENARIOS[sim.scenario]) ui.toast(`${SCENARIOS[sim.scenario].name}: ${SCENARIOS[sim.scenario].desc}`, 'info');
 
@@ -348,13 +352,34 @@ else {
     try {
       const { session, welcome } = await joinGame({ name, color: document.querySelector('input[name=mpcol]:checked')?.value, code, answer,
         onCode: (c) => { $('mpCodes').hidden = false; $('mpCode').value = c; }, onStatus: (t) => { $('mpStatus').textContent = t; } });
-      const { region: r, tile, year } = adoptRegion(welcome), t = r.tiles[tile], saved = localStorage.getItem(cityKey(r, tile));
+      const { region: r, tile, year } = adoptRegion(welcome, { code }), t = r.tiles[tile], saved = localStorage.getItem(cityKey(r, tile)), R = r.mp.rules;
       $('intro').hidden = true;
       if (saved) boot({ mode: 'tile', tileKey: tile, save: await decodeSave(saved), mp: session });
-      else boot({ mode: 'found', tileKey: tile, seed: t.seed, mapPreset: t.preset, year, startYear: [...START_ERAS].reverse().find((y) => y <= year) || 2000, eraPace: 1, mp: session });
+      else boot({ mode: 'found', tileKey: tile, seed: t.seed, mapPreset: t.preset, year: R.startYear ? null : year, startYear: R.startYear || [...START_ERAS].reverse().find((y) => y <= year) || 2000, eraPace: 1, sandbox: R.sandbox, mp: session });   // the host's rules for new cities
     } catch (e) { $('mpStatus').textContent = 'Could not join: ' + e.message; $('mpStart').disabled = $('mpMakeCode').disabled = false; }
   };
   $('mpStart').onclick = () => join(false);
+  // open games listed on a self-hosted relay's lobby
+  $('mpLobby').onclick = async () => {
+    const url = $('mpRelay').value.trim(), el = $('mpGames'); el.hidden = false;
+    if (!hasLobby(url)) { el.innerHTML = '<p class="dim">Open games are listed only on a self-hosted relay (scripts/organicity-signal.mjs): give its address under Connection settings. With the public relay, ask the host for their access code.</p>'; return; }
+    el.innerHTML = '<p class="dim">Asking the relay…</p>';
+    try {
+      const games = await lobbyList(url);
+      el.innerHTML = games.length ? games.map((g) => `<div class="game"><div><b>${esc(g.name)}</b><small>hosted by ${esc(g.host)} · ${g.players} player${g.players === 1 ? '' : 's'} · ${esc(g.goal)}</small></div><div class="row"><button data-lobby-code="${esc(g.code)}">Use code ${esc(g.code)}</button></div></div>`).join('') : '<p class="dim">No open games right now.</p>';
+    } catch (e) { el.innerHTML = `<p class="dim">${esc(e.message)}</p>`; }
+  };
+  $('mpGames').onclick = (e) => { const b = e.target.closest('[data-lobby-code]'); if (b) { $('mpAccess').value = b.dataset.lobbyCode; $('mpStatus').textContent = 'Code filled in: press Join.'; } };
+  // a guest coming back (after a reload or a crash): straight into the game they were in, with their token
+  const was = loadRegion()?.mp;
+  if (was?.code && was.host && was.player && was.host !== was.player) {
+    $('introRejoin').hidden = false; $('introRejoin').textContent = `Rejoin ${was.host}'s game`;
+    $('introRejoin').onclick = () => {
+      $('mpJoin').hidden = false; $('mpName').value = was.player; $('mpAccess').value = was.code;
+      const c = document.querySelector(`input[name=mpcol][value="${was.color}"]`); if (c) c.checked = true;
+      join(false);
+    };
+  }
   $('mpMakeCode').onclick = () => join(true);
   // saved games on the start screen
   saves.listGames().then((list) => {

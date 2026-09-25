@@ -1237,6 +1237,22 @@ test('economy 1 — portals: exits pair across tiles; AI cities accept any exit;
   assert(!r2.econ.portals.some((p) => p.tile === r2.homeKey && p.to === r2.upKey) && !r2.econ.reach.get(r2.homeKey).includes(r2.upKey), 'unmatched exits linked');
 });
 
+test('diplomacy: a toll-free border waives tolls between two tiles, both ways, and only there', () => {
+  const { s, r, econ, upKey, homeKey } = econFixture({ northToll: 6 });
+  econ.freeBorders();
+  const west = econ.portals.find((p) => p.tile === homeKey && econ.tile(p.to).kind === 'ai')?.to;
+  assert(econ.tollOf(upKey, homeKey) === 6 && econ.ctx().toll(upKey, homeKey) === 6, 'toll before the agreement');
+  r.deals = [{ id: 1, seller: homeKey, buyer: upKey, kind: 'tollfree', amount: 1, price: 0, players: ['A', 'B'] }];
+  econ.freeBorders();
+  assert(econ.tollOf(upKey, homeKey) === 0 && econ.tollOf(homeKey, upKey) === 0 && econ.ctx().toll(upKey, homeKey) === 0, 'agreement not honoured');
+  assert(econ.tollOf(upKey, west) === 6 && econ.tollOf(upKey) === 6, 'agreement leaked to other borders');
+  econ.tile(upKey).month = { tolls: 0, crossings: 0, migIn: 0, migOut: 0 };
+  econ.toll(upKey, 10, homeKey); econ.toll(upKey, 10, west);
+  assert(econ.tile(upKey).month.crossings === 20 && econ.tile(upKey).month.tolls === 60, 'crossings or tolls miscounted');
+  econ.month(s);   // runs with the agreement in force
+  assert(econ.free.has(`${upKey}|${homeKey}`), 'month dropped the agreement');
+});
+
 test('economy 2 — families: one per occupied home, reconciled with the city, with a budget', () => {
   const { w, s, econ, homeKey } = econFixture();
   const occ = [...w.buildings.values()].filter((b) => b.hh > 0 && !b.svc).reduce((t, b) => t + Math.round(b.occ || 0), 0);
@@ -1654,6 +1670,13 @@ test('multiplayer relay: mailboxes pass handshake messages and refuse unknown id
     const wait = fetch(`${url}/m/organicity-host1`).then((r) => r.json()); await new Promise((ok) => setTimeout(ok, 50));
     await post('organicity-host1', { src: 'guest-1', type: 'CANDIDATE', payload: { c: 1 } });
     const late = await wait; assert(late.length === 1 && late[0].type === 'CANDIDATE', 'long poll missed a message');
+    // the lobby: hosts list open games by access code; bad codes and markup are refused
+    const lob = (body) => fetch(`${url}/lobby`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert((await lob({ code: 'nope', name: 'x' })).status === 400, 'bad code listed');
+    assert((await lob({ code: 'ABCD-EFGH', name: '<b>Riverside</b>', host: 'Ann', players: 99, goal: 'free play' })).status === 204, 'listing refused');
+    const { lobbyList } = await import('../organicity/js/mp.js');
+    let games = await lobbyList(url); assert(games.length === 1 && games[0].name === 'bRiverside/b' && games[0].players === 16, 'lobby listing');
+    await lob({ code: 'ABCD-EFGH', close: true }); games = await lobbyList(url); assert(games.length === 0, 'closed game still listed');
   } finally { server.closeAllConnections?.(); server.close(); }
 });
 
@@ -1703,6 +1726,41 @@ test('multiplayer access codes: the host shares one code, the guest dials it thr
     const w = await welcome; assert(w.you.name === 'Guest' && w.you.tile === '1,2' && hostS.players.length === 2, 'no welcome over the dialled link');
     const left = new Promise((ok) => { hostS.hooks.onPlayers = (ps) => { if (ps.length === 1) ok(); }; }); g.close(); await left;   // leaving frees the player's slot
   } finally { gate.close(); delete globalThis.RTCPeerConnection; server.closeAllConnections?.(); server.close(); }
+});
+
+test('multiplayer reconnect: tokens restore a player\'s place, drops are noticed, goodbyes are final', async () => {
+  const tick = () => new Promise((ok) => setTimeout(ok, 5));
+  const owners = new Map(), host = new Session({ role: 'host', name: 'Host', hooks: { assignTile: (p) => { if (!owners.has(p.name)) owners.set(p.name, `${owners.size + 1},1`); return owners.get(p.name); } } });
+  const join = (name, token) => { const [ha, ga] = channelPair(), hl = new Link(ha), gl = new Link(ga); host.addPeer(hl); const g = new Session({ role: 'guest', name }); const w = new Promise((ok) => { g.hooks.onWelcome = ok; }); g.attach(gl); if (token) g.token = token; g.hello({ token: g.token }); return { g, w, hl, gl }; };
+  const a = join('Ann'); const wa = await a.w; await tick();
+  assert(a.g.token && wa.token === a.g.token && wa.you.tile === '1,1', 'no token');
+  let dropped = 0; a.g.hooks.onDrop = () => dropped++;
+  // the old link is silently dead; Ann comes back on a new one before the host notices
+  const b = join('Ann', a.g.token); const wb = await b.w; await tick();
+  assert(wb.you.name === 'Ann' && wb.you.tile === '1,1' && host.players.filter((p) => p.name === 'Ann').length === 1 && host.players.length === 2, 'resume did not take over the place');
+  assert(host.chat.some((l) => /Ann reconnected/.test(l.text)), 'no reconnect notice');
+  const imp = join('Ann'); const wi = await imp.w; assert(wi.you.name !== 'Ann' && wi.you.tile !== '1,1', 'a name without its token took the place');
+  // a link that falls silent is dropped by the heartbeat; the guest takes it as a drop, not a goodbye
+  let bDrops = 0; b.g.hooks.onDrop = () => bDrops++;
+  b.gl.lastSeen = Date.now() - 60000; b.g.pulse(); await tick();
+  assert(bDrops === 1 && !b.g.host, 'stale link not dropped');
+  let bye = null, drops = 0; imp.g.hooks.onBye = (w) => { bye = w; }; imp.g.hooks.onDrop = () => drops++;
+  host.kick(host.players.find((p) => p.name === wi.you.name).id); await new Promise((ok) => setTimeout(ok, 260));
+  assert(bye && drops === 0, 'a goodbye was treated as a drop');
+  for (const x of [a, b, imp]) x.g.close(); host.close();
+});
+
+test('multiplayer rules: races are judged once, rules are cleaned', async () => {
+  const { cleanRules, judge } = await import('../organicity/js/mpgame.js');
+  const r = cleanRules({ goal: 'pop', target: 12, sandbox: 1, startYear: 1850, evil: 'x' });
+  assert(r.goal === 'pop' && r.target === 1000 && r.sandbox === true && r.startYear === null && !('evil' in r), 'rules not cleaned');
+  assert(cleanRules({ goal: 'nope' }).goal === 'none' && cleanRules(null).goal === 'none', 'bad goal');
+  const ps = [{ name: 'A', color: '#e05a4a', pop: 900, money: 5000 }, { name: 'B', color: '#3a8ae0', pop: 1200, money: 100 }];
+  assert(!judge({ ...r, target: 1500 }, ps, 2000) && judge(r, ps, 2000).winner === 'B', 'population race');
+  const m = cleanRules({ goal: 'money', years: 5, startedYear: 2000 });
+  assert(!judge(m, ps, 2004) && judge(m, ps, 2005).winner === 'A' && judge(m, ps, 2005).board.length === 2, 'treasury race');
+  assert(!judge({ ...m, over: { winner: 'A' } }, ps, 2010), 'judged twice');
+  assert(!judge(cleanRules({}), ps, 2100), 'free play has no winner');
 });
 
 test('multiplayer regions: host assigns land, a guest adopts the region from their side, tiles merge, land is claimed', async () => {

@@ -41,7 +41,7 @@ export function commute(ctx, homeTile, home, jobTile, job) {
   const p = ctx.portal(homeTile, jobTile, home.x, home.z); if (!p) return { minutes: Infinity, cost: Infinity, toll: Infinity };
   const d = Math.hypot(home.x - p.ax, home.z - p.az) + Math.hypot(p.bx - job.x, p.bz - job.z) + 20;
   // a toll every morning entering the job's tile and every evening coming home
-  return { minutes: 8 + d / 6, cost: d * 1.1, toll: WORKDAYS * (ctx.toll(jobTile) + ctx.toll(homeTile)) };
+  return { minutes: 8 + d / 6, cost: d * 1.1, toll: WORKDAYS * (ctx.toll(jobTile, homeTile) + ctx.toll(homeTile, jobTile)) };
 }
 
 export function incomeOf(fam, job) { return job ? fam.earners * job.salary : BENEFIT; }

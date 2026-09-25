@@ -29,6 +29,15 @@
         "GALLERY_ADMIN_TOKEN=devtoken node scripts/organicity-gallery.mjs 8788"
       ],
       "port": 8788
+    },
+    {
+      "name": "signal",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/organicity-signal.mjs",
+        "8787"
+      ],
+      "port": 8787
     }
   ]
 }

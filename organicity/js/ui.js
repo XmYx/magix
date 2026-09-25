@@ -337,12 +337,21 @@ export class UI {
     el.querySelector('.chatlog')?.scrollTo(0, 1e6);
     el.querySelector('[data-mp-host]')?.addEventListener('click', () => {
       const name = el.querySelector('[data-mp-name]').value.trim(); if (!name) { this.toast('Pick a name first.', 'warn'); return; }
-      this.actions.mpConfig?.setIce(el.querySelector('[data-mp-ice]').value); this.actions.mpConfig?.setRelay(el.querySelector('[data-mp-relay]').value); mp.host(name, el.querySelector('[data-mp-color]:checked')?.value); this.renderPanel(true);
+      this.actions.mpConfig?.setIce(el.querySelector('[data-mp-ice]').value); this.actions.mpConfig?.setRelay(el.querySelector('[data-mp-relay]').value);
+      const q = (k) => el.querySelector(`[data-mp-${k}]`);
+      mp.host(name, el.querySelector('[data-mp-color]:checked')?.value, { goal: q('goal').value, target: +q('target').value, years: +q('years').value, startYear: +q('era').value || null, sandbox: q('sandbox').checked }, { listed: q('listed').checked });
+      this.renderPanel(true);
     });
     el.querySelector('[data-mp-answer]')?.addEventListener('click', async () => { try { this.mpAnswerCode = await mp.answer(el.querySelector('[data-mp-join]').value); this.renderPanel(true); } catch (e) { this.toast(e.message, 'warn'); } });
     el.querySelector('[data-mp-copy]')?.addEventListener('click', () => { navigator.clipboard?.writeText(this.mpAnswerCode || ''); this.toast('Answer code copied.', 'info'); });
     el.querySelector('[data-mp-copycode]')?.addEventListener('click', () => { navigator.clipboard?.writeText(mp.code || ''); this.toast('Access code copied. Send it to your friends.', 'info'); });
     el.querySelector('[data-mp-regate]')?.addEventListener('click', () => mp.openGate());
+    el.querySelector('[data-mp-rejoin]')?.addEventListener('click', async (e) => {
+      e.target.disabled = true; const st = el.querySelector('[data-mp-rejoin-status]');
+      try { await mp.rejoin((t) => { if (st) st.textContent = t; }); this.toast('Back in the game.', 'good'); this.renderPanel(true); }
+      catch (err) { if (st) st.textContent = `Could not rejoin: ${err.message}`; e.target.disabled = false; }
+    });
+    el.querySelector('[data-mp-forget]')?.addEventListener('click', () => { const r = this.actions.region?.(); if (r) { delete r.mp; this.actions.saveRegion?.(); } this.renderPanel(true); });
     el.querySelector('[data-mp-leave]')?.addEventListener('click', () => { if (confirm('Leave the multiplayer game? Your city stays yours; you can rejoin later with the same name.')) { mp.leave(); this.renderPanel(true); } });
     const say = el.querySelector('[data-mp-say]'), send = () => { if (say.value.trim()) { mp.say(say.value); say.value = ''; } };
     el.querySelector('[data-mp-send]')?.addEventListener('click', send); say?.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') send(); });
@@ -353,7 +362,9 @@ export class UI {
     el.querySelector('[data-mp-propose]')?.addEventListener('click', () => {
       const to = el.querySelector('[data-mp-to]').value, kind = el.querySelector('[data-mp-kind]').value, amount = +el.querySelector('[data-mp-amount]').value, price = +el.querySelector('[data-mp-price]').value;
       if (!(amount > 0)) { this.toast('Give an amount.', 'warn'); return; }
-      if (kind === 'money') mp.propose(to, { money: amount }); else { const [role, k] = kind.split(':'); mp.propose(to, { deal: { kind: k, amount, price: Math.max(0, price || 0), role } }); }
+      if (kind === 'money') mp.propose(to, { money: amount });
+      else if (kind === 'both:tollfree') mp.propose(to, { deal: { kind: 'tollfree', amount: 1, price: 0, role: 'sell' } });   // no toll for anyone crossing between your two cities
+      else { const [role, k] = kind.split(':'); mp.propose(to, { deal: { kind: k, amount, price: Math.max(0, price || 0), role } }); }
     });
     const nameIn = el.querySelector('[data-game-name]'), again = () => this.refreshGames();
     el.querySelector('[data-game-new]')?.addEventListener('click', async () => { await this.actions.saveGame?.(nameIn.value.trim() || null, null); again(); });
@@ -662,9 +673,20 @@ export class UI {
     const mp = this.actions.mp?.(), cfg = this.actions.mpConfig || {}, r = this.actions.region?.();
     if (!mp) return '<p class="dim">Multiplayer starts with the city.</p>';
     const dot = (c) => `<span class="sw" style="background:${/^#[0-9a-f]{6}$/i.test(c || '') ? c : '#888'}"></span>`;
+    const rules = mp.rules, rulesLine = `${rules.goal === 'pop' ? `Race: first to ${fmtInt(rules.target)} people` : rules.goal === 'money' ? `Race: best treasury in ${(rules.startedYear || 0) + rules.years}` : 'Free play'}${rules.sandbox ? ' · new players start in sandbox' : ''}${rules.startYear ? ` · new cities start in the ${rules.startYear}s` : ''}`;
+    const final = rules.over ? `<div class="final"><h3>🏆 ${esc(rules.over.winner)} wins</h3><p class="dim">${esc(rules.over.why)}. The region stays open: keep building.</p><table class="kv"><tr><th>#</th><th>Player</th><th>People</th><th>Funds</th><th>Score</th></tr>${rules.over.board.map((p, i) => `<tr><td>${i + 1}</td><td>${dot(p.color)}${esc(p.name)}</td><td>${fmtInt(p.pop)}</td><td>${fmtMoney(p.money)}</td><td>${fmtInt(p.score)}</td></tr>`).join('')}</table></div>` : '';
+    const was = r?.mp, rejoin = !mp.active && was?.code && was.host && was.host !== was.player;
+    if (rejoin) return `${final}<p>You were playing in <b>${esc(was.host)}</b>'s region as ${esc(was.player)}.</p><div class="row"><button class="primary" data-mp-rejoin>Rejoin ${esc(was.host)}'s game</button><button data-mp-forget>Play on your own</button></div><p class="dim" data-mp-rejoin-status>Uses access code ${esc(was.code)}.</p>`;
     if (!mp.active) return `<p>Play this region with friends. Each player builds their own city on a tile of the region at the same time; you see each other's cities grow next door, chat, send money, sign monthly contracts and race for land. Your game hosts the region: keep it open while others play.</p>
       <label class="txt">Your name <input type="text" data-mp-name maxlength="24" value="${esc(cfg.savedName?.() || '')}"></label>
       <div class="row">Colour ${(cfg.colors || []).map((c, i) => `<label class="chk"><input type="radio" name="mpc" data-mp-color value="${c}" ${i === 0 ? 'checked' : ''}>${dot(c)}</label>`).join('')}</div>
+      <h3>Rules</h3>
+      <label>Goal <select data-mp-goal>${Object.entries(cfg.goals || {}).map(([k, v]) => `<option value="${k}" ${rules.goal === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label>Population to reach <input type="number" data-mp-target min="1000" step="1000" value="${rules.target || 50000}"></label>
+      <label>Years for the treasury race <input type="number" data-mp-years min="1" max="100" value="${rules.years || 10}"></label>
+      <label>New players found in <select data-mp-era><option value="">the current era</option>${[1800, 1900, 2000].map((y) => `<option value="${y}" ${rules.startYear === y ? 'selected' : ''}>the ${y}s</option>`).join('')}</select></label>
+      <label class="chk"><input type="checkbox" data-mp-sandbox ${rules.sandbox ? 'checked' : ''}> New players start in sandbox (unlimited money)</label>
+      <label class="chk"><input type="checkbox" data-mp-listed> List the game in the lobby of your own signalling relay (not available on the public relay)</label>
       <div class="row"><button class="primary" data-mp-host>Host this region</button></div>
       <p class="dim">You get an access code to give your friends; they join from the start screen with <b>Join multiplayer…</b> and that code.</p>
       <details><summary>Connection settings</summary>
@@ -675,7 +697,8 @@ export class UI {
     const players = mp.players, me = mp.me, tileName = (k) => (k && r?.tiles[k]?.name) || (k ? 'unbuilt land' : '—');
     const others = players.filter((p) => p.id !== me.id);
     const deals = (r?.deals || []).filter((d) => d.players?.length);
-    return `<p>${dot(me.color)} <b>${esc(me.name)}</b> · ${mp.role === 'host' ? `hosting · ${players.length} player${players.length === 1 ? '' : 's'}` : 'connected to the host'} <button data-mp-leave>Leave</button></p>
+    return `${final}<p>${dot(me.color)} <b>${esc(me.name)}</b> · ${mp.role === 'host' ? `hosting · ${players.length} player${players.length === 1 ? '' : 's'}` : mp.reconnecting ? '<span class="warn">reconnecting to the host…</span>' : 'connected to the host'} <button data-mp-leave>Leave</button></p>
+      <p class="dim">${rulesLine}</p>
       ${mp.role === 'host' ? `<h3>Let players in</h3>
         <p>Access code <b class="acode">${esc(mp.code || '')}</b> <button data-mp-copycode>Copy</button></p>
         <p class="dim">${{ open: 'Open: friends join from the start screen with <b>Join multiplayer…</b> and this code.', opening: 'Opening the code on the signalling relay…', waiting: 'The code is still held by an earlier session; trying again in a few seconds…', closed: 'Lost the signalling relay; reconnecting…', error: `Players cannot join yet: ${esc(mp.gateErr || '')} <button data-mp-regate>Try again</button>` }[mp.gateState] || ''}</p>
@@ -685,12 +708,12 @@ export class UI {
       <h3>Standings</h3><table class="kv"><tr><th>Player</th><th>City</th><th>People</th><th>Funds</th><th>Score</th></tr>${players.map((p) => `<tr><td>${dot(p.color)}${esc(p.name)}${p.id === me.id ? ' (you)' : ''}</td><td>${esc(tileName(p.tile))}</td><td>${fmtInt(p.pop || 0)}</td><td>${fmtMoney(p.money || 0)}</td><td>${fmtInt(p.score)}</td>${mp.role === 'host' ? `<td>${p.id === me.id ? '' : `<button data-mp-kick="${esc(p.id)}" title="Remove this player from the game">Remove</button>`}</td>` : ''}</tr>`).join('')}</table>
       <h3>Chat</h3><div class="chatlog">${mp.chat.slice(-40).map((l) => `<p>${l.from ? `${dot(l.color)}<b>${esc(l.from)}</b> ` : '<i>'}${esc(l.text)}${l.from ? '' : '</i>'}</p>`).join('') || '<p class="dim">Say hello.</p>'}</div>
       <div class="row"><input type="text" data-mp-say maxlength="300" placeholder="Message"><button data-mp-send>Send</button></div>
-      ${mp.offers.length ? `<h3>Offers to you</h3>${mp.offers.map((o) => `<p><b>${esc(o.fromName)}</b> ${o.deal ? `offers to ${o.deal.role === 'sell' ? 'sell you' : 'buy from you'} ${fmtInt(o.deal.amount)} ${esc(o.deal.kind)} a month at ₵${o.deal.price}` : `sends you ${fmtMoney(o.money)}`}. <button data-mp-yes="${esc(o.id)}">Accept</button><button data-mp-no="${esc(o.id)}">Decline</button></p>`).join('')}` : ''}
+      ${mp.offers.length ? `<h3>Offers to you</h3>${mp.offers.map((o) => `<p><b>${esc(o.fromName)}</b> ${o.deal ? `${o.deal.kind === 'tollfree' ? 'proposes a toll-free border between your cities' : `offers to ${o.deal.role === 'sell' ? 'sell you' : 'buy from you'} ${fmtInt(o.deal.amount)} ${esc(o.deal.kind)} a month at ₵${o.deal.price}`}` : `sends you ${fmtMoney(o.money)}`}. <button data-mp-yes="${esc(o.id)}">Accept</button><button data-mp-no="${esc(o.id)}">Decline</button></p>`).join('')}` : ''}
       ${others.length ? `<h3>Trade</h3><div class="row"><select data-mp-to>${others.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>
-        <select data-mp-kind><option value="money">Send money</option>${['sell', 'buy'].map((role) => ['power', 'water', ...Object.keys(COMMODITIES)].map((k) => `<option value="${role}:${k}">${role === 'sell' ? 'Sell' : 'Buy'} ${k === 'power' ? 'power (MW)' : k === 'water' ? 'water' : COMMODITIES[k].name.toLowerCase()} monthly</option>`).join('')).join('')}</select>
+        <select data-mp-kind><option value="money">Send money</option><option value="both:tollfree">Toll-free border (both ways)</option>${['sell', 'buy'].map((role) => ['power', 'water', ...Object.keys(COMMODITIES)].map((k) => `<option value="${role}:${k}">${role === 'sell' ? 'Sell' : 'Buy'} ${k === 'power' ? 'power (MW)' : k === 'water' ? 'water' : COMMODITIES[k].name.toLowerCase()} monthly</option>`).join('')).join('')}</select>
         <input type="number" data-mp-amount min="1" value="20" title="Amount (₵ for money, units a month for contracts)"><input type="number" data-mp-price min="0" value="10" title="Price per unit"><button data-mp-propose>Propose</button></div>
         <p class="dim">Money moves when they accept. Contracts run monthly between your tiles: commodities come out of the seller's stock (industry report); power and water need a road link across your shared border.</p>` : '<p class="dim">Waiting for other players…</p>'}
-      ${deals.length ? `<h3>Contracts between players</h3>${deals.map((d) => { const mine = [d.seller, d.buyer].some((k) => r?.tiles[k]?.owner === me.name); return `<p>${esc(d.players[0] || '')} ↔ ${esc(d.players[1] || '')}: ${fmtInt(d.amount)} ${esc(d.kind)} a month at ₵${d.price}${mine ? ` <button data-mp-end="${d.id}">End contract</button>` : ''}</p>`; }).join('')}` : ''}`;
+      ${deals.length ? `<h3>Contracts between players</h3>${deals.map((d) => { const mine = [d.seller, d.buyer].some((k) => r?.tiles[k]?.owner === me.name); return `<p>${esc(d.players[0] || '')} ↔ ${esc(d.players[1] || '')}: ${d.kind === 'tollfree' ? 'toll-free border' : `${fmtInt(d.amount)} ${esc(d.kind)} a month at ₵${d.price}`}${mine ? ` <button data-mp-end="${d.id}">End contract</button>` : ''}</p>`; }).join('')}` : ''}`;
   }
 
   // saved games: the list is read from the database, then the panel redraws
@@ -1044,6 +1067,11 @@ export class UI {
   }
 
   // ---------------------------------------------------------------- presidents, families, history
+  // multiplayer: the race is over; the panel leads with the final scoreboard
+  showScoreboard(r, me) {
+    this.toast(r.winner === me ? `You win the race: ${r.why}!` : `${r.winner} wins the race: ${r.why}.`, r.winner === me ? 'good' : 'info');
+    if (this.panelName !== 'mp') this.togglePanel('mp'); else this.renderPanel(true);
+  }
   termReport(term) {
     this.reportTerm = term;
     const mine = Object.entries(term.tiles).filter(([, v]) => v.controller === 'player').map(([, v]) => v);
