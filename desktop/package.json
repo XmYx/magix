@@ -2,6 +2,7 @@
   "name": "organicity-desktop",
   "productName": "Organicity",
   "version": "1.0.0",
+  "homepage": "https://github.com/XmYx/magix",
   "description": "Organicity: a pixel-art city builder where nothing snaps to a grid.",
   "author": "magix",
   "license": "SEE LICENSE IN ../LICENSE",
