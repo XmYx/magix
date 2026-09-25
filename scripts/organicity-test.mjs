@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cameraPose, samplePath } from '../organicity/js/photo.js';
 import { hazardTick } from '../organicity/js/terrain.js';
 import { TRANSIT } from '../organicity/js/transit.js';
 import { deckHeight } from '../organicity/js/agents.js';
@@ -15,7 +16,8 @@ import { fastestRoute, commuteRoutes } from '../organicity/js/routes.js';
 import { weatherAt, WEATHER, frontAt } from '../organicity/js/weather.js';
 import { Core, netSnapshot, sampleField } from '../organicity/js/core.js';
 import { N, ZONES, SERVICES, LAYERS, BRIDGE_DECK } from '../organicity/js/config.js';
-import { setupScenario, TUTORIAL } from '../organicity/js/scenarios.js';
+import { setupScenario, TUTORIAL, SCENARIOS } from '../organicity/js/scenarios.js';
+import { flowField, flowAt, waterRoute, routeLen, ferryPairs } from '../organicity/js/water.js';
 import { quake, tornado, accident, festival, disasterTick, DISASTERS } from '../organicity/js/disasters.js';
 import { createRegion, canBuy, tileCost, partnersOf, neighbours as tileNeighbours, exitDir, edgeProfile, exitsOf, stubsFor, evolveAI } from '../organicity/js/region.js';
 import { headway, lineCapacity, transitGraph, transitSearch, transitTo, updateCosts } from '../organicity/js/assign.js';
@@ -38,6 +40,12 @@ import { encodeSave, decodeSave, readShared } from '../organicity/js/share.js';
 import { technology, buildingFloors, massPlan } from '../organicity/js/eras.js';
 import { assignTraffic, routeLines, junctionDelay } from '../organicity/js/assign.js';
 import { Traffic, AGENT_TYPES, AgentSim, TYPE_IDS, POSE_STRIDE } from '../organicity/js/agents.js';
+
+// procgen draws with three.js; use the copy installed for the desktop app when it is there
+import { register } from 'node:module';
+const THREE_URL = new URL('../desktop/node_modules/three/build/three.module.js', import.meta.url);
+const hasThree = existsSync(THREE_URL);
+if (hasThree) register('data:text/javascript,' + encodeURIComponent(`export async function resolve(s, c, n) { return s === 'three' ? { url: ${JSON.stringify(THREE_URL.href)}, shortCircuit: true } : n(s, c); }`));
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -1154,9 +1162,9 @@ test('platform: offline app files, content packs (sanitised, saved with the city
   for (const f of ['js/packs.js', 'js/i18n.js', 'js/region.js']) assert(sw.includes(f.replace('js/', '').replace('.js', '')), `service worker misses ${f}`);
   const pack = JSON.parse(readFileSync(new URL('packs/sample-pack.json', root), 'utf8'));
   const info = registerPack(pack);
-  assert(info.styles.length === 2 && info.landmarks.length === 2 && SERVICES.pk_lighthouse?.model.length === 5, 'sample pack not registered');
+  assert(info.styles.length === 2 && info.landmarks.length === 2 && SERVICES.pk_lighthouse?.model.length === 6 && info.buildables.length === 3, 'sample pack not registered');
   const evil = landmarkDef({ name: '<img src=x onerror=alert(1)>', w: 1e9, model: [{ h: -5, color: 'red' }] }, 'x', 'pk_evil');
-  assert(!/[<>]/.test(evil.name) && evil.w === 40 && evil.model[0].h === 0.1 && evil.model[0].color === 0x999999, 'pack not sanitised');
+  assert(!/[<>]/.test(evil.name) && evil.w === 40 && evil.model[0].h === 0.05 && evil.model[0].color === 0x999999, 'pack not sanitised');
   const { w } = town(); const s = new Sim(w, { worker: false, sandbox: {} });
   let lh = null; for (let d = 0; d < 80 && !lh; d += 3) for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const p = w.planService('pk_lighthouse', 200 + dx, 300 + dz); if (p.ok) { lh = w.placeService('pk_lighthouse', p); break; } }
   assert(lh && lh.svc === 'pk_lighthouse' && SERVICES.pk_lighthouse.model.some((m) => m.y + m.h > 15), 'pack landmark not built');
@@ -1709,6 +1717,174 @@ test('multiplayer rules: the host removes players, either party ends a contract,
     const B2 = join('bo'); await tick(); await tick(); assert(/removed/.test(B2.bye || '') && !host.players.some((p) => /bo/i.test(p.name)), 'a removed player rejoined');
     assert(!host.kick(host.me.id), 'the host removed themself');
   } finally { delete globalThis.localStorage; }
+});
+
+test('water: rivers flow one way along their channel, open water barely drifts, boats find routes, ferry piers pair up', () => {
+  const w = new World(4242); w.newGame(); const F = flowField(w);
+  // along the river, neighbouring cells agree on the direction; it is a real current, not noise
+  let agree = 0, total = 0, fast = 0, riverCells = 0;
+  for (let j = 1; j < F.S - 1; j++) for (let i = 1; i < F.S - 1; i++) {
+    const c = j * F.S + i; if (!F.wet[c] || F.open[c]) continue; riverCells++; if (F.speed[c] > 0.4) fast++;
+    for (const d of [c + 1, c + F.S]) if (F.wet[d] && !F.open[d]) { total++; if (F.fx[c] * F.fx[d] + F.fz[c] * F.fz[d] > 0.7) agree++; }
+  }
+  assert(riverCells > 50 && agree / total > 0.85, `the river's current is not coherent (${agree}/${total})`);
+  assert(fast / riverCells > 0.5, 'river water is not moving');
+  let opn = 0, slow = 0; for (let c = 0; c < F.S * F.S; c++) if (F.open[c]) { opn++; if (F.speed[c] < 0.2) slow++; }
+  assert(!opn || slow === opn, 'open water flows like a river');
+  // the current runs toward open water: following it from a river cell ends in the sea or at the edge
+  let start = null, bd = 1e9; for (let c = 0; c < F.S * F.S; c++) if (F.wet[c] && !F.open[c] && F.speed[c] > 0.5) { const p = { x: (c % F.S + 0.5) * 4, z: (((c / F.S) | 0) + 0.5) * 4 }, d = Math.hypot(p.x - N / 2, p.z - N / 2); if (d < bd) { bd = d; start = p; } }   // mid-river, away from the edges
+  let x = start.x, z = start.z, ended = false;
+  for (let k = 0; k < 800; k++) { const f = flowAt(F, x, z); if (!f || f.open || x < 2 || z < 2 || x > N - 2 || z > N - 2) { ended = true; break; } x += f.x * 2; z += f.z * 2; }
+  assert(ended, 'following the current goes round in circles');
+  // boats: from the river to the map edge over water only
+  const r = waterRoute(w, start.x, start.z, 'edge'); assert(r && routeLen(r) > 10, 'no boat route to the edge');
+  assert(r.every((p) => w.water[w.cellAt(p.x, p.z)] || w.wdist[w.cellAt(p.x, p.z)] < 6), 'a boat route crosses land');
+  // two piers facing each other across the water get a ferry; a pier alone gets none
+  const bank = (dir) => { for (let t = 0; t < 400; t++) { const px = start.x + dir * t; if (!w.water[w.cellAt(px, start.z)]) return { id: dir > 0 ? 1 : 2, cx: px, cz: start.z }; } };
+  const a = bank(1), b = bank(-1);
+  assert(a && b && ferryPairs(w, [a, b]).length === 1 && ferryPairs(w, [a]).length === 0, 'ferry piers did not pair up across the water');
+});
+
+test('packs v2: roof shapes, windows and signs; buildables with real effects; scenarios with setup, goals and saves', async () => {
+  const pack = JSON.parse(readFileSync(new URL('../organicity/packs/sample-pack.json', import.meta.url), 'utf8'));
+  const info = registerPack(pack);
+  assert(info.buildables.length === 3 && info.scenarios.length === 1 && info.landmarks.length === 2, 'pack parts missing: ' + JSON.stringify(info));
+  const diner = SERVICES.pk_diner, solar = SERVICES.pk_solarfarm, hc = SERVICES.pk_healthcentre;
+  assert(diner.cat === 'svc' && diner.jobs === 10 && diner.model.some((m) => m.kind === 'sign') && diner.model.some((m) => m.windows === 'shop'), 'diner not parsed');
+  assert(solar.cat === 'util' && solar.power === 18 && hc.covers === 'clinic' && hc.patients === 180, 'buildable effects not parsed');
+  assert(SERVICES.pk_clocktower.model.some((m) => m.roofShape === 'spire'), 'roof shape lost');
+  // models: signs are emissive, windows use the facade material, roofs add height; no bad numbers
+  const w = new World(4242); w.newGame();
+  const genBuilding = hasThree ? (await import('../organicity/js/procgen.js')).genBuilding : null;
+  if (!genBuilding) console.log('       (model geometry not checked: run `npm install` in desktop/ for three.js)');
+  if (genBuilding) for (const k of ['pk_diner', 'pk_clocktower', 'pk_lighthouse', 'pk_healthcentre']) {
+    const S = SERVICES[k], g = genBuilding({ id: 1, svc: k, seed: 7, cx: 100, cz: 100, fx: 0, fz: 1, cells: [], level: 1, zone: 0 }, w);
+    assert(Object.values(g.g).every((p) => p.p.every(Number.isFinite)), k + ' has bad geometry');
+    if (k === 'pk_diner') assert(g.g.neon?.p.length && g.g.shop?.p.length, 'sign or windows not drawn');
+    if (k === 'pk_clocktower') assert(g.top > 24, 'the spire is missing');
+  }
+  // a hostile model is clamped
+  registerPack({ name: 'Bad', buildables: { evil: { cat: 'x<script>', name: '<b>x</b>', w: 9999, effects: { power: 1e9, covers: 'nuke' }, model: [{ kind: 'sign', h: -5, roofShape: 'castle', windows: 'x' }] } } });
+  const ev = SERVICES.pk_evil; assert(ev.cat === 'svc' && ev.w === 40 && ev.power === 2000 && !ev.covers && !/[<>]/.test(ev.name) && ev.model[0].h >= 0.05 && !ev.model[0].roofShape && !ev.model[0].windows, 'a hostile pack was not tamed');
+  // buildables work in the simulation: solar power feeds the grid; the health centre covers like a clinic
+  const t = town(); const s = new Sim(t.w, { worker: false, sandbox: {} }), finish = (gen) => { for (const _ of gen) {} };
+  finish(s.utilitiesJob()); const p0 = s.stats.power[0];
+  const e = [...t.w.net.edges.values()][3], pt = t.w.net.sampleAt(e, e.len / 2);
+  let placed = null; for (const dx of [-12, 12, 0]) for (const dz of [-12, 12]) { if (placed) break; const pl = t.w.planService('pk_solarfarm', pt.x + dx, pt.z + dz); if (pl.ok) placed = t.w.placeService('pk_solarfarm', pl); }
+  assert(placed, 'could not place the solar farm'); finish(s.utilitiesJob());
+  assert(s.stats.power[0] >= p0 + 17, `solar power not counted (${p0} → ${s.stats.power[0]})`);
+  assert(s.capacityOf('clinic', 'patients') >= 0, 'capacity lookup broke');
+  // scenario: set up from the pack, goals reported, the definition saved with the city
+  assert(SCENARIOS.pk_harbourlights?.def?.goals.length === 3, 'scenario not registered');
+  const sw = new World(SCENARIOS.pk_harbourlights.seed, SCENARIOS.pk_harbourlights.map); sw.newGame();
+  const ss = new Sim(sw, { worker: false, scenario: 'pk_harbourlights', startYear: 1900 });
+  setupScenario(sw, ss, 'pk_harbourlights');
+  assert(sw.net.edges.size > 3 && [...sw.buildings.values()].some((b) => b.svc === 'coal') && ss.money === 45000, 'scenario setup did not build the town');
+  const goals = ss.scenarioProgress(); assert(goals.length === 4 && goals.some(([l]) => /1,500/.test(l)) && goals.some(([l]) => /Within/.test(l)), 'scenario goals wrong: ' + JSON.stringify(goals));
+  const saved = makeSave(sw, ss); delete SCENARIOS.pk_harbourlights;
+  const back = loadSave(JSON.parse(JSON.stringify(saved)), { worker: false });
+  assert(SCENARIOS.pk_harbourlights?.def && back.sim.scenarioProgress().length === 4, 'the scenario did not travel with the save');
+});
+
+test('photo tours: endpoints, shortest turn, eased segments and immutable viewpoints', () => {
+  const cam = { x: 10, z: 20, yaw: Math.PI - 0.1, pitch: 0.9, dist: 100 };
+  const a = cameraPose(cam), b = { ...a, x: 50, yaw: -Math.PI + 0.1, dist: 200 }, c = { ...b, x: 90 };
+  cam.x = 999;
+  assert(a.x === 10 && a.targetY === 0, 'viewpoint was not copied');
+  assert(samplePath([], 0) === null && samplePath([a], 1).x === 10, 'empty/single path');
+  assert(samplePath([a, b, c], -1).x === 10 && samplePath([a, b, c], 2).x === 90, 'endpoints');
+  const middle = samplePath([a, b], 0.5);
+  assert(Math.abs(middle.yaw - Math.PI) < 1e-9 && middle.dist === 150, 'camera took the long turn');
+  assert(samplePath([a, b, c], 0.5).x === 50, 'middle viewpoint missed');
+  assert(samplePath([a, b], 0.1).x < 14, 'leg does not ease in');
+});
+
+test('AC: sampled pupils, students and workers get reachable destinations and directed daily return routes', async () => {
+  const { assignResidents, residentLeg, routePosition } = await import('../organicity/js/citizens.js');
+  const net = new RoadNet(), a=net.addNode(30,30), b=net.addNode(230,30), e=net.addEdge(a,b,{x:130,z:30},'street');
+  const buildings=[{id:1,edge:e.id,s:10,cx:40,cz:30,occ:10}, {id:2,edge:e.id,s:70,cx:100,cz:30,svc:'school'}, {id:3,edge:e.id,s:110,cx:140,cz:30,svc:'college'}, {id:4,edge:e.id,s:170,cx:200,cz:30,workers:30}];
+  const residents=['child','student','adult'].map((cohort,k)=>({home:1,k,cohort,depart:8,back:17}));
+  const trips=assignResidents(net,buildings,residents,1);
+  assert(trips.map(c=>c.destination).join(',') === '2,3,4','wrong assigned school/college/work');
+  for (const c of trips) { const leg=residentLeg(c,c.depart+c.minutes/120); assert(leg.state==='commute' && routePosition(net,leg.segments,leg.progress), 'outward schedule'); assert(residentLeg(c,c.back+c.minutes/120).segments[0].from>residentLeg(c,c.back+c.minutes/120).segments[0].to,'return route is not directed home'); }
+  buildings[1].ab=true; assert(assignResidents(net,buildings,residents)[0].destination===null,'abandoned school assigned');
+});
+
+test('AC: approval elections lose only unfinished goal games, survive saving, and do not repeat', async () => {
+  const { holdElection }=await import('../organicity/js/citizens.js');
+  const {w}=town(), s=new Sim(w,{worker:false,scenario:'prosper'});
+  for(let i=0;i<w.zone.length;i+=3)if(w.zone[i]===1 && w.free(i) && w.accEdge[i]>=0)w.placeGrowable(i%N+0.5,Math.floor(i/N)+0.5,1);
+  for(const b of w.buildings.values())if(!b.svc)s.capacity(b);
+  for(const b of w.buildings.values())if(b.hh){b.occ=5;b.happy=0.05;b.health=0;b.power=b.water=b.sewage=false;}
+  const lost=holdElection(s,2010); assert(!lost.won && s.gameOver && s.paused && s.gameOverReason==='election','goal game did not end');
+  const count=s.news.length;holdElection(s,2010);assert(s.news.length===count,'duplicate election');
+  const back=loadSave(JSON.parse(JSON.stringify(makeSave(w,s))),{worker:false});assert(back.sim.election.year===2010 && back.sim.gameOverReason==='election','election not saved');
+  for(const scenario of [null,'tutorial']) { const p=new Sim(w,{worker:false,scenario});holdElection(p,2010);assert(!p.gameOver,'free play/tutorial ended'); }
+  const sb=new Sim(w,{worker:false,scenario:'prosper',sandbox:{}});holdElection(sb,2010);assert(!sb.gameOver,'sandbox ended');
+});
+
+test('AD: routed utility geometry, tiers, curved reach, undo and saves', async () => {
+  const {utilityPath,lineLength}=await import('../organicity/js/infrastructure.js');
+  const {coverageMask,lineStats}=await import('../organicity/js/grid.js');
+  const w=new World(31);w.water.fill(0);
+  const a={x:40,z:40},b={x:160,z:40},points=utilityPath(w.net,a,b,'curve',{x:100,z:140});
+  const plan=w.planULine('water',40,40,160,40,{points,tier:1});assert(plan.ok && plan.len>120,'curved length not charged');
+  w.beginTx('Curved main');const l=w.addULine('water',40,40,160,40,{points,tier:1});w.commitTx(plan.cost);
+  assert(w.nearestULine(100,90,3)?.l===l && coverageMask(w,'water')[90*N+100], 'curve not selectable/covered');
+  assert(lineStats(w).upkeep>lineLength(l)*0.04,'tier upkeep ignored');
+  const restored=World.load(w.serialize());assert(restored.ulines[0].points.length===points.length && restored.ulines[0].tier===1,'routed main not saved');
+  w.undo();assert(!w.ulines.length,'utility undo failed');
+  const n1=w.net.addNode(30,200),n2=w.net.addNode(130,220),n3=w.net.addNode(230,200);w.net.addEdge(n1,n2,{x:70,z:270},'street');w.net.addEdge(n2,n3,{x:180,z:220},'street');
+  const routed=utilityPath(w.net,{x:30,z:200},{x:230,z:200},'road');assert(routed.length>10 && routed.some(p=>p[1]>230),'road route did not follow curve');
+  assert(!w.planULine('water',40,40,160,40,{points:[[40,40],[NaN,60]]}).ok,'invalid coordinate accepted');
+});
+
+test('AD: high voltage requires transformers; mains increase network capacity', async () => {
+  const {utilityGrid}=await import('../organicity/js/grid.js');
+  const w=new World(32);w.water.fill(0);
+  const a=w.net.addNode(30,100),b=w.net.addNode(100,100),c=w.net.addNode(200,100),d=w.net.addNode(270,100);
+  const e=w.net.addEdge(a,b,{x:65,z:100},'street'),f=w.net.addEdge(c,d,{x:235,z:100},'street');
+  w.addULine('power',95,100,205,100,{tier:1});const ca=w.net.compOf(e),cb=w.net.compOf(f);
+  let grid=utilityGrid(w);assert(grid.root('power','c'+ca)!==grid.root('power','c'+cb),'HV connected without transformers');
+  w.buildings.set(1,{id:1,svc:'transformer',cx:95,cz:105,edge:e.id});w.buildings.set(2,{id:2,svc:'transformer',cx:205,cz:105,edge:f.id});w.bldVersion++;
+  grid=utilityGrid(w);assert(grid.root('power','c'+ca)===grid.root('power','c'+cb),'transformers did not connect grids');
+  assert(grid.capacity('power','c'+ca)===480,'HV capacity wrong');
+  w.addULine('water',95,100,205,100,{tier:1});assert(utilityGrid(w).capacity('water','c'+ca)===640,'main capacity wrong');
+});
+
+test('AD: treatment cleans polluted pump water and sewage plant geometry is finite', async () => {
+  const w=new World(33);w.water.fill(0); const a=w.net.addNode(30,100),b=w.net.addNode(200,100),e=w.net.addEdge(a,b,{x:115,z:100},'street');
+  const pump={id:1,svc:'pump',cx:60,cz:105,edge:e.id,s:30},home={id:2,zone:1,cx:100,cz:105,edge:e.id,s:70,occ:10,workers:0};w.buildings.set(1,pump);w.buildings.set(2,home);
+  const s=new Sim(w,{worker:false});s.f.waterPol=new Float32Array(s.f.pollution.length).fill(1);const run=()=>{for(const _ of s.utilitiesJob()){}};
+  run();const dirty=home.waterQuality,supply=s.stats.water[0];
+  w.buildings.set(3,{id:3,svc:'treatment',cx:130,cz:105,edge:e.id,s:100});w.bldVersion++;run();
+  assert(home.waterQuality>dirty+0.7 && s.stats.water[0]>supply,'treatment had no pump effect');
+  if(hasThree){const {genBuilding}=await import('../organicity/js/procgen.js');for(const svc of ['transformer','treatment','sewageplant','advancedsewage','parking']){const g=genBuilding({id:5,svc,seed:7,cx:100,cz:100,fx:0,fz:1,cells:[],level:1,zone:0},w);assert(Object.values(g.g).every(x=>x.p.every(Number.isFinite)),svc+' invalid model');}}
+});
+
+test('AD: maintenance repairs only travelled roads and parking shifts traffic away from cars', async () => {
+  const {maintenanceTick,parkingState}=await import('../organicity/js/infrastructure.js');
+  const w=new World(34),a=w.net.addNode(30,100),b=w.net.addNode(230,100),c=w.net.addNode(30,300),d=w.net.addNode(230,300);
+  const e=w.net.addEdge(a,b,{x:130,z:100},'street',0.5),remote=w.net.addEdge(c,d,{x:130,z:300},'street',0.3);
+  w.buildings.set(1,{id:1,svc:'depot',cx:40,cz:105,edge:e.id,s:10});const s=new Sim(w,{worker:false});maintenanceTick(s,0.5);
+  assert(e.cond>0.5 && remote.cond===0.3 && s.maintenance[0].s>10,'crew repaired wrong road or did not drive');
+  const blds=[{occ:100,workers:100}],p=parkingState(blds),q=parkingState([...blds,{svc:'parking'}]);assert(p.ratio<q.ratio && q.lots===100,'parking capacity ignored');
+  const fixture=[{id:1,edge:e.id,s:10,cx:40,cz:100,kind:'R',occ:100,workers:0},{id:2,edge:e.id,s:180,cx:210,cz:100,kind:'C',occ:0,workers:100}];
+  const {assignTraffic}=await import('../organicity/js/assign.js');const finish=parking=>{const gen=assignTraffic(w.net,fixture,{total:100,commuters:0,parking,rng:()=>0.1});let r;do{r=gen.next();}while(!r.done);return r.value;};
+  const low=finish(0.5),high=finish(1);assert(low.car<high.car && low.walk>high.walk,'parking did not change car share');
+});
+
+test('AD: bridge styles price spans, survive split/save, and lift windows stop vehicles', async () => {
+  const {bridgeOpen}=await import('../organicity/js/infrastructure.js');
+  const w=new World(35);w.water.fill(0);for(let z=190;z<211;z++)for(let x=100;x<190;x++)w.water[z*N+x]=1;
+  const a={x:50,z:200},b={x:240,z:200},c={x:145,z:200};
+  assert(w.roadCost(a,c,b,'street',0,'beam').err,'long beam accepted');
+  const arch=w.roadCost(a,c,b,'street',0,'arch'),sus=w.roadCost(a,c,b,'street',0,'suspension');assert(!arch.err && sus.cost>arch.cost,'bridge costs');
+  const r=w.buildRoad(a,c,b,'street',0,0,'arch'),e=w.net.edges.get(r.edges[0]);assert(e.bridgeStyle==='arch','bridge not stored');w.net.splitAt(e,145,200);assert([...w.net.edges.values()].every(e=>e.bridgeStyle==='arch'),'split lost style');
+  assert([...World.load(w.serialize()).net.edges.values()].every(e=>e.bridgeStyle==='arch'),'save lost style');
+  const lift={bridgeStyle:'movable'};assert(bridgeOpen(lift,8.25) && !bridgeOpen(lift,8.75),'shipping window');
+  const {AgentSim}=await import('../organicity/js/agents.js');const agent=new AgentSim();agent.handle({type:'net',net:netSnapshot(w.net)});const edge=[...agent.net.edges.values()][0];
+  agent.handle({type:'spawn',list:[{segs:[{edge:edge.id,from:1,to:edge.len-1}],kind:'car',col:1}]});agent.handle({type:'bridges',closed:[edge.id]});agent.step(1);assert(agent.T.agents[0].s===1,'car drove onto raised bridge');agent.handle({type:'bridges',closed:[]});agent.step(1);assert(agent.T.agents[0].s>1,'bridge did not reopen');
 });
 
 // ------------------------------------------------------------------ runner

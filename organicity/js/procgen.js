@@ -64,6 +64,28 @@ function box(P, key, F, u, v, y0, hu, hv, h, col, topCol) {
   quadOut(T, [c[0][0], y1, c[0][2]], [c[1][0], y1, c[1][2]], [c[2][0], y1, c[2][2]], [c[3][0], y1, c[3][2]], ref, topCol || col, Z2, Z2, Z2, Z2);
   P.top = Math.max(P.top, y1);
 }
+// pitched roofs on a box (u across, v along the frame): gable (ridge along the longer side),
+// hip, pyramid, dome and spire
+function roofShape(P, F, u, v, y0, hu, hv, h, shape, col) {
+  const G = P.get('plain'), pt = (uu, vv, y) => [F.cx + F.tx * (u + uu) + F.fx * (v + vv), y, F.cz + F.tz * (u + uu) + F.fz * (v + vv)], ref = pt(0, 0, y0 - 1);
+  const a = pt(-hu, -hv, y0), b = pt(hu, -hv, y0), c = pt(hu, hv, y0), d = pt(-hu, hv, y0), top = y0 + h;
+  if (shape === 'dome' || shape === 'spire') {
+    const rings = shape === 'dome' ? 5 : 4, r0 = Math.min(hu, hv);
+    for (let i = 0; i < rings; i++) { const t = i / rings, r = shape === 'dome' ? r0 * Math.cos(t * Math.PI / 2) : r0 * (1 - t) * 0.9 + 0.1; cyl(P, F, u, v, y0 + (shape === 'dome' ? Math.sin(t * Math.PI / 2) * h : t * h), r, h / rings + 0.05, 10, col, col); }
+    return;
+  }
+  const alongU = hu >= hv;
+  if (shape === 'gable') {
+    const r1 = alongU ? pt(-hu, 0, top) : pt(0, -hv, top), r2 = alongU ? pt(hu, 0, top) : pt(0, hv, top);
+    if (alongU) { quadOut(G, a, b, r2, r1, ref, col, Z2, Z2, Z2, Z2); quadOut(G, d, c, r2, r1, ref, col, Z2, Z2, Z2, Z2); triOut(G, a, d, r1, ref, col); triOut(G, b, c, r2, ref, col); }
+    else { quadOut(G, a, d, r2, r1, ref, col, Z2, Z2, Z2, Z2); quadOut(G, b, c, r2, r1, ref, col, Z2, Z2, Z2, Z2); triOut(G, a, b, r1, ref, col); triOut(G, d, c, r2, ref, col); }
+  } else {   // hip and pyramid
+    const k = shape === 'pyramid' ? 0 : Math.abs(hu - hv), r1 = alongU ? pt(-k, 0, top) : pt(0, -k, top), r2 = alongU ? pt(k, 0, top) : pt(0, k, top);
+    if (alongU) { quadOut(G, a, b, r2, r1, ref, col, Z2, Z2, Z2, Z2); quadOut(G, d, c, r2, r1, ref, col, Z2, Z2, Z2, Z2); triOut(G, a, d, r1, ref, col); triOut(G, b, c, r2, ref, col); }
+    else { quadOut(G, a, d, r2, r1, ref, col, Z2, Z2, Z2, Z2); quadOut(G, b, c, r2, r1, ref, col, Z2, Z2, Z2, Z2); triOut(G, a, b, r1, ref, col); triOut(G, d, c, r2, ref, col); }
+  }
+  P.top = Math.max(P.top, top);
+}
 function cyl(P, F, u, v, y0, r, h, seg, col, topCol) {
   const G = P.get('plain');
   const cx = F.cx + F.tx * u + F.fx * v, cz = F.cz + F.tz * u + F.fz * v, y1 = y0 + h, ref = [cx, y0 + h / 2, cz];
@@ -508,11 +530,19 @@ function genService(P, b, r) {
       B('plain',0,0,0,hw,hd,.3,0x797f87);B('plain',0,0,.3,hw*.65,hd*.7,.15,0x263743);
       B('plain',-hw*.7,0,0,.15,.15,3.5,0x778c99);B('plain',-hw*.7,0,3,.6,.2,.6,0x4ca6e8);break;
     case 'tramstop':
-    default:   // content-pack landmarks describe themselves as boxes and cylinders
+    default:   // content-pack buildings describe themselves: boxes (with windows), cylinders, glowing signs and roofs
       for (const m of S.model || []) {
-        if (m.kind === 'cyl') C(m.u * hw, m.v * hd, m.y, m.r, m.h, 10, m.color, m.roof ?? undefined);
-        else B('plain', m.u * hw, m.v * hd, m.y, m.w * hw, m.d * hd, m.h, m.color, m.roof ?? undefined);
+        const u = (m.u ?? 0) * hw, v = (m.v ?? 0) * hd, hu = (m.w ?? 0.2) * hw, hv = (m.d ?? 0.2) * hd;
+        if (m.kind === 'cyl') C(u, v, m.y ?? 0, m.r, m.h, 10, m.color, m.roof ?? undefined);
+        else if (m.kind === 'sign') B('neon', u, v, m.y ?? 0, hu, hv, m.h, m.color);
+        else B(m.windows || 'plain', u, v, m.y ?? 0, hu, hv, m.h, m.color, m.roof ?? undefined);
+        if (m.roofShape && m.roofShape !== 'flat') roofShape(P, F, m.kind === 'cyl' ? u : u, v, m.y + m.h, m.kind === 'cyl' ? m.r : hu, m.kind === 'cyl' ? m.r : hv, m.roofH, m.roofShape, hex(m.roofColor ?? m.roof ?? 0x8a4a3a));
       }
+      break;
+    case 'ferry':   // a timber pier running out over the water, a ticket hut and bollards
+      B('plain', 0, -hd * 0.35, 0, hw * 0.45, hd * 0.75, 0.6, 0x8a6a4a);
+      B('plain', 0, hd * 0.55, 0, hw * 0.55, hd * 0.25, 2.6, 0xe8e4dc, 0x3a6ac8);
+      for (const u of [-hw * 0.4, hw * 0.4]) for (const v of [-hd * 0.9, -hd * 0.4]) C(u, v, 0.6, 0.2, 0.6, 6, 0x3a3a3a);
       break;
     case 'substation':
       B('plain', 0, 0, 0, hw * 0.9, hd * 0.9, 0.2, 0x9a9a94);

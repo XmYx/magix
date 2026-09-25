@@ -1,3 +1,4 @@
+import { BRIDGE_STYLES, lineTier, lineSegments, lineLength } from './infrastructure.js';
 // Organicity — the land model. A fine cell grid carries water, roads, zoning,
 // districts and building occupancy. Each cell also remembers its nearest road
 // (edge, arc position, side, kerb distance). Lots are carved from that
@@ -6,7 +7,7 @@
 // bisector of angled junctions — wedges, triangles and slivers fall out naturally.
 import { N, DEPTH, FLOOR_H, ZONES, SERVICES, ROADS, MAX_AREA, DISTRICT_COLORS, BRIDGE_COST_MULT, LAYERS, RAMP_LEN, JUNCTIONS, ULINES } from './config.js';
 import { generateHeights, roadProfile, flattenLot } from './terrain.js';
-import { landmarkDef } from './packs.js';
+import { landmarkDef, buildableDef } from './packs.js';
 import { depositNear, DEPOSITS } from './resources.js';
 import { transitMode } from './transit.js';
 import { RoadNet } from './roads.js';
@@ -15,6 +16,11 @@ import { fbm, hash2, mulberry32, maskDistance, clamp, rleEncode, rleDecode } fro
 
 // nearest point of a utility line to (x, z)
 export function segNearest(l, x, z) {
+  if (l.points?.length > 1) {
+    let best = { d: Infinity }, offset = 0; const len = lineLength(l);
+    for (const seg of lineSegments(l)) { const q = segNearest(seg, x, z), n = lineLength(seg); if (q.d < best.d) best = { ...q, t: (offset + q.t * n) / Math.max(1, len) }; offset += n; }
+    return best;
+  }
   const [ax, az] = l.a, [bx, bz] = l.b, dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
   const t = clamp(((x - ax) * dx + (z - az) * dz) / L2, 0, 1), px = ax + dx * t, pz = az + dz * t;
   return { d: Math.hypot(x - px, z - pz), x: px, z: pz, t };
@@ -281,28 +287,31 @@ export class World {
     this.zoneVersion++;
   }
 
-  roadCost(sA, c, sB, type, layer = 0) {
+  roadCost(sA, c, sB, type, layer = 0, bridgeStyle = 'auto') {
     const len = this.net.curveLength(sA, c, sB);
-    let wet = 0, climb = 0, previous = this.heightAt(sA.x,sA.z); const steps = Math.max(2, Math.ceil(len));
+    let wet = 0, wetRun = 0, maxRun = 0, climb = 0, previous = this.heightAt(sA.x,sA.z); const steps = Math.max(2, Math.ceil(len));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps, mt = 1 - t;
       const x = mt * mt * sA.x + 2 * mt * t * c.x + t * t * sB.x, z = mt * mt * sA.z + 2 * mt * t * c.z + t * t * sB.z;
       const height=this.heightAt(x,z);climb+=Math.abs(height-previous);previous=height;
-      const ci = this.cellAt(x, z); if (ci >= 0 && this.water[ci]) wet++;
+      const ci = this.cellAt(x, z); if (ci >= 0 && this.water[ci]) { wet++; wetRun++; maxRun = Math.max(maxRun, wetRun); } else wetRun = 0;
     }
     const wetLen = (wet / (steps + 1)) * len;
     const mult = LAYERS[layer]?.cost ?? 1;
     // elevated & tunnel roads already span water, so no extra bridge premium
-    return { cost: Math.round(ROADS[type].cost * (climb * 6 + (layer ? len * mult : len - wetLen + wetLen * BRIDGE_COST_MULT))), climb, len, wetLen: layer ? 0 : wetLen };
+    return { cost: Math.round(ROADS[type].cost * (climb * 6 + (layer ? len * mult : len - wetLen + wetLen * (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).mult))), climb, len, wetLen: layer ? 0 : wetLen, err: !layer && maxRun * len / steps > (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).span ? 'Water span exceeds this bridge style limit' : null };
   }
 
-  buildRoad(sA, c, sB, type, oneway = 0, layer = 0) {
+  buildRoad(sA, c, sB, type, oneway = 0, layer = 0, bridgeStyle = 'auto') {
+    c ||= { x: (sA.x+sB.x)/2, z: (sA.z+sB.z)/2 };
+    const plan = this.roadCost(sA, c, sB, type, layer, bridgeStyle);
+    if (plan.err) return { edges: [], err: plan.err };
     this.net.tbb = null;
     const res = this.net.build(sA, c, sB, type, oneway, layer);
     // a road that ends at the map edge becomes a regional exit to the neighbouring tile
     let exits = 0;
     for (const id of res.edges || []) {
-      const e = this.net.edges.get(id); if (!e) continue;
+      const e = this.net.edges.get(id); if (!e) continue; e.bridgeStyle = bridgeStyle;
       for (const nid of [e.a, e.b]) {
         const n = this.net.nodes.get(nid);
         if (n && !n.outside && n.edges.size === 1 && Math.min(n.x, n.z, N - n.x, N - n.z) < 2.5) { n.outside = true; exits++; }
@@ -776,18 +785,20 @@ export class World {
 
   // ------------------------------------------------------------------ utility lines
   // straight runs of power line, water pipe or drain; a run may start or end on another run
-  planULine(kind, ax, az, bx, bz) {
-    const L = ULINES[kind], len = Math.hypot(bx - ax, bz - az);
-    if (!L) return { ok: false, err: 'Unknown line' };
-    if (len < 3) return { ok: false, err: 'Too short' };
-    if (len > 260) return { ok: false, err: 'Too long: 260 m at most per run' };
-    for (const [x, z] of [[ax, az], [bx, bz]]) if (x < 1 || z < 1 || x > N - 1 || z > N - 1) return { ok: false, err: 'Off the map' };
-    let wet = 0; for (let t = 0; t <= 1; t += 2 / len) { const c = this.cellAt(ax + (bx - ax) * t, az + (bz - az) * t); if (c >= 0 && this.water[c]) wet += 2; }
+  planULine(kind, ax, az, bx, bz, options = {}) {
+    if (!ULINES[kind]) return { ok: false, err: 'Unknown line' };
+    const points = options.points || [[ax, az], [bx, bz]], line = { kind, a: [ax, az], b: [bx, bz], points, tier: options.tier === 1 ? 1 : 0 };
+    if (points.length < 2 || points.length > 400 || points.some(p => p.length !== 2 || p.some(v => !Number.isFinite(v) || v < 1 || v > N-1))) return { ok: false, err: 'Off the map or invalid route' };
+    const len = lineLength(line);
+    if (len < 3 || len > 520) return { ok: false, err: 'Run length must be 3–520 m' };
+    let wet = 0;
+    for (const seg of lineSegments(line)) { const d = lineLength(seg), n = Math.max(1, Math.ceil(d)); for (let i = 0; i < n; i++) if (this.water[this.cellAt(seg.a[0] + (seg.b[0]-seg.a[0])*(i+0.5)/n, seg.a[1] + (seg.b[1]-seg.a[1])*(i+0.5)/n)]) wet += d/n; }
     if (kind !== 'power' && wet > 40) return { ok: false, err: 'Pipes can cross at most 40 m of water' };
-    return { ok: true, len, cost: Math.round(len * L.cost * (1 + wet / len)) };
+    return { ok: true, len, line, cost: Math.round((len + wet) * ULINES[kind].cost * lineTier(line).cost) };
   }
-  addULine(kind, ax, az, bx, bz) {
-    const l = { id: this.ulineId++, kind, a: [+ax.toFixed(1), +az.toFixed(1)], b: [+bx.toFixed(1), +bz.toFixed(1)] };
+  addULine(kind, ax, az, bx, bz, options = {}) {
+    const plan = this.planULine(kind, ax, az, bx, bz, options); if (!plan.ok) return null;
+    const l = { ...plan.line, points: plan.line.points.map(p => p.map(v => +v.toFixed(2))), id: this.ulineId++ };
     this.ulines.push(l); this.ulineVersion++; return l;
   }
   removeULine(id) { const n = this.ulines.length; this.ulines = this.ulines.filter((l) => l.id !== id); if (this.ulines.length !== n) this.ulineVersion++; }
@@ -827,7 +838,7 @@ export class World {
     return {
       version: net.version, nid: net.nid, eid: net.eid,
       nodes: [...net.nodes.values()].map((n) => [n.id, n.x, n.z, n.outside, n.control]),
-      edges: [...net.edges.values()].map((e) => [e.id, e.a, e.b, e.c.x, e.c.z, e.type, e.cond, e.oneway || 0, e.flow || 0, e.layer || 0, e.busLane ? 1 : 0]),
+      edges: [...net.edges.values()].map((e) => [e.id, e.a, e.b, e.c.x, e.c.z, e.type, e.cond, e.oneway || 0, e.flow || 0, e.layer || 0, e.busLane ? 1 : 0, e.bridgeStyle || 'auto']),
     };
   }
 
@@ -837,14 +848,14 @@ export class World {
     for (const e of [...net.edges.values()]) if (!keep.has(e.id)) net.removeEdge(e.id);
     for (const e of net.edges.values()) {
       const o = st.edges.find((x) => x[0] === e.id);
-      e.busLane = !!o[10];
+      e.busLane = !!o[10]; e.bridgeStyle = o[11] || 'auto';
       if (o[5] !== e.type || o[7] !== e.oneway || o[9] !== (e.layer || 0)) { net.touch(e.bb); e.type = o[5]; e.oneway = o[7]; e.layer = o[9]; net.tess(e); net.touch(e.bb); }
     }
     for (const [id, x, z, out, ctl] of st.nodes) { if (!net.nodes.has(id)) net.addNode(x, z, out, id); net.nodes.get(id).control = ctl || 'auto'; }
-    for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane] of st.edges) {
+    for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane, bridgeStyle] of st.edges) {
       if (net.edges.has(id)) continue;
       const e = net.addEdge(net.nodes.get(a), net.nodes.get(b), { x: cx, z: cz }, type, cond, id);
-      e.oneway = ow; e.flow = flow; e.layer = layer || 0; e.busLane = !!lane;
+      e.oneway = ow; e.flow = flow; e.layer = layer || 0; e.busLane = !!lane; e.bridgeStyle = BRIDGE_STYLES[bridgeStyle] ? bridgeStyle : 'auto';
     }
     for (const n of [...net.nodes.values()]) if (!n.edges.size && !n.outside) net.nodes.delete(n.id);
     net.nid = Math.max(net.nid, st.nid); net.eid = Math.max(net.eid, st.eid); net.version++;
@@ -903,7 +914,7 @@ export class World {
     return {
       mapPreset: this.mapPreset, levees: rleEncode(this.levees), hazards: this.hazards, seed: this.seed, bid: this.bid, year: this.year, platformId: this.platformId, platforms: [...this.platforms.values()],
       nodes: [...this.net.nodes.values()].map((n) => [n.id, +n.x.toFixed(2), +n.z.toFixed(2), n.outside ? 1 : 0, n.control || 'auto']),
-      edges: [...this.net.edges.values()].map((e) => [e.id, e.a, e.b, +e.c.x.toFixed(2), +e.c.z.toFixed(2), e.type, +e.cond.toFixed(3), e.oneway || 0, e.layer || 0, e.busLane ? 1 : 0]),
+      edges: [...this.net.edges.values()].map((e) => [e.id, e.a, e.b, +e.c.x.toFixed(2), +e.c.z.toFixed(2), e.type, +e.cond.toFixed(3), e.oneway || 0, e.layer || 0, e.busLane ? 1 : 0, e.bridgeStyle || 'auto']),
       lines: this.lines, lineId: this.lineId, ...(this.ulines.length ? { ulines: this.ulines, ulineId: this.ulineId } : {}),
       zone: rleEncode(this.zone), district: rleEncode(this.district),
       ...(this.terrainEdited ? { water: rleEncode(this.water) } : {}),
@@ -927,7 +938,7 @@ export class World {
   static load(d) {
     const w = new World(d.seed, d.mapPreset || 'river');
     w.edgeMatch = d.edgeMatch || null;
-    for (const [k, def] of Object.entries(d.packDefs || {})) if (!SERVICES[k] && /^pk_[a-z0-9]{1,24}$/.test(k) && def && typeof def === 'object') SERVICES[k] = landmarkDef(def, def.pack, k);
+    for (const [k, def] of Object.entries(d.packDefs || {})) if (!SERVICES[k] && /^pk_[a-z0-9]{1,24}$/.test(k) && def && typeof def === 'object') SERVICES[k] = def.landmark ? landmarkDef(def, def.pack, k) : buildableDef({ ...def, effects: def }, def.pack, k);
     w.year=d.year || 2000;w.platforms=new Map((d.platforms || []).map(p=>[p.id,p]));w.platformId=d.platformId || 1;
     w.genTerrain();
     if(d.levees)w.levees=rleDecode(d.levees,Uint8Array,N*N);
@@ -944,9 +955,9 @@ export class World {
       w.replaying = true;
     }
     for (const [id, x, z, o, ctl] of d.nodes) w.net.addNode(x, z, !!o, id).control = ctl || 'auto';
-    for (const [id, a, b, cx, cz, type, cond, ow, layer, lane] of d.edges) {
+    for (const [id, a, b, cx, cz, type, cond, ow, layer, lane, bridgeStyle] of d.edges) {
       const e = w.net.addEdge(w.net.nodes.get(a), w.net.nodes.get(b), { x: cx, z: cz }, type, cond, id);
-      e.oneway = ow || 0; e.layer = layer || 0; e.busLane = !!lane;
+      e.oneway = ow || 0; e.layer = layer || 0; e.busLane = !!lane; e.bridgeStyle = BRIDGE_STYLES[bridgeStyle] ? bridgeStyle : 'auto';
     }
     roadProfile(w);
     w.lines = d.lines || []; w.lineId = d.lineId || 1;

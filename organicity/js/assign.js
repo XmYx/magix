@@ -13,9 +13,9 @@ import { RoadNet } from './roads.js';
 export function netFromSnapshot(snap) {
   const net = new RoadNet();
   for (const [id, x, z, o, ctl] of snap.nodes) net.addNode(x, z, !!o, id).control = ctl || 'auto';
-  for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane, fab, fba, heights, hazardSpeed, speedF] of snap.edges) {
+  for (const [id, a, b, cx, cz, type, cond, ow, flow, layer, lane, fab, fba, heights, hazardSpeed, speedF, bridgeStyle] of snap.edges) {
     const e = net.addEdge(net.nodes.get(a), net.nodes.get(b), { x: cx, z: cz }, type, cond, id);
-    e.heights=heights; e.snapshotSpeed=speedF; e.hazardSpeed=hazardSpeed ?? 1; e.oneway = ow; e.layer = layer || 0; e.busLane = !!lane;
+    e.bridgeStyle=bridgeStyle || 'auto'; e.heights=heights; e.snapshotSpeed=speedF; e.hazardSpeed=hazardSpeed ?? 1; e.oneway = ow; e.layer = layer || 0; e.busLane = !!lane;
     e.fAB = fab ?? flow / 2; e.fBA = fba ?? flow / 2;
   }
   updateCosts(net); net.levels();
@@ -46,7 +46,7 @@ export function updateCosts(net, weatherSpeed = 1) {
     e.flow = (e.fAB || 0) + (e.fBA || 0);
     e.cong = Math.max(e.fAB || 0, e.fBA || 0) / dirCapacity(e);
     e.speedF = Math.max(0.2, 1 / (1 + 0.8 * Math.pow(e.cong, 4))) * (0.65 + 0.35 * (e.cond ?? 1)) * (1 - (1 - weatherSpeed) * (e.wet ?? 1)) * (e.hazardSpeed ?? 1);   // only roads under the weather front slow down
-    e.cost = e.len / (ROADS[e.type].speed * e.speedF);
+    e.cost = e.len / (ROADS[e.type].speed * e.speedF) + (e.bridgeStyle === 'movable' ? 2.5 : 0);
   }
   for (const n of net.nodes.values()) {
     let through = 0;
@@ -230,12 +230,14 @@ export function* assignTraffic(net, blds, opts) {
           const carTime=net.costTo(res,net.edges.get(d.anchor.edge),d.anchor.s);
           const bus = TG && transitTo(TG[period], searchFor(o, period), d, opts.transitBoost || 1, isFinite(carTime) ? carTime : 60);
           if (bus) {
+            bus.share = Math.min(1,bus.share + (1-(opts.parking ?? 1))*0.4);
             const room = (l) => Math.max(0, lineCapacity(l, period) - (riders.get(l.id) || 0));
             const moved = Math.min(amount * (isFinite(carTime) ? bus.share : 1), ...bus.lines.map(room));
             amount -= moved; out.transit += moved; out[bus.line.mode || 'bus'] += moved;
             for (const l of bus.lines) riders.set(l.id, (riders.get(l.id) || 0) + moved);
             out.transfers += moved * bus.transfers; if (bus.transfers > 1) out.multiTransfers = (out.multiTransfers || 0) + moved;
           }
+          const shifted = amount * (1-(opts.parking ?? 1))*0.35; out.walk += shifted; amount -= shifted;
           const air = amount * (1 - sky), flown = air > 1e-4 ? fly(o, d, air) : 0;
           if(isFinite(carTime))load(res, o, d, amount - flown, 'car');else out.unserved+=amount-flown;
         }

@@ -134,6 +134,9 @@ export function propsOf(kind, key, sim) {
     if (S.water) add('Water', `${S.water} units${key === 'tower' ? ' · lifts water 30 above itself' : key === 'pump' ? ' · lifts water 18 above itself' : ''}`);
     if (S.sewage) add('Sewage treated', `${S.sewage} units`);
     if (S.capBoost) add('Grid import', `+${S.capBoost} MW`);
+    if (S.parking) add('Parking spaces', S.parking);
+    if (S.treatment) add('Pump contamination removed', `${Math.round(S.treatment*100)}%`);
+    if (S.treatmentLevel) add('Sewage pollution removed', `${Math.round(S.treatmentLevel*100)}%`);
     if (S.radius) add('Coverage', `${Math.round(S.radius * 1.5)} m by road`);
     if (S.park) add('Appeal radius', `${Math.round(S.park * 1.5)} m`);
     if (S.seats) add('Seats', S.seats);

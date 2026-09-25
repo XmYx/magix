@@ -1,8 +1,10 @@
 // Organicity — procedural soundscape (Web Audio, no sound files). A city hum that
 // follows density and zoom, traffic that follows road flows near the camera, rain,
 // sirens while emergency vehicles run, birds in quiet older towns and a synth pad
-// in the cyberpunk era. Starts on the first click or key press (browser policy).
-import { ROADS } from './config.js';
+// in the cyberpunk era, and positional sound: industry, trains and crowds heard from where
+// they are, panned and fading with distance around the camera. Starts on the first click or
+// key press (browser policy).
+import { ROADS, SERVICES } from './config.js';
 import { clamp } from './util.js';
 
 const KEY = 'organicity-audio';
@@ -48,6 +50,53 @@ export class CityAudio {
     const so = ctx.createOscillator(); so.type = 'triangle'; so.frequency.value = 700;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.5; const depth = ctx.createGain(); depth.gain.value = 220;
     lfo.connect(depth); depth.connect(so.frequency); so.connect(this.siren); so.start(); lfo.start();
+    // positional voices: a small pool per kind, each a looped noise through a filter, a pulse and a panner
+    this.voices = [];
+    const voice = (kind, buf, type, freq, q, pulse, depthV) => {
+      const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true; src.playbackRate.value = 0.9 + Math.random() * 0.2;
+      const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const amp = ctx.createGain(); amp.gain.value = 1 - depthV;   // rhythm: machinery clanks, rails clatter, crowds swell
+      const lf = ctx.createOscillator(); lf.frequency.value = pulse * (0.9 + Math.random() * 0.2); const ld = ctx.createGain(); ld.gain.value = depthV; lf.connect(ld); ld.connect(amp.gain); lf.start();
+      const g = ctx.createGain(); g.gain.value = 0;
+      const pan = ctx.createPanner(); Object.assign(pan, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 25, maxDistance: 900, rolloffFactor: 1.3 });
+      src.connect(f); f.connect(amp); amp.connect(g); g.connect(pan); pan.connect(this.master); src.start();
+      this.voices.push({ kind, g, pan, busy: false });
+    };
+    for (let k = 0; k < 3; k++) voice('industry', brown, 'lowpass', 260, 1.2, 1.6, 0.45);
+    for (let k = 0; k < 2; k++) voice('train', white, 'bandpass', 420, 0.8, 5.5, 0.5);
+    for (let k = 0; k < 2; k++) voice('crowd', white, 'bandpass', 950, 1.1, 0.35, 0.4);
+  }
+
+  // where each kind of sound comes from right now, nearest first
+  emitters() {
+    const c = this.r.cam, w = this.sim.w, out = { industry: [], train: [], crowd: [] }, R = 160 + c.dist;
+    for (const b of w.buildings.values()) {
+      if (Math.abs(b.cx - c.x) > R || Math.abs(b.cz - c.z) > R || b.abandoned) continue;
+      const S = SERVICES[b.svc];
+      if ((S?.chain && S.chain !== 'market' && (b.indEff || 0) > 0.1) || b.svc === 'coal' || (!b.svc && b.zone === 4 && b.level >= 2 && b.workers > 5)) out.industry.push({ x: b.cx, y: 3, z: b.cz, v: S?.chain ? 1 : b.svc === 'coal' ? 0.9 : 0.45 });
+      if (b.svc === 'stadium' || b.svc === 'plaza' || (this.sim.event && this.sim.event.venue === b.id)) out.crowd.push({ x: b.cx, y: 2, z: b.cz, v: this.sim.event?.venue === b.id ? 1 : 0.35 });
+    }
+    for (const t of this.r.trains || []) out.train.push({ x: t.mesh.position.x, y: t.mesh.position.y, z: t.mesh.position.z, v: 1 });
+    // a crowd wherever many pedestrians are gathered
+    const walk = (this.r.walkers || []).filter((a) => a.stay > 0);
+    if (walk.length > 8) { let x = 0, z = 0; for (const a of walk) { x += a.ax; z += a.az; } out.crowd.push({ x: x / walk.length, y: 1, z: z / walk.length, v: Math.min(1, walk.length / 40) }); }
+    for (const k in out) out[k].sort((a, b) => Math.hypot(a.x - c.x, a.z - c.z) - Math.hypot(b.x - c.x, b.z - c.z));
+    return out;
+  }
+  placeVoices() {
+    const ctx = this.ctx, now = ctx.currentTime, L = ctx.listener, cam = this.r.camera, s = this.sim, night = this.r.night || 0;
+    // the listener is the camera: its position and where it looks
+    const p = cam.position, d = cam.getWorldDirection?.(cam.position.clone()) || { x: 0, y: -1, z: -1 };
+    if (L.positionX) { L.positionX.setTargetAtTime(p.x, now, 0.1); L.positionY.setTargetAtTime(p.y, now, 0.1); L.positionZ.setTargetAtTime(p.z, now, 0.1); L.forwardX.setTargetAtTime(d.x, now, 0.1); L.forwardY.setTargetAtTime(d.y, now, 0.1); L.forwardZ.setTargetAtTime(d.z, now, 0.1); L.upX.value = 0; L.upY.value = 1; L.upZ.value = 0; }
+    else { L.setPosition(p.x, p.y, p.z); L.setOrientation(d.x, d.y, d.z, 0, 1, 0); }
+    const em = this.emitters(), idx = { industry: 0, train: 0, crowd: 0 }, active = s.paused ? 0.3 : 1;
+    const level = { industry: 0.5 * (1 - 0.5 * night), train: 0.55, crowd: 0.35 * (1 - 0.6 * night) };
+    for (const v of this.voices) {
+      const e = em[v.kind][idx[v.kind]++];
+      if (!e) { v.g.gain.setTargetAtTime(0, now, 0.8); continue; }
+      const P = v.pan; if (P.positionX) { P.positionX.setTargetAtTime(e.x, now, 0.3); P.positionY.setTargetAtTime(e.y, now, 0.3); P.positionZ.setTargetAtTime(e.z, now, 0.3); } else P.setPosition(e.x, e.y, e.z);
+      v.g.gain.setTargetAtTime(level[v.kind] * e.v * active, now, 0.6);
+    }
   }
 
   chirp() {
@@ -72,7 +121,7 @@ export class CityAudio {
     if (!this.ctx || this.muted) return;
     this.t += dt;
     const s = this.sim, c = this.r.cam, now = this.ctx.currentTime, set = (g, v) => g.gain.setTargetAtTime(v, now, 0.6);
-    if (this.t > 0.5) { this.t = 0; this.sampleTraffic(); }
+    if (this.t > 0.5) { this.t = 0; this.sampleTraffic(); if (this.voices?.length) this.placeVoices(); }
     const near = clamp(1 - (c.dist - 40) / 700, 0.15, 1), dens = clamp(s.at(s.f.dens, c.x, c.z) / 250, 0, 1), night = this.r.night || 0;
     const active = s.paused ? 0.35 : 1, wet = { rain: 0.5, storm: 0.9, snow: 0.08 }[s.weather.type] || 0;
     set(this.hum, (0.08 + 0.35 * dens) * near * (1 - 0.4 * night) * active);

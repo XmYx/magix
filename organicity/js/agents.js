@@ -95,6 +95,7 @@ export class Traffic {
         const a = l[k], T = AGENT_TYPES[a.type], g = a.segs[a.i], e = net.edges.get(g.edge);
         const busLane = T.lane === 'bus' && e.busLane;
         let vmax = ROADS[e.type].speed * (busLane ? 1 : e.speedF || 1) * a.vm * T.speed;
+        if (e.bridgeClosed) vmax = 0;
         if (k > 0) { const lead = l[k - 1], gap = Math.abs(lead.s - a.s) - AGENT_TYPES[lead.type].len; vmax = Math.min(vmax, Math.max(0, (gap - GAP) * 1.8)); }
         const endsAtNode = g.to <= 1e-3 || g.to >= e.len - 1e-3, dist = Math.abs(g.to - a.s);
         if (endsAtNode && dist < 14) {
@@ -148,6 +149,7 @@ export class AgentSim {
     const T = this.T;
     if (m.type === 'net') this.net = netFromSnapshot(m.net);
     else if (m.type === 'samples') { this.samples = m.samples; this.target = m.target; }
+    else if (m.type === 'bridges') { const closed=new Set(m.closed);for(const e of this.net.edges.values()) e.bridgeClosed=closed.has(e.id); }
     else if (m.type === 'era') this.heritage = m.heritage;
     else if (m.type === 'spawn') { for (const s of m.list) if (T.canSpawn(s.segs)) T.spawn(s.segs, s.kind, { col: s.col }); }
     else if (m.type === 'lines') {       // reconcile buses: keep lines whose route is unchanged

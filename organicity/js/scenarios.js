@@ -1,6 +1,6 @@
 // Organicity — guided tutorial and authored scenarios. The authored scenarios are
 // built from a fixed seed, so every player starts from the same city.
-import { N, ZONES } from './config.js';
+import { N, ZONES, SERVICES } from './config.js';
 
 const zoned = (w, ids) => {
   if (w._zc?.v !== w.zoneVersion) {
@@ -63,7 +63,14 @@ function populate(w, sim, level, every = 3) {
 }
 
 export function setupScenario(w, sim, key) {
-  const B = builder(w), sh = B.shore();
+  const B = builder(w), sh = B.shore(), def = SCENARIOS[key]?.def;
+  if (def) {   // a pack scenario: its roads, zones and services, then its starting money
+    for (const r of def.setup.roads) B.road(r.a, r.b, r.type);
+    for (const z of def.setup.zones) w.fillZone(z.at[0], z.at[1], z.zone);
+    for (const s of def.setup.services) if (SERVICES[s.key]) B.svc(s.key, s.at[0], s.at[1]);
+    if (def.setup.populate) populate(w, sim, def.setup.populate);
+    sim.money = def.money; w.undoStack.length = 0; return;
+  }
   if (key === 'gridlock') {
     // homes in the west, jobs in the east, and a single lane between them:
     // every commute squeezes through it (fix: more links, wider roads, buses)

@@ -1,3 +1,4 @@
+import { holdElection } from './citizens.js';
 // Organicity — the regional economy. Every city tile of the region (yours and the AI's) has
 // a president, a treasury, housing blocks with rents and job blocks with salaries. Families
 // live in the housing, work in the jobs (in their own tile or a linked neighbour), pay rent,
@@ -18,7 +19,7 @@ import { hash2, clamp } from './util.js';
 import { OPPOSITE, neighbours, tileKey, exitsOf } from './region.js';
 import { newPresident, clampPolicy, applyPolicy, aiDecide, predict, POLICY_DEFAULT } from './presidents.js';
 import { cityBlocks } from './tileview.js';
-import { rentOf, salaryOf, newFamily, reconsider, settle, bestJob, utility, sampleHomes, THRESHOLD, WORKDAYS } from './families.js';
+import { commute, rentOf, salaryOf, newFamily, reconsider, settle, bestJob, utility, sampleHomes, THRESHOLD, WORKDAYS } from './families.js';
 
 export const TERM_YEARS = 10;
 const edgePoint = (side, pos) => (side === 'west' ? [0.5, pos] : side === 'east' ? [N - 0.5, pos] : side === 'north' ? [pos, 0.5] : [pos, N - 0.5]);
@@ -260,6 +261,11 @@ export class RegionSim {
     f.wt = j.tile; f.wid = j.job.id; j.job.filled += f.earners;
   }
   move(f, d) {
+    if (this.sim && this.storyDay !== this.day && (f.tile === this.active || d.tile === this.active)) {
+      const future = commute(this.ctx(), d.tile, d.home, d.job?.tile, d.job?.job);
+      const reason = f.toll > 0 && future.toll < f.toll ? 'lower border tolls' : future.cost < f.commute ? 'a cheaper commute' : d.home.rent < f.rent ? 'lower rent' : 'a better home and job';
+      this.sim.headline(`Family ${f.id} (${f.size} people) ${d.tile === f.tile ? 'moves to a new home in town' : d.tile === this.active ? 'moves into town' : 'moves away'} after finding ${reason}.`, d.tile === this.active ? 'good' : 'warn'); this.storyDay = this.day;
+    }
     const from = f.tile, fromHome = this.tiles.get(from).housing.get(f.home);
     if (fromHome) fromHome.occ = Math.max(0, fromHome.occ - 1);
     if (from === this.active) { const b = this.world.buildings.get(f.home); if (b) b.occ = Math.max(0, (b.occ || 0) - 1); }
@@ -420,10 +426,12 @@ export class RegionSim {
   // End of a ten-year term: record it, hold elections (an AI president whose tile lost both
   // residents and money is voted out), and tell the interface to show the comparison.
   closeTerm(year) {
+    const election = this.sim ? holdElection(this.sim, year) : null;
     const term = { start: this.e.termStart, end: year, tiles: {} };
     for (const [k, st] of this.tiles) {
       const h = (this.e.history[k] || []).filter((r) => r.year >= term.start && r.year <= year), a = h[0], b = h[h.length - 1];
       term.tiles[k] = { president: st.president.name, controller: st.president.controller, priority: st.president.priority, pop: [a?.pop ?? 0, b?.pop ?? 0], treasury: [a?.treasury ?? 0, b?.treasury ?? 0] };
+      if (k === this.active && election) Object.assign(term.tiles[k], { approval: election.approval, won: election.won });
       if (st.president.controller === 'ai' && a && b && b.pop < a.pop && b.treasury < a.treasury) {
         st.president = { ...newPresident(this.r.seed, k, 'ai', year, this.e.terms.length + 1), since: year }; term.tiles[k].replacedBy = st.president.name;
       }

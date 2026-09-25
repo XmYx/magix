@@ -1,5 +1,7 @@
 {
   "name": "Old Town & Harbour Lights",
+  "version": 2,
+  "author": "Organicity",
   "styles": {
     "artdeco": { "name": "Art deco", "walls": ["#e8dcc0", "#d8c8a0", "#c8b890", "#e0e4dc"], "roof": ["#5a6a70", "#4a5a60"] },
     "nordic": { "name": "Nordic timber", "walls": ["#b8483a", "#e8c040", "#3a6a8a", "#f0ece0"], "roof": ["#3a3a3a", "#4a4440"] }
@@ -12,8 +14,9 @@
         { "cyl": true, "u": 0, "v": 0, "y": 0, "r": 2.6, "h": 6, "color": "#f4f4f4" },
         { "cyl": true, "u": 0, "v": 0, "y": 6, "r": 2.3, "h": 6, "color": "#d83a3a" },
         { "cyl": true, "u": 0, "v": 0, "y": 12, "r": 2.0, "h": 6, "color": "#f4f4f4" },
-        { "cyl": true, "u": 0, "v": 0, "y": 18, "r": 1.6, "h": 2.5, "color": "#ffe27a", "roof": "#3a3a3a" },
-        { "u": 0.6, "v": 0.6, "y": 0, "w": 0.3, "d": 0.3, "h": 3, "color": "#e8e0d0", "roof": "#8a4a3a" }
+        { "kind": "sign", "u": 0, "v": 0, "y": 18, "w": 0.2, "d": 0.2, "h": 2.2, "color": "#ffe27a" },
+        { "cyl": true, "u": 0, "v": 0, "y": 20.2, "r": 1.7, "h": 0.3, "color": "#3a3a3a", "roofShape": "dome", "roofH": 1.6, "roofColor": "#3a3a3a" },
+        { "u": 0.6, "v": 0.6, "y": 0, "w": 0.3, "d": 0.3, "h": 3, "color": "#e8e0d0", "roofShape": "gable", "roofH": 1.6, "roofColor": "#8a4a3a" }
       ]
     },
     "clocktower": {
@@ -22,9 +25,63 @@
       "model": [
         { "u": 0, "v": 0, "y": 0, "w": 0.95, "d": 0.95, "h": 0.15, "color": "#d8ccb0" },
         { "u": 0, "v": 0, "y": 0, "w": 0.35, "d": 0.35, "h": 20, "color": "#a85a42" },
-        { "u": 0, "v": 0, "y": 14, "w": 0.4, "d": 0.4, "h": 3, "color": "#f0ead8" },
-        { "u": 0, "v": 0, "y": 20, "w": 0.3, "d": 0.3, "h": 4, "color": "#5a6a70" }
+        { "kind": "sign", "u": 0, "v": 0.36, "y": 15, "w": 0.2, "d": 0.02, "h": 2, "color": "#fff4d0" },
+        { "u": 0, "v": 0, "y": 20, "w": 0.3, "d": 0.3, "h": 2, "color": "#5a6a70", "roofShape": "spire", "roofH": 7, "roofColor": "#3a5a50" }
       ]
+    }
+  },
+  "buildables": {
+    "diner": {
+      "cat": "svc", "name": "Corner diner", "w": 10, "d": 8, "cost": 6000, "upkeep": 90, "unlock": 300,
+      "desc": "Chrome, coffee and a neon sign: brightens its corner and employs a few locals.",
+      "effects": { "park": 25, "jobs": 10, "tourism": 150, "noise": 0.1 },
+      "model": [
+        { "u": 0, "v": -0.1, "y": 0, "w": 0.9, "d": 0.75, "h": 3.4, "color": "#e8e4dc", "windows": "shop", "roof": "#c83a3a" },
+        { "kind": "sign", "u": 0, "v": 0.7, "y": 3.4, "w": 0.6, "d": 0.05, "h": 1.2, "color": "#ff3a8a" }
+      ]
+    },
+    "solarfarm": {
+      "cat": "util", "name": "Solar farm", "w": 20, "d": 16, "cost": 22000, "upkeep": 160, "unlock": 1000,
+      "desc": "Rows of panels: clean power for the network its road joins.",
+      "effects": { "power": 18, "jobs": 4 },
+      "model": [
+        { "u": -0.5, "v": -0.4, "y": 0.6, "w": 0.42, "d": 0.12, "h": 0.2, "color": "#243a5a" },
+        { "u": 0.5, "v": -0.4, "y": 0.6, "w": 0.42, "d": 0.12, "h": 0.2, "color": "#243a5a" },
+        { "u": -0.5, "v": 0.1, "y": 0.6, "w": 0.42, "d": 0.12, "h": 0.2, "color": "#243a5a" },
+        { "u": 0.5, "v": 0.1, "y": 0.6, "w": 0.42, "d": 0.12, "h": 0.2, "color": "#243a5a" },
+        { "u": 0.8, "v": 0.7, "y": 0, "w": 0.12, "d": 0.2, "h": 2.4, "color": "#d8d8d0", "roofShape": "gable", "roofH": 1, "roofColor": "#6a6a6a" }
+      ]
+    },
+    "healthcentre": {
+      "cat": "svc", "name": "Health centre", "w": 12, "d": 10, "cost": 9000, "upkeep": 320, "unlock": 500,
+      "desc": "A small neighbourhood practice: covers like a clinic, over a shorter reach.",
+      "effects": { "covers": "clinic", "radius": 30, "patients": 180, "jobs": 14 },
+      "model": [
+        { "u": 0, "v": 0, "y": 0, "w": 0.85, "d": 0.8, "h": 4.2, "color": "#f0f0ea", "windows": "off", "roofShape": "hip", "roofH": 2, "roofColor": "#6a7a8a" },
+        { "kind": "sign", "u": 0, "v": 0.82, "y": 3, "w": 0.25, "d": 0.03, "h": 1, "color": "#3ad06a" }
+      ]
+    }
+  },
+  "scenarios": {
+    "harbourlights": {
+      "name": "Harbour lights", "map": "coast", "seed": 20240, "startYear": 1900, "money": 45000,
+      "desc": "A quiet coastal village with a road and a few blocks. Make it a lively harbour town within three years.",
+      "deadlineDays": 1080,
+      "goals": [
+        { "label": "1,500 residents", "stat": "pop", "op": ">=", "value": 1500 },
+        { "label": "Happiness at least 65%", "stat": "happiness", "op": ">=", "value": 65 },
+        { "label": "Monthly surplus of ₵500", "stat": "surplus", "op": ">=", "value": 500 }
+      ],
+      "setup": {
+        "roads": [
+          { "from": [150, 262], "to": [300, 262], "type": "avenue" },
+          { "from": [200, 220], "to": [200, 305], "type": "street" },
+          { "from": [250, 220], "to": [250, 305], "type": "street" }
+        ],
+        "zones": [ { "at": [185, 245], "zone": 1 }, { "at": [225, 245], "zone": 3 }, { "at": [185, 285], "zone": 1 }, { "at": [225, 285], "zone": 1 } ],
+        "services": [ { "key": "coal", "at": [170, 230] }, { "key": "tower", "at": [230, 300] } ],
+        "populate": 1
+      }
     }
   }
 }

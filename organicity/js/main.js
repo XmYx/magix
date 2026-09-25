@@ -53,10 +53,10 @@ async function boot(opts) {
   if (!world) {
     const scen = !opts.sandbox && SCENARIOS[opts.scenario] ? opts.scenario : null;
     const seed = SCENARIOS[scen]?.seed ?? (Number.isFinite(opts.seed) ? opts.seed : (Math.random() * 1e6) | 0);
-    world = new World(seed, opts.mapPreset || 'river');
+    world = new World(seed, SCENARIOS[scen]?.map || opts.mapPreset || 'river');   // a pack scenario brings its own map
     if (opts.mode === 'found') { const pre = loadRegion(); if (pre) world.edgeMatch = edgeMatchFor(pre, opts.tileKey); }   // continue the neighbours' coast and hills
     world.newGame();
-    sim = new Sim(world, { sandbox: opts.sandbox ? {} : null, scenario: scen, startYear: opts.startYear, eraPace: opts.eraPace });
+    sim = new Sim(world, { sandbox: opts.sandbox ? {} : null, scenario: scen, startYear: SCENARIOS[scen]?.startYear ?? opts.startYear, eraPace: opts.eraPace });
     if (scen) setupScenario(world, sim, scen);
     if (opts.year > sim.year) { sim.startYear = opts.year; sim.year = world.year = opts.year; sim.tech = technology(opts.year); }   // a region city founded later
   }
@@ -265,7 +265,8 @@ function newOpts() {
   return { mode: 'new', seed, mapPreset: $('optMap').value, sandbox: $('optSandbox').checked, scenario: $('optScenario').value || null, startYear: +$('optEra').value, eraPace: +$('optPace').value };
 }
 
-$('optScenario').innerHTML = `<option value="">Free play</option>${Object.entries(SCENARIOS).map(([k, s]) => `<option value="${k}" title="${s.desc}">${s.name}</option>`).join('')}`;
+const fillScenarios = () => { $('optScenario').innerHTML = `<option value="">Free play</option>${Object.entries(SCENARIOS).map(([k, s]) => `<option value="${k}" title="${esc(s.desc)}">${esc(s.name)}${s.def ? ` · ${esc(s.def.pack)}` : ''}</option>`).join('')}`; };
+fillScenarios(); packsReady.then(fillScenarios);   // pack scenarios join the list once packs load
 
 // a city shared as a file or link (see share.js)
 async function importCity(text) {

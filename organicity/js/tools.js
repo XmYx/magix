@@ -1,3 +1,4 @@
+import { utilityPath } from './infrastructure.js';
 import { TRANSIT, transitMode } from './transit.js';
 import { routeLines } from './assign.js';
 // Organicity — input: camera controls and the player's tools.
@@ -8,7 +9,7 @@ import { undergroundY } from './grid.js';
 export class Tools {
   constructor(world, sim, rend, ui) {
     this.w = world; this.sim = sim; this.r = rend; this.ui = ui;
-    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, transitMode: 'bus', terrainMode: 'water', platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0, uline: null };
+    this.s = { tool: 'inspect', road: 'street', curve: false, oneway: false, zone: 1, brush: 6, fill: false, svc: 'fire', district: 0, dErase: false, water: 1, transitMode: 'bus', terrainMode: 'water', platform: 0, layer: 0, parallel: 0, upgrade: false, place: 0, uline: null, lineTier: 0, lineMode: 'straight', bridgeStyle: 'auto' };
     this.lineStops = [];      // bus stops picked for a new line
     this.pts = [];            // road points being drawn
     this.keys = new Set();
@@ -220,8 +221,8 @@ export class Tools {
     const A = P[0], mid = { x: (A.x + h.x) / 2, z: (A.z + h.z) / 2 };
     const C = this.s.curve && P.length === 2 ? P[1] : mid;
     const needCtrl = this.s.curve && P.length === 1;
-    const s = this.s, chk = this.w.net.check(A, C, h, s.road, s.layer);
-    const cost = this.w.roadCost(A, C, h, s.road, s.layer);
+    const s = this.s, chk = this.w.net.check(A, C, h, s.road, s.layer, s.bridgeStyle);
+    const cost = this.w.roadCost(A, C, h, s.road, s.layer, s.bridgeStyle);
     const pts = []; for (let i = 0; i <= 24; i++) pts.push(bezier(A, C, h, i / 24));
     // parallel twin: offset start, bend and end along the local normals
     let twin = null;
@@ -230,11 +231,11 @@ export class Tools {
       const A2 = off(A, A, C), B2 = off(h, C, h), C2 = off(C, A, h);
       twin = { A: A2, C: C2, B: B2, pts: [] };
       for (let i = 0; i <= 24; i++) twin.pts.push(bezier(A2, C2, B2, i / 24));
-      const tc = this.w.roadCost(A2, C2, B2, s.road, s.layer); cost.cost += tc.cost;
+      const tc = this.w.roadCost(A2, C2, B2, s.road, s.layer, s.bridgeStyle); cost.cost += tc.cost; cost.err ||= tc.err;
       twin.ok = this.w.net.check(A2, C2, B2, s.road, s.layer).ok;
     }
-    const afford = this.sim.canAfford(cost.cost), ok = chk.ok && (!twin || twin.ok);
-    return { A, C, B: h, pts, twin, ok: ok && afford && !needCtrl, err: !chk.ok ? chk.err : twin && !twin.ok ? 'Parallel road is blocked' : afford ? null : 'Not enough money', cost, needCtrl };
+    const afford = this.sim.canAfford(cost.cost), ok = !cost.err && chk.ok && (!twin || twin.ok);
+    return { A, C, B: h, pts, twin, ok: ok && afford && !needCtrl, err: cost.err || (!chk.ok ? chk.err : twin && !twin.ok ? 'Parallel road is blocked' : afford ? null : 'Not enough money'), cost, needCtrl };
   }
 
   // ---------------------------------------------------------------- hover / preview
@@ -284,8 +285,8 @@ export class Tools {
           const L = ULINES[s.uline], h = this.ulineSnap(g);
           r.setBrush(h.x, h.z, 1.2, L.color);
           if (this.pts.length) {
-            const a = this.pts[0], plan = this.w.planULine(s.uline, a.x, a.z, h.x, h.z), ok = plan.ok && this.sim.canAfford(plan.cost);
-            r.setRoadPreview([a, h], 0.6, ok);
+            const a = this.pts[0], plan = this.utilityPlan(h), ok = plan.ok && this.sim.canAfford(plan.cost);
+            r.setRoadPreview(plan.line?.points.map(([x,z])=>({x,z})) || [a,h], 0.6, ok);
             tip = `${L.name} · ${Math.round(plan.len || 0)} m · ${fmtMoney(plan.cost || 0)}${!plan.ok ? ' — ' + plan.err : !ok ? ' — Not enough money' : ''}`;
           } else tip = `${L.name}: click to start a run (snaps to roads and other ${L.name.toLowerCase()}s) · ${fmtMoney(L.cost)}/m`;
           break;
@@ -328,6 +329,11 @@ export class Tools {
   }
 
   // line runs snap to another run of the same kind, else to the centre of a nearby road
+  utilityPlan(h) {
+    const a = this.pts[0], points = utilityPath(this.w.net, a, h, this.s.lineMode, this.pts[1]);
+    if (!points) return { ok: false, err: 'Choose endpoints on connected roads' };
+    return this.w.planULine(this.s.uline, a.x,a.z,h.x,h.z,{ points, tier:this.s.lineTier });
+  }
   ulineSnap(g) {
     const u = this.w.nearestULine(g.x, g.z, 3, this.s.uline); if (u) return { x: u.t < 0.08 ? u.l.a[0] : u.t > 0.92 ? u.l.b[0] : u.x, z: u.t < 0.08 ? u.l.a[1] : u.t > 0.92 ? u.l.b[1] : u.z };
     const n = this.w.net.nearestNode(g.x, g.z, 3); if (n) return { x: n.x, z: n.z };
@@ -350,9 +356,9 @@ export class Tools {
         const plan = this.roadPlan(h);
         if (!plan.ok) { this.ui.toast(plan.err || 'Cannot build here', 'warn'); break; }
         w.beginTx(`${ROADS[s.road].name}`, { net: true });
-        const res = w.buildRoad(plan.A, plan.C, plan.B, s.road, s.oneway ? 1 : 0, s.layer);
+        const res = w.buildRoad(plan.A, plan.C, plan.B, s.road, s.oneway ? 1 : 0, s.layer, s.bridgeStyle);
         // a one-way twin runs the other way, making a dual carriageway
-        if (plan.twin) { if (s.oneway) w.buildRoad(plan.twin.B, plan.twin.C, plan.twin.A, s.road, 1, s.layer); else w.buildRoad(plan.twin.A, plan.twin.C, plan.twin.B, s.road, 0, s.layer); }
+        if (plan.twin) { if (s.oneway) w.buildRoad(plan.twin.B, plan.twin.C, plan.twin.A, s.road, 1, s.layer, s.bridgeStyle); else w.buildRoad(plan.twin.A, plan.twin.C, plan.twin.B, s.road, 0, s.layer, s.bridgeStyle); }
         w.commitTx(res.edges.length ? plan.cost.cost : 0);
         if (res.edges.length) {
           sim.spend(plan.cost.cost);
@@ -399,10 +405,11 @@ export class Tools {
         if (s.tool === 'util' && s.uline) {
           const h = this.ulineSnap(g);
           if (!this.pts.length) { this.pts = [h]; break; }
-          const a = this.pts[0], plan = w.planULine(s.uline, a.x, a.z, h.x, h.z);
+          if (s.lineMode === 'curve' && this.pts.length === 1) { this.pts.push(h); break; }
+          const a = this.pts[0], plan = this.utilityPlan(h);
           if (!plan.ok) { this.ui.toast(plan.err, 'warn'); break; }
           if (!sim.canAfford(plan.cost)) { this.ui.toast('Not enough money', 'warn'); break; }
-          w.beginTx(ULINES[s.uline].name); w.addULine(s.uline, a.x, a.z, h.x, h.z); w.commitTx(plan.cost);
+          w.beginTx(ULINES[s.uline].name); w.addULine(s.uline, a.x, a.z, h.x, h.z, plan.line); w.commitTx(plan.cost);
           sim.spend(plan.cost); this.ui.float(`-${fmtMoney(plan.cost)}`, this.mouse.x, this.mouse.y);
           this.pts = [{ x: h.x, z: h.z }];   // runs chain on; right-click or Esc stops
           break;

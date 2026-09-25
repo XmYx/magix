@@ -1,3 +1,5 @@
+import { BRIDGE_STYLES, LINE_TIERS } from './infrastructure.js';
+import { PhotoTour, videoType } from './photo.js';
 import { TRANSIT, transitMode } from './transit.js';
 // Organicity — DOM interface: HUD, tool dock, panels, tooltips and toasts.
 import { DEPOSITS, COMMODITIES, priceOf, IND_POLICIES } from './resources.js';
@@ -182,6 +184,7 @@ export class UI {
           <div class="row"><span class="dim">Level <kbd>PgUp</kbd>/<kbd>PgDn</kbd></span>${[3, 2, 1, 0, -1].map((L) => `<button class="${s.layer === L ? 'on' : ''}" data-layer="${L}"><img class="ico" data-icon="road:${s.road}@${L}" alt="">${LAYERS[L].name}</button>`).join('')}</div><div class="row">
             ${[0, 14, 22].map((d) => `<button class="${s.parallel === d ? 'on' : ''}" data-parallel="${d}" title="${d ? 'Also build an identical road alongside (one-way twins run opposite: a dual carriageway)' : 'Single road'}">${d ? `Parallel ${Math.round(d * 1.5)} m` : 'Single'}</button>`).join('')}
             <button class="${s.upgrade ? 'on' : ''}" data-upgrade="1" title="Drag over existing roads to convert them to the selected type">Upgrade brush</button></div>
+          <div class="row">Bridges: ${Object.entries(BRIDGE_STYLES).map(([k,v])=>`<button data-bridge-style="${k}" class="${s.bridgeStyle === k ? 'on' : ''}">${v.name}<small>span ≤${v.span} m · ×${v.mult}</small></button>`).join('')}</div>
           <p class="hint">${s.upgrade ? 'Drag across roads to convert them. ' : ''}Click to start, click to end; roads chain on. ${s.curve ? 'Curves: start → bend → end. ' : ''}Crossings join at any angle. <kbd>Shift</kbd> snaps to 15°. Right-click stops.</p>`;
         break;
       case 'zone':
@@ -194,7 +197,7 @@ export class UI {
       case 'util': case 'svc': case 'ind':
         const lineRow = s.tool === 'util' ? `<div class="row">${Object.entries(ULINES).map(([k, L]) => `<button class="${s.uline === k ? 'on' : ''}" data-uline="${k}"><img class="ico" data-icon="uline:${k}" alt="">${L.name}<small>${fmtMoney(L.cost)}/m</small></button>`).join('')}
           <button class="${this.sim.strictGrid ? 'on' : ''}" data-strict-grid="1" title="Off: roads carry power, water and sewage. On: every building needs a power line, a water pipe and a drain within reach.">Strict grid</button></div>` : '';
-        if (s.tool === 'util' && s.uline) { h = `${lineRow}<div class="row"><button data-under-demo="1" title="Remove pipe, drain and line runs without touching roads or buildings">Underground bulldozer</button></div><p class="hint">${s.uline !== 'power' ? 'Underground view: pipes and drains run on one flat level below the whole map; blue ground is reached by water pipes, brown by drains. ' : ''}${esc(ULINES[s.uline].desc)} Click to start, click to end; runs chain on and join where they meet or touch a road. Right-click stops. Upkeep ${fmtMoney(ULINES[s.uline].upkeep * 100)} per 100 m a month. Bulldoze removes a run.</p><div class="row">${Object.entries(SERVICES).filter(([, S]) => S.cat === 'util').map(([k, S]) => `<button data-svc="${k}">${S.name}</button>`).join('')}</div>`; break; }
+        if (s.tool === 'util' && s.uline) { h = `${lineRow}<div class="row">${LINE_TIERS[s.uline].map((v,i)=>`<button data-line-tier="${i}" class="${s.lineTier===i?'on':''}">${v.name} · ${v.cap} capacity</button>`).join('')}${['straight','curve','road'].map(k=>`<button data-line-mode="${k}" class="${s.lineMode===k?'on':''}">${{straight:'Straight',curve:'Curved',road:'Follow road'}[k]}</button>`).join('')}</div><p class="hint">Curves: start → bend → end. Follow road: two points on connected roads. High voltage needs transformer stations at both road networks; it does not directly serve homes.</p><div class="row"><button data-under-demo="1" title="Remove pipe, drain and line runs without touching roads or buildings">Underground bulldozer</button></div><p class="hint">${s.uline !== 'power' ? 'Underground view: pipes and drains run on one flat level below the whole map; blue ground is reached by water pipes, brown by drains. ' : ''}${esc(ULINES[s.uline].desc)} Click to start, click to end; runs chain on and join where they meet or touch a road. Right-click stops. Upkeep ${fmtMoney(ULINES[s.uline].upkeep * 100)} per 100 m a month. Bulldoze removes a run.</p><div class="row">${Object.entries(SERVICES).filter(([, S]) => S.cat === 'util').map(([k, S]) => `<button data-svc="${k}">${S.name}</button>`).join('')}</div>`; break; }
         h = lineRow + `<div class="row">${Object.entries(SERVICES).filter(([key, S]) => S.cat === s.tool && (!s.platform || TERRACE_SERVICES.includes(key))).map(([k, S]) => {
           const need = S.landmark || S.unlock, locked = need && this.sim.stats.pop < need && !this.sim.sandbox, built = S.landmark && [...this.w.buildings.values()].some((b) => b.svc === k);
           return `<button class="${s.svc === k ? 'on' : ''}" data-svc="${k}" ${locked || built ? 'disabled' : ''}><img class="ico" data-icon="svc:${k}" alt="">${S.landmark ? '★ ' : ''}${S.name}<small>${locked ? `pop ${fmtInt(need)}` : built ? 'built' : fmtMoney(S.cost)}</small></button>`;
@@ -229,6 +232,9 @@ export class UI {
     const b = e.target.closest('button'); if (!b) return;
     const t = this.tools, d = b.dataset;
     if(d.ground){t.set({platform:0});this.r.cam.targetY=0;}
+    if (d.bridgeStyle) t.set({ bridgeStyle:d.bridgeStyle });
+    if (d.lineTier != null) { t.pts=[]; t.set({ lineTier:+d.lineTier }); }
+    if (d.lineMode) { t.pts=[]; t.set({ lineMode:d.lineMode }); }
     if (d.road) t.set({ road: d.road });
     if (d.curve) t.set({ curve: d.curve === '1' });
     if (d.oneway) t.set({ oneway: !t.s.oneway });
@@ -379,7 +385,7 @@ export class UI {
     el.querySelectorAll('[data-set]').forEach((c) => { c.onchange = () => { const S = loadSettings(), k = c.dataset.set; S[k] = k === 'palette' ? (c.checked ? 'cb' : 'default') : c.type === 'checkbox' ? c.checked : c.type === 'range' || k === 'uiScale' ? +c.value : c.value; try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch { /* ignore */ } this.applySettings(); }; });
     el.querySelector('[data-lang]')?.addEventListener('change', (e) => { setLang(e.target.value); this.buildHud(); this.renderDock(); this.toolChanged(); this.hud(); this.renderPanel(true); });
     el.querySelector('[data-pack-add]')?.addEventListener('click', () => el.querySelector('[data-pack-file]').click());
-    el.querySelector('[data-pack-file]')?.addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; try { const info = addUserPack(await f.text()); this.toast(`Pack "${info.name}" added: ${info.styles.length} styles, ${info.landmarks.length} landmarks.`, 'good'); } catch (err) { this.toast('Not a valid pack: ' + err.message, 'bad'); } this.renderPanel(true); });
+    el.querySelector('[data-pack-file]')?.addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; try { const info = addUserPack(await f.text()); this.toast(`Pack "${info.name}" added: ${info.styles.length} styles, ${info.landmarks.length} landmarks, ${info.buildables.length} buildables, ${info.scenarios.length} scenarios.`, 'good'); } catch (err) { this.toast('Not a valid pack: ' + err.message, 'bad'); } this.renderPanel(true); });
     el.querySelectorAll('[data-pack-del]').forEach((b) => { b.onclick = () => { removeUserPack(b.dataset.packDel); this.toast('Pack removed; it disappears after a reload.', 'info'); this.renderPanel(true); }; });
     el.querySelector('[data-vol]')?.addEventListener('input', (e) => { this.audio?.setVolume(+e.target.value / 100); e.target.nextElementSibling.textContent = e.target.value + '%'; });
     el.querySelector('[data-mute]')?.addEventListener('change', (e) => { if (this.audio && this.audio.muted !== e.target.checked) this.audio.toggleMute(); });
@@ -513,7 +519,7 @@ export class UI {
       <h3>Service funding</h3>
       <p class="dim">50–150%: funding changes operating cost, utility output and service reach. Parks also respond to funding.</p>
       ${[...new Set([...this.w.buildings.values()].filter(b => b.svc).map(b => b.svc))].map(k => `<label class="rng wide">${SERVICES[k].name}<input type="range" min="50" max="${s.austerity ? 75 : 150}" step="5" value="${Math.round(s.budgetFor(k) * 100)}" data-budget="${k}"><b>${Math.round(s.budgetFor(k) * 100)}%</b></label>`).join('') || '<p class="dim">Place a service to adjust its funding.</p>'}
-      ${s.gameOver ? `<p class="bad"><b>Bankrupt.</b> The scenario is lost — load a save or start a new city.</p>` : s.debtMonths ? `<p class="bad">In debt for ${s.debtMonths} month${s.debtMonths > 1 ? 's' : ''}.${s.austerity ? ' Austerity caps service funding at 75%.' : ''} ${s.sandbox ? '' : 'After 6 months: ' + (s.scenario && !s.scenarioWon ? 'bankruptcy.' : 'a state bailout at 2% a month.')}</p>` : ''}
+      ${s.gameOver ? `<p class="bad"><b>${s.gameOverReason === 'election' ? 'Voted out.' : 'Bankrupt.'}</b> The scenario is lost — load a save or start a new city.</p>` : s.debtMonths ? `<p class="bad">In debt for ${s.debtMonths} month${s.debtMonths > 1 ? 's' : ''}.${s.austerity ? ' Austerity caps service funding at 75%.' : ''} ${s.sandbox ? '' : 'After 6 months: ' + (s.scenario && !s.scenarioWon ? 'bankruptcy.' : 'a state bailout at 2% a month.')}</p>` : ''}
       ${(() => { const cr = s.creditRating(); return `<h3>Credit rating · <b class="${cr.grade.startsWith('A') ? 'pos' : cr.grade.startsWith('B') ? 'warn' : 'neg'}">${cr.grade}</b></h3>
       <p class="dim">Score ${cr.score}/100 from debt (${fmtMoney(cr.debt)} of a ${fmtMoney(cr.limit)} limit), deficits in the past year and debt trouble. Better ratings borrow cheaper: new bonds pay ${(cr.rate * 100).toFixed(1)}% a year (+0.5% for 20 years).</p>
       <div class="row">${[25000, 50000, 100000, 250000].map((v) => `<button data-bond="${v}" ${cr.grade === 'CCC' || cr.debt + v > cr.limit || s.sandbox?.infinite ? 'disabled' : ''}>Issue ${fmtMoney(v)}</button>`).join('')}</div>
@@ -530,6 +536,7 @@ export class UI {
       <p class="dim">Taxes lot value (area × land value) and slightly dampens housing and shop demand. Rising land values in old low-rise areas cause redevelopment that displaces residents${st.displaced ? ` (${fmtInt(st.displaced)} last month)` : ''}.</p>
       <h3>Forecast</h3><p>In three months: ${fmtMoney(s.money + 3 * (st.incomeM - st.expenseM))}</p>
       <p class="dim">Assumes current income and spending continue; construction costs and future growth are excluded.</p>
+      <p>Approval ${Math.round((s.approval ?? 0.6)*100)}% · Water quality ${Math.round((s.stats.waterQuality ?? 1)*100)}% · Parking ${Math.round(s.stats.parking?.spaces || 0)} / ${Math.round(s.stats.parking?.demand || 0)} spaces demanded</p>
       ${s.scenario ? `<h3>${s.scenarioWon ? 'Scenario complete' : 'Scenario goals'}</h3>${s.scenarioProgress().map(([label, ok]) => `<p>${ok ? '✓' : '○'} ${label}</p>`).join('')}` : ''}
       <h3>Monthly budget</h3>
       <table class="kv">
@@ -899,14 +906,14 @@ export class UI {
         <tr><td>Condition</td><td>${bar(e.cond)} ${Math.round(e.cond * 100)}%</td></tr>
         <tr><td>Speed</td><td>${Math.round((e.speedF || 1) * 100)}% of limit</td></tr>
         <tr><td>Flow ⇢ / ⇠</td><td>${fmtInt(e.fAB || 0)} / ${fmtInt(e.fBA || 0)}</td></tr>
-        ${e.layer ? `<tr><td>Grade</td><td>${LAYERS[e.layer].name}</td></tr>` : ''}</table>
+        ${e.bridgeStyle && e.bridgeStyle !== 'auto' ? `<tr><td>Bridge</td><td>${BRIDGE_STYLES[e.bridgeStyle]?.name || 'Automatic'}</td></tr>` : ''}${e.layer ? `<tr><td>Grade</td><td>${LAYERS[e.layer].name}</td></tr>` : ''}</table>
         ${['avenue', 'boulevard'].includes(e.type) ? `<h3>Transit</h3><div class="row"><button class="${e.busLane ? 'on' : ''}" data-buslane="${e.id}">${e.busLane ? 'Remove bus lanes' : 'Add bus lanes'}</button></div><p class="dim">Buses skip congestion; cars lose a quarter of the capacity.</p>` : ''}
         <h3>Direction</h3><div class="row">
           <button class="${!e.oneway ? 'on' : ''}" data-oneway="${e.id}:0">Two-way</button>
           <button class="${e.oneway === 1 ? 'on' : ''}" data-oneway="${e.id}:1">One-way ⇢</button>
           <button class="${e.oneway === -1 ? 'on' : ''}" data-oneway="${e.id}:-1">One-way ⇠</button></div>
         ${e.type === 'highway' ? '' : `<h3>Change type</h3><div class="row">${ups.map(([k, U]) => `<button data-retype="${e.id}:${k}">${U.name}<small>${fmtMoney(U.cost * e.len * 0.7)}</small></button>`).join('')}</div>`}
-        <p class="dim">Wider roads carry more traffic. Maintenance depots keep condition up.</p>`;
+        <p class="dim">Maintenance crews repair condition along the roads they drive. Lift bridges open for shipping at 02:00, 08:00, 14:00 and 20:00 for 30 visual minutes; road vehicles wait while boats pass.</p>`;
     });
   }
 
@@ -1027,7 +1034,7 @@ export class UI {
     const rows = econ.presidents().sort((a, b) => (b.pop || 0) - (a.pop || 0));
     const report = this.reportTerm ? this.termHtml(this.reportTerm, cityName) : '';
     return `${report}
-      <h3>You: ${esc(pr.name)} · president of ${cityName(econ.active)} since ${pr.since}</h3>
+      <p><b>Approval: ${Math.round((this.sim.approval ?? 0.6)*100)}%</b> · At least 50% wins re-election. Losing an election ends an unfinished goal game; free play and sandbox continue.</p>${this.sim.election ? `<p>Election ${this.sim.election.year}: ${this.sim.election.won ? 're-elected' : 'voted out'} (${Math.round(this.sim.election.approval*100)}%).</p>` : ''}<h3>You: ${esc(pr.name)} · president of ${cityName(econ.active)} since ${pr.since}</h3>
       <p class="dim">Term ${e.termStart}–${e.termStart + TERM_YEARS}. Your policy sets taxes, service funding and road spending here, the rent level, and the toll everyone pays to enter this tile. AI presidents use the same levers.</p>
       ${lever('rentTarget', 'Rent target (of market)', pct)}${lever('tax', 'Tax rate', (v) => `${v}%`)}${lever('toll', 'Toll to enter', (v) => `₵${v}`)}${lever('infra', 'Infrastructure spending', pct)}${lever('services', 'Service funding', pct)}
       <label>Development priority <select data-pol-dev>${Object.entries(DEV).map(([k, v]) => `<option value="${k}" ${p.dev === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -1069,23 +1076,24 @@ export class UI {
   // ---------------------------------------------------------------- a resident's day
   followResident(b, k) {
     if (!b) return;
-    const citizen = this.sim.citizenOf(b, k);
+    const citizen = this.sim.residentTrips?.find(c=>c.home===b.id && c.k===(k || 0)) || this.sim.citizenOf(b, k);
+    this.sim.followSample = { home:b.id, k:k || 0 };
     this.r.follow = { citizen, camera: true }; this.sim.selectRoutes(b.id);
     this.openPanel('citizen', () => `${citizen.name}, ${citizen.age}`, () => this.citizenHtml());
   }
   citizenHtml() {
     const f = this.r.follow; if (!f) return null;
-    const c = f.citizen, s = this.sim, w = this.w, home = w.buildings.get(c.home); if (!home) return null;
+    const c = this.sim.residentTrips?.find(c=>c.home===f.citizen.home && c.k===f.citizen.k) || f.citizen, s = this.sim, w = this.w, home = w.buildings.get(c.home); if (!home) return null;
     const hh = (x) => { const H = ((x % 24) + 24) % 24; return `${String(Math.floor(H)).padStart(2, '0')}:${String(Math.floor((H % 1) * 60)).padStart(2, '0')}`; };
     const work = f.work && w.buildings.get(f.work), dur = (f.minutes || 20) / 60;
     const how = { car: 'drives', transit: 'takes transit', walk: 'walks', bike: 'cycles' }[c.mode];
     const place = (b) => b ? (b.svc ? SERVICES[b.svc].name.toLowerCase() : `a level-${b.level} ${ZONES[b.zone].name.toLowerCase()} building near ${s.streetName(b.edge)}`) : 'nowhere yet';
-    const role = c.cohort === 'child' ? 'school pupil' : c.cohort === 'retiree' ? 'retired' : work ? 'works' : 'looking for work';
-    const now = { home: 'At home', commute: `On the way to ${c.cohort === 'child' ? 'school' : 'work'}`, work: c.cohort === 'child' ? 'At school' : 'At work', 'return': 'Heading home' }[f.state || 'home'];
+    const role = c.cohort === 'student' ? 'college student' : c.cohort === 'child' ? 'school pupil' : c.cohort === 'retiree' ? 'retired' : work ? 'works' : 'looking for work';
+    const now = { home: 'At home', commute: `On the way to ${c.cohort === 'student' ? 'college' : c.cohort === 'child' ? 'school' : 'work'}`, work: c.cohort === 'student' ? 'At college' : c.cohort === 'child' ? 'At school' : 'At work', 'return': 'Heading home' }[f.state || 'home'];
     const at = (arr) => s.at(arr, home.cx, home.cz), day = c.cohort === 'retiree'
       ? [[9.5, `goes for a walk${s.at(s.cov.park, home.cx, home.cz) > 0.1 ? ' in the park' : ' around the block'}`], [11, home.health > 0.4 ? 'drops in at the clinic for a check-up' : 'wishes there were a clinic nearby'], [15, 'meets friends at the shops'], [19, 'is home for the evening']]
-      : !work ? [[9, c.cohort === 'child' ? 'walks to the nearest school' : 'checks job listings: nothing within reach yet'], [11.5, 'runs errands at the shops'], [15, 'meets friends nearby'], [19, 'is home for the evening']]
-      : [[c.depart, `leaves home and ${how}`], [c.depart + dur, `arrives at ${c.cohort === 'child' ? 'school' : place(work)} (${f.minutes || '?'} min)`], [c.back, 'heads home'], [c.back + dur, 'is home; dinner, then an evening in']];
+      : !work ? [[9, c.cohort === 'child' || c.cohort === 'student' ? 'has no reachable place of education yet' : 'checks job listings: nothing within reach yet'], [11.5, 'runs errands at the shops'], [15, 'meets friends nearby'], [19, 'is home for the evening']]
+      : [[c.depart, `leaves home and ${how}`], [c.depart + dur, `arrives at ${c.cohort === 'child' ? 'school' : place(work)} (${f.minutes ? Math.round(f.minutes) : '?'} min)`], [c.back, 'heads home'], [c.back + dur, 'is home; dinner, then an evening in']];
     return `<p>${esc(c.name)}, ${c.age} · ${role} · lives in ${place(home)}.</p>
       <p><b>${hh(this.r.hour())} — ${now}</b></p>
       <ul class="newslist">${day.map(([t, x]) => `<li><small>${hh(t)}</small> ${esc(x)}</li>`).join('')}</ul>
@@ -1094,12 +1102,12 @@ export class UI {
         return `<h3>The household</h3><table class="kv"><tr><td>Family</td><td>${fam.size} people · ${fam.earners} earner${fam.earners > 1 ? 's' : ''} · ${where}</td></tr>
           <tr><td>Income</td><td>₵${fmtInt(fam.income)} a month</td></tr><tr><td>Rent · commute · tolls</td><td>₵${fmtInt(fam.rent)} · ₵${fmtInt(fam.commute)} · ₵${fmtInt(fam.toll)}</td></tr>
           <tr><td>Savings</td><td>₵${fmtInt(fam.savings)}</td></tr><tr><td>Contentment</td><td>${bar(fam.happy)}</td></tr></table>`; })()}
-      <h3>How life is</h3>
+      <h3>How life is</h3><p>Drinking water quality: ${Math.round((home.waterQuality ?? 1)*100)}%</p>
       <table class="kv"><tr><td>Happiness at home</td><td>${bar(home.happy || 0)}</td></tr><tr><td>Health</td><td>${home.sick ? '<span class="neg">illness in the building</span>' : bar(home.health || 0)}</td></tr>
         <tr><td>Noise / pollution</td><td>${bar(at(s.f.noise), false)} ${bar(at(s.f.pollution), false)}</td></tr><tr><td>Crime nearby</td><td>${bar(at(s.f.crime), false)}</td></tr>
-        <tr><td>Commute</td><td>${work ? `${f.minutes || '?'} min by ${c.mode}` : 'no job within reach'}</td></tr></table>
+        <tr><td>Commute</td><td>${work ? `${f.minutes ? Math.round(f.minutes) : '?'} min by ${c.mode}` : 'no job within reach'}</td></tr></table>
       <div class="row"><button data-follow-next>Another resident</button><button data-follow-cam>${f.camera ? 'Free the camera' : 'Follow with camera'}</button><button data-follow-stop>Stop following</button></div>
-      <p class="dim">A resident generated from this home's demographics, on the city's real route to their workplace. The yellow marker shows where they are; the day follows the visual clock.</p>`;
+      <p class="dim">A sampled resident with an assigned school, college, workplace or park and routed outward and return trips. The yellow marker shows where they are; the day follows the visual clock.</p>`;
   }
 
   // ---------------------------------------------------------------- world map
@@ -1165,13 +1173,38 @@ export class UI {
   }
   togglePhoto(on = !document.body.classList.contains('photo')) {
     document.body.classList.toggle('photo', on); this.r.photo = on; const el = $('photo');
-    if (!on) { this.r.photoTod = null; el.hidden = true; return; }
+    if (!on) { this.r.photoTour?.stop(true); this.r.photoTod = null; el.hidden = true; return; }
     this.closePanel();
     el.hidden = false;
     el.innerHTML = `<label>Time of day <input type="range" min="0" max="100" value="${Math.round((this.r.tod ?? 0.3) * 100)}" data-tod></label>
       <label class="chk"><input type="checkbox" data-live checked> Live clock</label>
       <button data-shot class="primary">Save PNG</button><button data-exit>Exit (P)</button>
-      <span class="dim">WASD move · Q/E turn · right-drag to tilt low</span>`;
+      <span class="dim">WASD move · Q/E turn · right-drag to tilt low</span>
+      <div class="row"><button data-point>Add viewpoint</button><button data-remove>Remove last</button><button data-clear>Clear path</button>
+      <label>Tour seconds <input data-duration type="number" min="2" max="120" value="10" style="width:5em"></label>
+      <button data-play>Preview path</button><button data-video>Export WebM</button><button data-stop>Stop / cancel</button></div>
+      <span data-tour-status role="status" aria-live="polite"></span>`;
+    const status = el.querySelector('[data-tour-status]');
+    const refresh = (error) => {
+      const tour = this.r.photoTour, n = tour.points.length;
+      status.textContent = error || (tour.busy ? (tour.playing ? 'Playing camera path…' : 'Finishing video…') : `${n}/16 viewpoints · Add at least two views. Export is silent, at the current render resolution.`);
+      for (const key of ['point', 'remove', 'clear', 'duration', 'play', 'video', 'shot']) el.querySelector(`[data-${key}]`).disabled = tour.busy;
+      el.querySelector('[data-point]').disabled ||= n >= 16;
+      for (const key of ['remove', 'clear']) el.querySelector(`[data-${key}]`).disabled ||= !n;
+      for (const key of ['play', 'video']) el.querySelector(`[data-${key}]`).disabled ||= n < 2;
+      el.querySelector('[data-video]').disabled ||= !videoType();
+      el.querySelector('[data-stop]').disabled = !tour.playing;
+    };
+    if (!this.r.photoTour) this.r.photoTour = new PhotoTour(this.r, refresh, blob => download(`organicity-tour-${Date.now()}.webm`, blob, blob.type));
+    else this.r.photoTour.changed = refresh;
+    const tour = this.r.photoTour;
+    el.querySelector('[data-point]').onclick = () => { tour.add(); refresh(); };
+    el.querySelector('[data-remove]').onclick = () => { tour.points.pop(); refresh(); };
+    el.querySelector('[data-clear]').onclick = () => { tour.points = []; refresh(); };
+    el.querySelector('[data-play]').onclick = () => tour.start(el.querySelector('[data-duration]').value);
+    el.querySelector('[data-video]').onclick = () => tour.start(el.querySelector('[data-duration]').value, true);
+    el.querySelector('[data-stop]').onclick = () => tour.stop(true);
+    refresh();
     const tod = el.querySelector('[data-tod]'), live = el.querySelector('[data-live]');
     tod.oninput = () => { live.checked = false; this.r.photoTod = +tod.value / 100; };
     live.onchange = () => { this.r.photoTod = live.checked ? null : +tod.value / 100; };

@@ -1,3 +1,5 @@
+import { assignResidents } from './citizens.js';
+import { parkingState } from './infrastructure.js';
 // Organicity — heavy, read-only simulation systems: service coverage, land value
 // & nuisance fields, and traffic assignment. They work on plain snapshots
 // (road network + packed buildings) so the same code runs inside a Web Worker,
@@ -45,7 +47,7 @@ function blur(arr) {
 export function netSnapshot(net) {
   return {
     nodes: [...net.nodes.values()].map((n) => [n.id, n.x, n.z, n.outside ? 1 : 0, n.control || 'auto']),
-    edges: [...net.edges.values()].map((e) => [e.id, e.a, e.b, e.c.x, e.c.z, e.type, e.cond, e.oneway || 0, e.flow || 0, e.layer || 0, e.busLane ? 1 : 0, e.fAB || 0, e.fBA || 0, e.heights || null, e.hazardSpeed ?? 1, e.speedF ?? 1]),
+    edges: [...net.edges.values()].map((e) => [e.id, e.a, e.b, e.c.x, e.c.z, e.type, e.cond, e.oneway || 0, e.flow || 0, e.layer || 0, e.busLane ? 1 : 0, e.fAB || 0, e.fBA || 0, e.heights || null, e.hazardSpeed ?? 1, e.speedF ?? 1, e.bridgeStyle || 'auto']),
   };
 }
 
@@ -69,6 +71,7 @@ export class Core {
 
   // req: { t, doCoverage, blds, prio (Uint8Array per coarse cell), busComps, stats }
   *run(req) {
+    for (const [k, d] of Object.entries(req.packDefs || {})) if (!SERVICES[k] && /^pk_[a-z0-9]{1,24}$/.test(k) && d && typeof d === 'object') SERVICES[k] = d;   // pack buildings, as the main thread validated them
     const out = { msgs: [], cov: null };
     const dt = clamp(req.t - this.lastT, 0, 4); this.lastT = req.t;
     if (req.doCoverage) { yield* this.coverage(req); out.cov = this.cov; }
@@ -95,23 +98,25 @@ export class Core {
     const parks = [];
     for (const b of req.blds) {
       if (!b.svc || b.ab) continue;
-      if (bySvc[b.svc]) bySvc[b.svc].push(b);
-      if (SERVICES[b.svc].park) parks.push(b);
+      const S = SERVICES[b.svc]; if (!S) continue;
+      const as = S.covers || b.svc; if (bySvc[as]) bySvc[as].push(b);   // a pack clinic covers like a clinic
+      if (S.park) parks.push(b);
     }
     const cov = {};
     for (const type of COVER) {
       const arr = new Float32Array(F2), R = SERVICES[type].radius * Math.sqrt(req.budgets?.[type] ?? 1);
       for (const b of bySvc[type]) {
         const e = b.edge >= 0 && net.edges.get(b.edge); if (!e) continue;
+        const Rb = SERVICES[b.svc].covers ? (SERVICES[b.svc].radius || SERVICES[type].radius) * Math.sqrt(req.budgets?.[b.svc] ?? 1) : R;
         if (type === 'busstop' && !busComps.has(b.comp)) continue;
         if(['tramstop','railstation','metrostation'].includes(type)&&(!b.power||!(req.lines||[]).some(l=>l.stops.some(st=>Math.hypot(st.x-b.cx,st.z-b.cz)<1))))continue;
-        const res = net.dijkstra(net.sourcesAt(e, b.s, 'len'), 'len', R);
+        const res = net.dijkstra(net.sourcesAt(e, b.s, 'len'), 'len', Rb);
         for (let k = 0; k < F2; k++) {
           const ek = cs.edge[k]; if (ek < 0) continue;
           const e2 = net.edges.get(ek); if (!e2) continue;
           let d = net.costTo(res, e2, cs.s[k], 'len');
           if (ek === b.edge) d = Math.min(d, Math.abs(cs.s[k] - b.s));
-          const v = Math.min(1, (1 - (d + cs.d[k]) / R) * (req.budgets?.[type] ?? 1));
+          const v = Math.min(1, (1 - (d + cs.d[k]) / Rb) * (req.budgets?.[type] ?? 1));
           if (v > arr[k]) arr[k] = v;
         }
         yield;
@@ -148,7 +153,7 @@ export class Core {
       if (b.svc) {
         const S = SERVICES[b.svc];
         if (S.pollution && b.svc !== 'outlet') { const v = S.pollution * (b.scrub ? 0.35 : 1) * (b.mining && S.dep ? 1.3 : 1); plume(b.cx, b.cz, 50 * S.pollution, v * 0.8); }   // scrubbers; mining districts
-        if (b.svc === 'outlet') { splat(pol, b.cx, b.cz, 30, 0.4); splat(wpol, b.cx, b.cz, 90, 1.1); }   // sewage fouls the water
+        if (SERVICES[b.svc]?.sewage) { const discharge = 1-(SERVICES[b.svc].treatmentLevel || 0); splat(pol, b.cx, b.cz, 30, 0.4*discharge); splat(wpol, b.cx, b.cz, 90, 1.1*discharge); }   // sewage fouls the water
         if (b.svc === 'coal' && nearWater(b.cx, b.cz, 20)) splat(wpol, b.cx, b.cz, 50, 0.4);
         if (S.noise) splat(noi, b.cx, b.cz, 36, S.noise);
         continue;
@@ -234,15 +239,22 @@ export class Core {
     const old = new Map([...net.edges.values()].map((e) => [e.id, [e.fAB || 0, e.fBA || 0, e.heights || null, e.hazardSpeed ?? 1, e.speedF ?? 1]]));
     const lineRoutes = routeLines(net, req.lines || []);
     const lines = (req.lines || []).map((l, i) => ({ ...l, legs:lineRoutes[i].legs, speedF: l.mode==='rail'||l.mode==='metro'?1:lineRoutes[i].segs.reduce((n,s)=>n+(net.edges.get(s.edge)?.speedF||1)*Math.abs(s.to-s.from),0)/Math.max(1,lineRoutes[i].len), busLaneShare: lineRoutes[i].busLaneShare })).filter((l, i) => lineRoutes[i].ok);
-    const asg = yield* assignTraffic(net, req.blds, { total, commuters: st.commuters, weatherSpeed: req.weather?.speed ?? 1, skyShare: req.skyShare || 0, hubs: req.hubs || [], lines, transitBoost: req.ord?.freeTransit ? 1.5 : 1, exits: req.exits || [], outCommuters: st.outJobs || 0, terminals: req.terminals || [], rng });
+    for (const [id, cond] of req.roadConditions || []) { const e = net.edges.get(id); if (e) e.cond = cond; }
+    const parking = parkingState(req.blds); out.parking = parking;
+    const asg = yield* assignTraffic(net, req.blds, { parking: parking.ratio, total, commuters: st.commuters, weatherSpeed: req.weather?.speed ?? 1, skyShare: req.skyShare || 0, hubs: req.hubs || [], lines, transitBoost: req.ord?.freeTransit ? 1.5 : 1, exits: req.exits || [], outCommuters: st.outJobs || 0, terminals: req.terminals || [], rng });
+    out.residents = assignResidents(net, req.blds, req.residents, parking.ratio);
+    // Education journeys supplement aggregate home/work demand on their assigned routes.
+    for (const c of out.residents) if (c.destination != null && ['school','college'].includes(c.role)) {
+      if(c.mode === 'walk') asg.walk += 1;
+      else { asg.car += 1; for(const g of [...c.segments,...c.returning]) { const flow=g.to>=g.from ? asg.fAB : asg.fBA;flow.set(g.edge,(flow.get(g.edge)||0)+0.5); } }
+    }
     let jam = 0;
     for (const e of net.edges.values()) {   // blend with last pass so flows settle rather than flicker
       const [a0, b0] = old.get(e.id) || [0, 0];
       e.fAB = a0 * 0.5 + (asg.fAB.get(e.id) || 0) * 0.5; e.fBA = b0 * 0.5 + (asg.fBA.get(e.id) || 0) * 0.5;
       const cong = Math.max(e.fAB, e.fBA) / dirCapacity(e);
       if (cong > 1 && e.len > 20) jam++;
-      const dep = sampleField(this.cov.depot, (e.bb[0] + e.bb[2]) / 2, (e.bb[1] + e.bb[3]) / 2);
-      e.cond = clamp(e.cond - 0.0012 * dt * (1 + cong) * (req.weather?.wear ?? 1) + (dep > 0.05 ? 0.03 * dt : 0) + 0.0012 * dt * ((req.infra ?? 1) - 1), 0.2, 1);   // infrastructure spending keeps roads up (or lets them go)
+      e.cond = clamp(e.cond - 0.0012 * dt * (1 + cong) * (req.weather?.wear ?? 1) + 0.0012 * dt * ((req.infra ?? 1) - 1), 0.2, 1);   // infrastructure spending keeps roads up (or lets them go)
     }
     this.wetRoads(req); updateCosts(net, req.weather?.speed ?? 1);
     out.lines = lineRoutes.map((r) => ({ ...r, riders: asg.riders.get(r.id) || 0 }));

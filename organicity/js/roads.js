@@ -132,7 +132,7 @@ export class RoadNet {
     if (!this.nodes.has(B.id)) this.nodes.set(B.id, B);
     const M = this.addNode(L.p2.x, L.p2.z);
     const e1 = this.addEdge(A, M, L.c, e.type, e.cond), e2 = this.addEdge(M, B, R.c, e.type, e.cond);
-    for (const x of [e1, e2]) { x.flow = e.flow; x.fAB = e.fAB; x.fBA = e.fBA; x.oneway = e.oneway; x.layer = e.layer; x.busLane = e.busLane; }
+    for (const x of [e1, e2]) { x.flow = e.flow; x.fAB = e.fAB; x.fBA = e.fBA; x.oneway = e.oneway; x.layer = e.layer; x.busLane = e.busLane; x.bridgeStyle=e.bridgeStyle; }
     return M;
   }
 

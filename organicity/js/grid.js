@@ -1,3 +1,4 @@
+import { lineSegments, lineLength, lineTier } from './infrastructure.js';
 // Organicity — utility grids. Roads carry power, water and sewage along them as before; the
 // power lines, water pipes and drains a player draws join separate road networks (and each
 // other) into one grid per utility, so a plant, pump or outlet out of town can serve it.
@@ -15,7 +16,8 @@ function unionFind() {
 }
 
 export function utilityGrid(w) {
-  const key = `${w.net.version}:${w.ulineVersion || 0}`;
+  const transformers=[...w.buildings.values()].filter(b=>b.svc==='transformer' && !b.abandoned && !(b.constructionUntil > (w.day || 0)) && !(b.flood > 1));
+  const key = `${w.net.version}:${w.ulineVersion || 0}:${w.bldVersion}:${transformers.map(b=>b.id).join(',')}`;
   if (w._grid?.key === key) return w._grid;
   const net = w.net, compNear = (x, z, r) => { const h = net.nearestEdge(x, z, r); return h ? net.compOf(h.e) : -1; };
   const uf = {}, lines = {}, touch = { power: new Map(), water: new Map(), sewer: new Map() };
@@ -23,14 +25,17 @@ export function utilityGrid(w) {
     const u = (uf[kind] = unionFind()), ls = (lines[kind] = (w.ulines || []).filter((l) => l.kind === kind));
     for (const l of ls) {
       u.find('l' + l.id);
-      const len = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]), n = Math.max(1, Math.ceil(len / 6));
+      for (const seg of lineSegments(l)) {
+      const len = lineLength(seg), n = Math.max(1, Math.ceil(len / 6));
       for (let k = 0; k <= n; k++) {   // any road the line reaches or crosses (its ends reach a little further)
-        const t = k / n, end = k === 0 || k === n, c = compNear(l.a[0] + (l.b[0] - l.a[0]) * t, l.a[1] + (l.b[1] - l.a[1]) * t, end ? 8 : 3);
-        if (c >= 0) { u.join('l' + l.id, 'c' + c); const t = touch[kind].get(c) || new Set(); t.add(l.id); touch[kind].set(c, t); }
+        const t = k / n, end = k === 0 || k === n, c = compNear(seg.a[0] + (seg.b[0] - seg.a[0]) * t, seg.a[1] + (seg.b[1] - seg.a[1]) * t, end ? 8 : 3);
+        if (c >= 0 && (kind !== 'power' || l.tier !== 1 || transformers.some(b => net.edges.has(b.edge) && net.compOf(net.edges.get(b.edge)) === c && segNearest(l, b.cx, b.cz).d <= 18))) { u.join('l' + l.id, 'c' + c); const t = touch[kind].get(c) || new Set(); t.add(l.id); touch[kind].set(c, t); }
       }
+    }
     }
     for (let i = 0; i < ls.length; i++) for (let j = i + 1; j < ls.length; j++) {   // runs that meet join up
       const A = ls[i], B = ls[j];
+      if (kind === 'power' && (A.tier || 0) !== (B.tier || 0)) continue;
       if (segNearest(A, ...B.a).d < 2.5 || segNearest(A, ...B.b).d < 2.5 || segNearest(B, ...A.a).d < 2.5 || segNearest(B, ...A.b).d < 2.5) u.join('l' + A.id, 'l' + B.id);
     }
   }
@@ -42,7 +47,7 @@ export function utilityGrid(w) {
     line(kind, b) {
       const ck = kind + b.id; if (served.has(ck)) return served.get(ck);
       let best = null, bd = ULINES[kind].reach;
-      for (const l of lines[kind]) { const d = segNearest(l, b.cx, b.cz).d; if (d <= bd) { bd = d; best = l.id; } }
+      for (const l of lines[kind]) { if (kind === 'power' && l.tier === 1) continue; const d = segNearest(l, b.cx, b.cz).d; if (d <= bd) { bd = d; best = l.id; } }
       served.set(ck, best); return best;
     },
     // where a building draws from: its road network, or under the strict rule the line beside it
@@ -53,8 +58,8 @@ export function utilityGrid(w) {
     // lines of a kind touching a road network, and how much a node can import through them
     touching: (kind, comp) => touch[kind].get(comp) || new Set(),
     capacity(kind, key, boost = 0) {
-      if (key[0] === 'l') return ULINES[kind].cap;
-      return [...(touch[kind].get(+key.slice(1)) || [])].length * ULINES[kind].cap + boost;
+      if (key[0] === 'l') return lineTier(lines[kind].find(l => l.id === +key.slice(1))).cap;
+      return [...(touch[kind].get(+key.slice(1)) || [])].reduce((n, id) => n + lineTier(lines[kind].find(l => l.id === id)).cap, 0) + boost;
     },
   };
   return w._grid;
@@ -63,7 +68,7 @@ export function utilityGrid(w) {
 // monthly upkeep of every line, and total length per kind
 export function lineStats(w) {
   const len = { power: 0, water: 0, sewer: 0 }; let upkeep = 0;
-  for (const l of w.ulines || []) { const d = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]); len[l.kind] += d; upkeep += d * ULINES[l.kind].upkeep; }
+  for (const l of w.ulines || []) { const d = lineLength(l); len[l.kind] += d; upkeep += d * ULINES[l.kind].upkeep * lineTier(l).cost; }
   return { len, upkeep };
 }
 
@@ -72,7 +77,7 @@ export function coverageMask(w, kind) {
   const key = `${kind}:${w.ulineVersion || 0}`; w._cov ||= {};
   if (w._cov[kind]?.key === key) return w._cov[kind].m;
   const m = new Uint8Array(N * N), r = ULINES[kind].reach;
-  for (const l of w.ulines || []) {
+  for (const l of (w.ulines || []).flatMap(lineSegments)) {
     if (l.kind !== kind) continue;
     const x0 = Math.max(0, Math.floor(Math.min(l.a[0], l.b[0]) - r)), x1 = Math.min(N - 1, Math.ceil(Math.max(l.a[0], l.b[0]) + r));
     const z0 = Math.max(0, Math.floor(Math.min(l.a[1], l.b[1]) - r)), z1 = Math.min(N - 1, Math.ceil(Math.max(l.a[1], l.b[1]) + r));

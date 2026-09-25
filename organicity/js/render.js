@@ -1,3 +1,5 @@
+import { lineSegments, bridgeOpen } from './infrastructure.js';
+import { residentLeg, routePosition } from './citizens.js';
 // Organicity — rendering. Low-resolution WebGL with nearest-neighbour upscale
 // for a pixel-art diorama look. The world's dirty flags drive incremental
 // updates: ground texture regions, road mesh, per-chunk merged building meshes,
@@ -13,6 +15,7 @@ import { frontAt, WEATHER } from './weather.js';
 import { unb64 } from './tileview.js';
 import { deposits, DEPOSITS, DEP_BY_ID } from './resources.js';
 import { coverageMask, undergroundY } from './grid.js';
+import { flowField, flowAt, flowTexture, waterRoute, routeLen, routeAt, ferryPairs } from './water.js';
 import { Traffic, AgentSim, TYPE_IDS, POSE_STRIDE, deckHeight, AGENT_TYPES } from './agents.js';
 import { netSnapshot } from './core.js';
 
@@ -289,11 +292,28 @@ export class Renderer {
       if (wd < 0) c = mix([96, 150, 170], [44, 92, 132], clamp(-wd / 8, 0, 1));
       else if (wd < 2.2) c = h < 0.5 ? [214, 202, 150] : [204, 192, 142];
       else { c = mix([96, 146, 62], [128, 170, 80], f); if (h < 0.18) c = mix(c, [150, 186, 94], 0.5); else if (h > 0.9) c = mix(c, [80, 128, 56], 0.6); }
+      if (wd >= 2.2) {   // bare rock on steep slopes and scattered over the heights
+        const e = w.elevation, sl = Math.hypot((e[x < N - 1 ? i + 1 : i] - e[x ? i - 1 : i]), (e[z < N - 1 ? i + N : i] - e[z ? i - N : i])) / 2;
+        const rock = h < 0.5 ? [126, 120, 110] : [104, 99, 92], k = clamp((sl - 0.5) * 1.8, 0, 0.92) + (e[i] > 18 ? clamp((e[i] - 18) / 12, 0, 0.5) * (f > 0.5 ? 1 : 0.3) : 0);
+        if (k > 0) c = mix(c, rock, clamp(k, 0, 0.92));
+      }
       this.base[i * 3] = c[0]; this.base[i * 3 + 1] = c[1]; this.base[i * 3 + 2] = c[2];
     }
     this.terrainVer = w.terrainVersion;
+    this.refreshFlow();
   }
 
+  refreshFlow() { if (!this.flowTex) return; this.flow = flowField(this.w); this.flowTex.image.data.set(flowTexture(this.flow)); this.flowTex.needsUpdate = true; this.boatKey = null; }
+  // the ground as the season shows it: tinted grass, and snow above a snow line that drops in winter
+  season() { return this.sim.weather.season; }
+  seasonTint(c, s = this.season()) { return s === 'Autumn' ? mix(c, [156, 138, 70], 0.3) : s === 'Winter' ? mix(c, [146, 152, 140], 0.36) : s === 'Spring' ? mix(c, [118, 184, 82], 0.14) : c; }
+  snowLine(s = this.season()) { return { Winter: 11, Spring: 22, Autumn: 25, Summer: 33 }[s] ?? 30; }
+  landColor(c, h, x, z, s = this.season()) {
+    c = this.seasonTint(c, s);
+    const sl = this.snowLine(s) + (fbm(x * 0.05, z * 0.05, 91, 2) - 0.5) * 6;
+    return h > sl ? mix(c, [236, 241, 245], clamp((h - sl) / 3, 0, 0.92)) : c;
+  }
+  natural(x, z) { return this.landColor(this.baseAt(x, z), this.w.elevation[z * N + x], x, z); }
   baseAt(x, z) { const i = (z * N + x) * 3; return [this.base[i], this.base[i + 1], this.base[i + 2]]; }
   lotColor(b, x, z) {
     const h = hash2(x, z, 3) < 0.5;
@@ -356,9 +376,9 @@ export class Renderer {
       else if (w.road[i]) c = [150, 150, 146];
       else if (b) c = this.lotColor(b, x, z);
       else if (w.zone[i]) {
-        c = mix(this.baseAt(x, z), ZONES[w.zone[i]].color, ((x + z) & 3) === 0 ? 0.62 : 0.4);
+        c = mix(this.natural(x, z), ZONES[w.zone[i]].color, ((x + z) & 3) === 0 ? 0.62 : 0.4);
         if (w.accEdge[i] < 0) c = mix(c, [60, 60, 60], 0.35);
-      } else c = this.baseAt(x, z);
+      } else c = this.natural(x, z);
       if (ov && !w.water[i]) {
         const v = this.overlayValue(x + 0.5, z + 0.5, b), l = (c[0] + c[1] + c[2]) / 3;
         if (v === null) c = [l * 0.7 + 30, l * 0.7 + 30, l * 0.7 + 30];
@@ -396,7 +416,26 @@ export class Renderer {
     });
     t.repeat.set(40, 40);
     this.waterTex = t;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(N * 3, N * 3), new THREE.MeshLambertMaterial({ color: 0x4f94c8, map: t, transparent: true, opacity: 0.86 }));
+    // the surface is drawn with a flow map: ripples travel the way the water runs (see water.js)
+    this.flowTex = new THREE.DataTexture(new Uint8Array(128 * 128 * 4), 128, 128, THREE.RGBAFormat); this.flowTex.magFilter = this.flowTex.minFilter = THREE.LinearFilter;
+    this.waterU = { uFlow: { value: this.flowTex }, uTime: { value: 0 }, uTile: { value: N } };
+    const wm = new THREE.MeshLambertMaterial({ color: 0x4f94c8, map: t, transparent: true, opacity: 0.86 });
+    wm.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, this.waterU);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; uniform sampler2D uFlow; uniform float uTime; uniform float uTile;')
+        .replace('#include <map_fragment>', `
+          vec2 fuv = vWPos.xz / uTile; vec4 fs = (fuv.x > 0.0 && fuv.x < 1.0 && fuv.y > 0.0 && fuv.y < 1.0) ? texture2D(uFlow, fuv) : vec4(0.5, 0.5, 0.05, 0.0);
+          vec2 fl = (fs.rg * 2.0 - 1.0) * (0.12 + fs.b * 1.6);
+          float p0 = fract(uTime * 0.18), p1 = fract(uTime * 0.18 + 0.5);
+          vec2 base = vWPos.xz / 19.0 + vec2(uTime * 0.004, uTime * 0.002);
+          vec4 w0 = texture2D(map, base - fl * p0), w1 = texture2D(map, base - fl * p1 + 0.5);
+          vec4 sampledDiffuseColor = mix(w0, w1, abs(p0 - 0.5) * 2.0);
+          float foam = smoothstep(0.55, 1.0, fs.b) * smoothstep(0.93, 1.0, texture2D(map, base * 2.3 - fl * p0 * 1.7).r);   // streaks on fast water
+          diffuseColor *= sampledDiffuseColor; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.96, 1.0), foam * 0.55 + fs.b * 0.06);`);
+    };
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(N * 3, N * 3), wm);
+    this.refreshFlow();
     m.rotation.x = -Math.PI / 2; m.position.set(N / 2, -0.32, N / 2);
     m.receiveShadow = true;
     this.scene.add(m);
@@ -434,7 +473,7 @@ export class Renderer {
       ss.sort((p, q) => p - q);
       let prev = null;
       for (const s of ss) {
-        const f = frame(e, s), yy = y + deckHeight(e, s);
+        const f = frame(e, s), yy = y + deckHeight(e, s) + (bridgeOpen(e,this.hour()) && e.struct?.[kAt(e,s)] === 2 ? 10 : 0);
         const L = [f.x + f.nx * o1, yy, f.z + f.nz * o1], R = [f.x + f.nx * o0, yy, f.z + f.nz * o0];
         if (prev) {
           tri(prev.R, prev.L, R, col); tri(R, prev.L, L, col);
@@ -536,7 +575,7 @@ export class Renderer {
             for (let s = a + 4; s < b - 2; s += 14) { const f = frame(e, s), top = deckHeight(e, s) - 1.1; for (const sg of [-1, 1]) column(f.x + f.nx * hw * 0.6 * sg, f.z + f.nz * hw * 0.6 * sg, 0.65, -3, top, pier); }
             for (let s = a; s < b; s += 2.5) { const f = frame(e, s), y0 = deckHeight(e, s); for (const sg of [-1, 1]) column(f.x + f.nx * (hw + 1.05) * sg, f.z + f.nz * (hw + 1.05) * sg, 0.07, y0, y0 + 1.0, rail); }
             for (const sg of [-1, 1]) ribbonR(e, a, b, sg > 0 ? hw + 0.95 : -hw - 1.15, sg > 0 ? hw + 1.15 : -hw - 0.95, 1.0, rail);
-            if (b - a > 70) { // a suspension span: two towers, main cables sagging between them and down to the banks
+            if (e.bridgeStyle === 'suspension' || ((!e.bridgeStyle || e.bridgeStyle === 'auto') && b - a > 70)) { // a suspension span: two towers, main cables sagging between them and down to the banks
               const t1 = a + (b - a) * 0.28, t2 = a + (b - a) * 0.72, H = 16, tc = lin([198, 90, 70]);
               for (const s of [t1, t2]) { const f = frame(e, s), y0 = deckHeight(e, s); for (const sg of [-1, 1]) column(f.x + f.nx * (hw + 1.6) * sg, f.z + f.nz * (hw + 1.6) * sg, 0.7, -3, y0 + H, tc); ribbonR(e, s - 0.7, s + 0.7, -hw - 2.3, hw + 2.3, H - 1, tc); }
               for (const sg of [-1, 1]) {
@@ -547,6 +586,8 @@ export class Renderer {
                 cables.push(pts);
               }
             }
+            if (e.bridgeStyle === 'arch') for (const sg of [-1,1]) { const pts=[]; for(let i=0;i<=30;i++){const u=i/30, ss=a+(b-a)*u, f=frame(e,ss);pts.push([f.x+f.nx*(hw+1.6)*sg,deckHeight(e,ss)+2+12*4*u*(1-u),f.z+f.nz*(hw+1.6)*sg,deckHeight(e,ss)+1]);} cables.push(pts); }
+            if (e.bridgeStyle === 'movable') for(const ss of [a,b]) { const f=frame(e,ss);for(const sg of [-1,1]) column(f.x+f.nx*(hw+2)*sg,f.z+f.nz*(hw+2)*sg,0.8,-3,deckHeight(e,ss)+14,pier); }
             run0 = -1;
           }
         }
@@ -832,7 +873,7 @@ export class Renderer {
     if (this.aSampleVer !== `${sim.sampleVersion}:${rush}`) {
       this.aSampleVer = `${sim.sampleVersion}:${rush}`;
       let tot = 0; for (const e of net.edges.values()) tot += e.flow * e.len;
-      H.post({ type: 'samples', samples: sim.trafficSamples || [], target: Math.min(this.perfLow ? 300 : 1000, Math.round((tot / 260) * rush)) });
+      H.post({ type: 'samples', samples: (sim.trafficSamples || []).filter(s=>s.kind !== 'car'), target: Math.min(this.perfLow ? 300 : 1000, Math.round((tot / 260) * rush)) });
     }
     const lineKey = `${sim.lineInfoVersion}:${this.w.lineVersion}:${peak}`;
     if (this.aLineVer !== lineKey) {
@@ -844,7 +885,15 @@ export class Renderer {
       }
       H.post({ type: 'lines', lines });
     }
+    this.residentStages ||= new Map();
+    const residentSpawns = [];
+    for (const c of sim.residentTrips || []) {
+      const leg = residentLeg(c,hr), key=c.home+':'+c.k, previous=this.residentStages.get(key);
+      if (step && c.mode === 'car' && leg.segments.length && previous !== leg.state) residentSpawns.push({ segs:leg.segments, kind:'car', col:0x4a86bc });
+      if (step) this.residentStages.set(key,leg.state);
+    }
     const spawns = (sim.dispatches?.splice(0) || []).map((d) => ({ segs: d.segs, kind: d.kind, col: d.kind === 'ambulance' ? 0xf4f4f4 : d.kind === 'van' ? 0xf0e6d0 : 0xd8302a }));
+    spawns.push(...residentSpawns);
     // garbage trucks and police patrols: routed here, simulated in the worker
     this.serviceT += step;
     if (this.serviceT > 3) {
@@ -879,7 +928,9 @@ export class Renderer {
       }
     }
     if (spawns.length) H.post({ type: 'spawn', list: spawns });
+    H.post({type:'bridges', closed:[...net.edges.values()].filter(e=>bridgeOpen(e,hr)).map(e=>e.id)});
     H.step(step);
+    this.drawMaintenance();
     const res = H.latest; if (!res) return;
     // Interpolate raw consecutive snapshots. Using lastDrawn here freezes cars
     // when every frame receives a new snapshot and resets the blend to zero.
@@ -925,6 +976,13 @@ export class Renderer {
       const e = net.edges.get(h.edge); if (!e || !h.mesh) continue;
       h.mesh.material = this.sigMats[this.sigClock.phase(h.node) === this.sigClock.axis(net, h.node, e) ? 1 : 0];
     }
+  }
+
+  drawMaintenance() {
+    if (!this.maintenanceMesh) { this.maintenanceMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6,1.5,3.4),new THREE.MeshLambertMaterial({color:0xf1a52a}),128);this.maintenanceMesh.frustumCulled=false;this.scene.add(this.maintenanceMesh); }
+    let n=0; const M=new THREE.Matrix4(), q=new THREE.Quaternion(), Y=new THREE.Vector3(0,1,0);
+    for(const v of this.sim.maintenance || []) { const g=v.segs[v.i],e=this.w.net.edges.get(g?.edge);if(!e || n>=128)continue;const p=this.w.net.sampleAt(e,v.s);M.compose(new THREE.Vector3(p.x,deckHeight(e,v.s)+0.8,p.z),q.setFromAxisAngle(Y,Math.atan2(p.tx,p.tz)),new THREE.Vector3(1,1,1));this.maintenanceMesh.setMatrixAt(n++,M); }
+    this.maintenanceMesh.count=n;this.maintenanceMesh.instanceMatrix.needsUpdate=true;
   }
 
   // ---------------------------------------------------------------- particles
@@ -1175,60 +1233,23 @@ export class Renderer {
     const R = 70 + c.dist * 0.5, cap = this.perfLow ? 160 : 560, venue = sim.event && w.buildings.get(sim.event.venue);
     const want = Math.min(cap, Math.round((sim.stats.pop || 0) / 7 * night * wet * clamp(260 / c.dist, 0.3, 1.4)) + (venue ? 120 : 0));
     const walkable = (e) => e && !e.layer && !ROADS[e.type].noAccess && e.type !== 'highway';
-    // where people go at this hour
-    const errand = (home) => {
-      const blds = this.nearBlds ||= [], pick = (f) => { const c2 = blds.filter(f); return c2.length ? c2[Math.floor(Math.random() * c2.length)] : null; };
-      const rush = (hr >= 7 && hr < 9.5) || (hr >= 16 && hr < 19), r = Math.random();
-      if (venue && r < 0.5) return { b: venue, crowd: true };
-      if (rush && r < 0.6) return { b: pick((b) => ['busstop', 'tramstop', 'railstation', 'metrostation'].includes(b.svc)) || pick((b) => b.jobs > 0 && !b.svc) };
-      if (hr >= 7 && hr < 8.5 && r < 0.5) return { b: pick((b) => b.svc === 'school') };
-      if (hr >= 14 && hr < 19 && r < 0.3) return { b: pick((b) => SERVICES[b.svc]?.park) };
-      if (hr >= 9 && hr < 20) return { b: pick((b) => !b.svc && ZONES[b.zone].kind === 'C') };
-      return { b: pick((b) => b.hh > 0 && b !== home) };
-    };
-    this.nearT = (this.nearT || 0) - dt;
-    if (this.nearT <= 0) { this.nearT = 2; this.nearBlds = [...w.buildings.values()].filter((b) => b.edge >= 0 && !b.abandoned && Math.abs(b.cx - c.x) < R * 1.5 && Math.abs(b.cz - c.z) < R * 1.5); }
-    if (L.length < want && run) for (let k = 0; k < 2 && L.length < want; k++) {
-      const homes = this.nearBlds.filter((b) => b.hh > 0 && b.occ > 0 && Math.abs(b.cx - c.x) < R && Math.abs(b.cz - c.z) < R); if (!homes.length) break;
-      const home = homes[Math.floor(Math.random() * homes.length)], e0 = net.edges.get(home.edge), dest = errand(home);
-      if (!walkable(e0) || !dest.b || dest.b.edge < 0 || dest.b === home) continue;
-      const go = fastestRoute(net, { edge: home.edge, s: home.s }, [{ id: dest.b.id, edge: dest.b.edge, s: dest.b.s }]);
-      if (!go?.segments?.length || go.segments.some((g) => !walkable(net.edges.get(g.edge)))) continue;
-      const len = go.segments.reduce((t, g) => t + Math.abs(g.to - g.from), 0); if (len > 320) continue;   // nobody walks that far
-      L.push({ segs: go.segments, i: 0, s: go.segments[0].from, side: home.side || 1, v: 0.9 + Math.random() * 0.5, age: 0, home: home.id, dest: dest.b.id, crowd: !!dest.crowd, stay: 0,
-        col: [0xd84a3a, 0x3a6ac8, 0xe8c040, 0x5ab86a, 0x9a5ac8, 0xe07a30, 0x2a2a2a, 0xf2f2f2][Math.floor(Math.random() * 8)] });
+    // Outward and return journeys are the same assignment used by the follow camera.
+    L.length = 0;
+    for (const resident of sim.residentTrips || []) {
+      if (resident.mode !== 'walk') continue;
+      const leg = residentLeg(resident, hr), pos = routePosition(net, leg.segments, leg.progress);
+      if (!pos || !walkable(pos.edge)) continue;
+      L.push({ resident, pos, home:resident.home, dest:resident.destination, col:0x3a6ac8 });
     }
     const M = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0), col = new THREE.Color(); let n = 0;
-    for (let i = L.length - 1; i >= 0; i--) {
-      const a = L[i]; a.age += dt * run;
-      let g = a.segs[a.i], e = g && net.edges.get(g.edge);
-      if (!e || a.age > 400) { L.splice(i, 1); continue; }
-      let px, pz, py, hx, hz, fade = Math.min(1, a.age / 1.2);
-      if (a.stay > 0) {   // arrived: waiting at the stop, shopping, or milling about in the crowd
-        a.stay -= dt * run; if (a.stay <= 0) { L.splice(i, 1); continue; }
-        const b = w.buildings.get(a.dest); if (!b) { L.splice(i, 1); continue; }
-        const t = a.age * 0.3 + a.col, r0 = a.crowd ? 3 + (a.col % 7) : 1.5;
-        px = a.ax + Math.cos(t) * r0 * 0.4; pz = a.az + Math.sin(t) * r0 * 0.4; py = w.heightAt(px, pz); hx = -Math.sin(t); hz = Math.cos(t);
-        fade = Math.min(fade, a.stay / 1.2);
-      } else {
-        const dir = Math.sign(g.to - g.from) || 1;
-        a.s += dir * a.v * dt * run;
-        if ((dir > 0 && a.s >= g.to) || (dir < 0 && a.s <= g.to)) {
-          a.i++; if (a.i >= a.segs.length) {   // there: stay a while, then go in
-            const b = w.buildings.get(a.dest), f = net.sampleAt(e, clamp(g.to, 0, e.len));
-            a.ax = b ? f.x + (b.cx - f.x) * (a.crowd ? 0.5 : 0.15) : f.x; a.az = b ? f.z + (b.cz - f.z) * (a.crowd ? 0.5 : 0.15) : f.z;
-            a.stay = a.crowd ? 20 + Math.random() * 40 : b?.svc && b.svc.includes('stop') ? 4 + Math.random() * 6 : 1.5; a.i = a.segs.length - 1; continue;
-          }
-          g = a.segs[a.i]; e = net.edges.get(g.edge); if (!e) { L.splice(i, 1); continue; } a.s = g.from;
-        }
-        const f = net.sampleAt(e, clamp(a.s, 0, e.len)), d2 = Math.sign(g.to - g.from) || 1, off = (e.hw + 0.9) * a.side;
-        px = f.x - f.tz * off; pz = f.z + f.tx * off; hx = f.tx * d2; hz = f.tz * d2;
-        py = (e.heights?.length ? deckHeight(e, a.s) : w.heightAt(px, pz)) + Math.abs(Math.sin(a.age * 9)) * 0.06;
-      }
-      if (n >= this.people.instanceMatrix.count) continue;
-      p.set(px, py + 0.08, pz); q.setFromAxisAngle(Y, Math.atan2(hx, hz)); sc.setScalar(Math.max(0.01, fade));
-      M.compose(p, q, sc); this.people.setMatrixAt(n, M); this.people.setColorAt(n, col.setHex(a.col)); n++;
+    for (const a of L) {
+      const f=a.pos, e=f.edge, off=e.hw+0.9;
+      if (n >= this.people.instanceMatrix.count) break;
+      p.set(f.x-f.tz*off, deckHeight(e,f.s)+0.1, f.z+f.tx*off); q.setFromAxisAngle(Y,Math.atan2(f.tx*f.dir,f.tz*f.dir));
+      M.compose(p,q,sc); this.people.setMatrixAt(n,M); this.people.setColorAt(n,col.setHex(a.col)); n++;
     }
+    // Festival spectators remain at their actual venue, separate from commuting residents.
+    if (venue) for(let i=0;i<Math.min(60,cap-n);i++) { const ang=i*2.4, rad=4+i%9; p.set(venue.cx+Math.cos(ang)*rad,w.heightAt(venue.cx,venue.cz)+0.1,venue.cz+Math.sin(ang)*rad); q.setFromAxisAngle(Y,ang); M.compose(p,q,sc); this.people.setMatrixAt(n,M);this.people.setColorAt(n,col.setHex(0xe8c040));n++; }
     this.people.count = n; this.people.instanceMatrix.needsUpdate = true; if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
   }
 
@@ -1261,6 +1282,62 @@ export class Renderer {
     this.nbCars.count = n; this.nbCars.instanceMatrix.needsUpdate = true; if (this.nbCars.instanceColor) this.nbCars.instanceColor.needsUpdate = true;
   }
 
+  // ---------------------------------------------------------------- boats
+  // River boats drift downstream on the current, harbour ships sail out to sea and back,
+  // and ferries shuttle between pairs of ferry piers.
+  updateBoats(dt) {
+    const w = this.w, F = this.flow; if (!F) return;
+    if (!this.boatMesh) {
+      const hull = (L, W, c) => coloredBox(W, 0.8, L, 0, 0.3, 0, c);
+      const kinds = {
+        barge: mergeGeometries([hull(9, 2.6, 0x3a3a40), coloredBox(2.2, 0.9, 5, 0, 1, -0.8, 0x8a5a32), coloredBox(1.8, 1.4, 1.6, 0, 1.3, 3.2, 0xe8e4dc)]),
+        sail: mergeGeometries([hull(4, 1.4, 0xf2f2f2), coloredBox(0.12, 5, 0.12, 0, 2.9, 0.2, 0x8a7a6a), coloredBox(0.06, 3.8, 2.2, 0, 2.6, -0.8, 0xfaf6ea)]),
+        ship: mergeGeometries([hull(22, 5, 0x2a4a6a), coloredBox(4.4, 1.6, 8, 0, 1.4, -2, 0xc84a3a), coloredBox(4.4, 1.6, 5, 0, 1.4, 5, 0x3a8ae0), coloredBox(3.6, 3.2, 3, 0, 2.2, -8.5, 0xf2f2ee)]),
+        ferry: mergeGeometries([hull(12, 4, 0xf2f2ee), coloredBox(3.6, 1.8, 7, 0, 1.6, 0, 0x3a8ae0), coloredBox(3.8, 0.3, 7.4, 0, 2.6, 0, 0xf2f2ee)]),
+      };
+      this.boatMesh = {}; for (const [k, g] of Object.entries(kinds)) { const m = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }), 40); m.count = 0; m.frustumCulled = false; m.castShadow = true; this.scene.add(m); this.boatMesh[k] = m; }
+      this.boats = [];
+    }
+    const run = this.sim.paused ? 0 : Math.min(this.sim.speed, 3), key = `${this.flowKey = (this.flowKey || 0)}:${w.svcVersion}:${w.terrainVersion}`;
+    // harbour ships and ferries follow routes, rebuilt when services or water change
+    if (key !== this.boatKey) {
+      this.boatKey = key; this.boats = this.boats.filter((b) => b.kind === 'barge' || b.kind === 'sail');
+      const blds = [...w.buildings.values()];
+      for (const h of blds.filter((b) => b.svc === 'harbour' && !b.abandoned)) {
+        const r = waterRoute(w, h.cx, h.cz, 'edge'); if (!r || r.length < 2) continue;
+        for (let k = 0; k < 2; k++) this.boats.push({ kind: 'ship', route: r, len: routeLen(r), s: k * routeLen(r) * 0.5, dir: k ? -1 : 1, wait: 0, v: 5 });
+      }
+      for (const p of ferryPairs(w, blds.filter((b) => b.svc === 'ferry' && !b.abandoned))) this.boats.push({ kind: 'ferry', route: p.route, len: routeLen(p.route), s: 0, dir: 1, wait: 2, v: 7 });
+    }
+    // river traffic near the camera
+    const c = this.cam, drifting = this.boats.filter((b) => b.kind === 'barge' || b.kind === 'sail').length;
+    if (drifting < (this.perfLow ? 3 : 8) && run && Math.random() < dt * 0.8) {
+      for (let t = 0; t < 12; t++) {
+        const x = c.x + (Math.random() - 0.5) * 400, z = c.z + (Math.random() - 0.5) * 400, f = x > 2 && z > 2 && x < N - 2 && z < N - 2 ? flowAt(F, x, z) : null;
+        if (f && !f.open && w.wdist[w.cellAt(x, z)] < -2) { this.boats.push({ kind: Math.random() < 0.6 ? 'barge' : 'sail', x, z, h: Math.atan2(f.x, f.z), age: 0, v: 2 + Math.random() * 2 }); break; }
+      }
+    }
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0), n = { barge: 0, sail: 0, ship: 0, ferry: 0 };
+    for (let i = this.boats.length - 1; i >= 0; i--) {
+      const b = this.boats[i]; let x, z, h;
+      if (b.route) {
+        const atBridge = routeAt(b.route, b.s + b.dir*10), crossing = w.net.nearestEdge(atBridge.x,atBridge.z,8,e=>e.bridgeStyle === 'movable');
+        if (crossing && !bridgeOpen(crossing.e,this.hour())) { /* wait for the shipping window */ }
+        else if (b.wait > 0) b.wait -= dt * run; else { b.s += b.dir * b.v * dt * run; if (b.s >= b.len || b.s <= 0) { b.s = clamp(b.s, 0, b.len); b.dir = -b.dir; b.wait = b.kind === 'ferry' ? 6 : 14; } }
+        const a = routeAt(b.route, b.s); x = a.x; z = a.z; h = Math.atan2(a.hx * b.dir, a.hz * b.dir);
+      } else {
+        const f = flowAt(F, b.x, b.z); b.age += dt * run;
+        if (!f || b.age > 240 || b.x < 1 || b.z < 1 || b.x > N - 1 || b.z > N - 1 || w.wdist[w.cellAt(b.x, b.z)] > -1) { this.boats.splice(i, 1); continue; }
+        const crossing = w.net.nearestEdge(b.x+f.x*10,b.z+f.z*10,8,e=>e.bridgeStyle === 'movable');
+        const sp = crossing && !bridgeOpen(crossing.e,this.hour()) ? 0 : b.v * (0.6 + f.speed) * dt * run; b.x += f.x * sp; b.z += f.z * sp;
+        const want = Math.atan2(f.x, f.z); let d = want - b.h; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; b.h += d * Math.min(1, dt * 2); x = b.x; z = b.z; h = b.h;
+      }
+      const m = this.boatMesh[b.kind]; if (n[b.kind] >= 40) continue;
+      p.set(x, -0.3 + Math.sin(this.time * 1.7 + i) * 0.08, z); q.setFromAxisAngle(Y, h); M.compose(p, q, one); m.setMatrixAt(n[b.kind]++, M);
+    }
+    for (const k in n) { this.boatMesh[k].count = n[k]; this.boatMesh[k].instanceMatrix.needsUpdate = true; }
+  }
+
   // hour of the day from the visual clock (tod 0 = 06:00, 0.25 = noon)
   hour() { return (this.tod * 24 + 6) % 24; }
   // Following one resident: at home, on the way along their real route, at work, and back.
@@ -1272,19 +1349,13 @@ export class Renderer {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.25, 4, 16), new THREE.MeshBasicMaterial({ color: 0xffd23a })); ring.rotation.x = Math.PI / 2; ring.position.y = -0.8; g.add(ring);
       this.followMark = g; this.scene.add(g);
     }
-    const r = this.sim.routes;
-    if (r?.origin === home.id && r.job && f.routeKey !== r.job.destination) {   // polyline of the commute
-      f.routeKey = r.job.destination; f.work = r.job.destination; f.minutes = Math.max(4, Math.round(r.job.seconds / 4)); f.pts = [];
-      for (const sg of r.job.segments) { const e = net.edges.get(sg.edge); if (!e) continue; const n = Math.max(2, Math.ceil(Math.abs(sg.to - sg.from) / 4)); for (let k = 0; k <= n; k++) { const s = sg.from + (sg.to - sg.from) * (k / n), p = net.sampleAt(e, s); f.pts.push([p.x, deckHeight(e, s), p.z]); } }
-    }
-    const H = this.hour(), c = f.citizen, dur = (f.minutes || 20) / 60, work = f.work && w.buildings.get(f.work);
-    let pos = [home.cx, home.pad ?? home.baseY ?? 0, home.cz], state = 'home';
-    const along = (t) => { const P = f.pts; if (!P?.length) return null; const k = Math.min(P.length - 1, t * (P.length - 1)), i = Math.floor(k), u = k - i, a = P[i], b = P[Math.min(P.length - 1, i + 1)]; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]; };
-    if (work && c.cohort !== 'retiree') {
-      if (H >= c.depart && H < c.depart + dur) { pos = along((H - c.depart) / dur) || pos; state = 'commute'; }
-      else if (H >= c.depart + dur && H < c.back) { pos = [work.cx, work.pad ?? work.baseY ?? 0, work.cz]; state = 'work'; }
-      else if (H >= c.back && H < c.back + dur) { pos = along(1 - (H - c.back) / dur) || pos; state = 'return'; }
-    }
+    const c = this.sim.residentTrips?.find(c=>c.home===home.id && c.k===f.citizen.k);
+    const leg = residentLeg(c,this.hour()), work = c && w.buildings.get(c.destination);
+    f.work = c?.destination; f.minutes = c?.minutes; if (c) f.citizen = c;
+    let pos = [home.cx, home.pad ?? home.baseY ?? 0, home.cz], state = leg.state;
+    const at = routePosition(net,leg.segments,leg.progress);
+    if (at) pos=[at.x,deckHeight(at.edge,at.s),at.z];
+    else if (state === 'work' && work) pos=[work.cx,work.pad ?? work.baseY ?? 0,work.cz];
     f.state = state;
     this.followMark.visible = true; this.followMark.position.set(pos[0], pos[1] + 2.5 + Math.sin(this.time * 4) * 0.3, pos[2]);
     if (f.camera) { this.cam.x += (pos[0] - this.cam.x) * Math.min(1, dt * 3); this.cam.z += (pos[2] - this.cam.z) * Math.min(1, dt * 3); }
@@ -1342,9 +1413,17 @@ export class Renderer {
     if (!this.grass) { let r = 0, g2 = 0, b2 = 0, n = 0; for (let i = 0; i < N * N; i += 97) if (!this.w.water[i]) { r += this.base[i * 3]; g2 += this.base[i * 3 + 1]; b2 += this.base[i * 3 + 2]; n++; } this.grass = n ? [r / n, g2 / n, b2 / n] : [96, 146, 62]; }
     const G0 = this.grass, GROUND = [G0, [70, 124, 168], [150, 150, 146], ...[1, 2, 3, 4, 5, 6].map((z) => ZONES[z].color.map((c, i) => Math.round(c * 0.45 + G0[i] * 0.55))), [170, 168, 160], G0.map((c) => c * 0.62)];
     const lin = (v) => Math.pow(v / 255, 2.2);   // vertex colours are linear; the ground texture is sRGB
+    // open land and woods next door get the same season, rock and snow as this tile's ground
+    const season = this.season(), cellCol = (c, i, j) => {
+      const k2 = cls[c], g = GROUND[k2] || GROUND[0]; if (k2 !== 0 && k2 !== 10) return g;
+      const h = hgt[c] / 3, sl = Math.hypot(hgt[Math.min(S - 1, i + 1) + j * S] / 3 - h, hgt[i + Math.min(S - 1, j + 1) * S] / 3 - h) / k;
+      const rocky = sl > 0.5 ? mix(g, [112, 106, 98], clamp((sl - 0.5) * 1.8, 0, 0.9)) : g;
+      return this.landColor(rocky, h, ox + i * k, oz + j * k, season);
+    };
+    this._cellCol = cellCol;
     const pos = new Float32Array((S + 1) * (S + 1) * 3), col = new Float32Array((S + 1) * (S + 1) * 3), uv = new Float32Array((S + 1) * (S + 1) * 2), idx = [];
     for (let j = 0; j <= S; j++) for (let i = 0; i <= S; i++) {
-      const c = Math.min(S - 1, j) * S + Math.min(S - 1, i), v = j * (S + 1) + i, g = GROUND[cls[c]] || GROUND[0], sh = 0.92 + hash2(i, j, 91) * 0.1;
+      const c = Math.min(S - 1, j) * S + Math.min(S - 1, i), v = j * (S + 1) + i, g = cellCol(c, i, j), sh = 0.92 + hash2(i, j, 91) * 0.1;
       pos.set([ox + i * k, stitch(i, j, cls[c] === 1 ? -1.4 : hgt[c] / 3), oz + j * k], v * 3); col.set(this.fullTiles ? [1, 1, 1] : [lin(g[0] * sh), lin(g[1] * sh), lin(g[2] * sh)], v * 3);
       uv.set([i / S, 1 - j / S], v * 2);
     }
@@ -1386,7 +1465,7 @@ export class Renderer {
   tileTexture(cls, S, GROUND) {
     const R = 4, T = S * R, data = new Uint8Array(T * T * 4);
     for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
-      const i = (y / R | 0) * S + (x / R | 0), c = cls[i], g = GROUND[c] || GROUND[0], lx = x % R, ly = y % R;
+      const i = (y / R | 0) * S + (x / R | 0), c = cls[i], g = (this._cellCol?.(i, x / R | 0, y / R | 0)) || GROUND[c] || GROUND[0], lx = x % R, ly = y % R;
       let m = 0.9 + hash2(x, y, 77) * 0.14;
       if (c >= 3 && c <= 8 && (lx === 0 || ly === 0)) m *= 0.8;                          // lot edges
       if (c === 2) { const nb = (dx, dz) => cls[clamp((y / R | 0) + dz, 0, S - 1) * S + clamp((x / R | 0) + dx, 0, S - 1)] === 2; if ((nb(-1, 0) && nb(1, 0) && ly === 2) || (nb(0, -1) && nb(0, 1) && lx === 2)) m = 1.35; }   // lane marks
@@ -1627,35 +1706,35 @@ export class Renderer {
     if (this.ulGroup) { this.ulGroup.traverse((o) => { o.geometry?.dispose(); }); this.scene.remove(this.ulGroup); this.ulGroup = null; }
     if (!w.ulines?.length) return;
     const g = new THREE.Group(), pylons = [], wires = [], pipes = { water: [], sewer: [] }, hotWires = [];
-    for (const l of w.ulines) {
+    for (const l of w.ulines.flatMap(lineSegments)) {
       const [ax, az] = l.a, [bx, bz] = l.b, len = Math.hypot(bx - ax, bz - az), yaw = Math.atan2(bx - ax, bz - az);
       if (l.kind === 'power') {
         const n = Math.max(1, Math.round(len / 22)); let prev = null;
         for (let k = 0; k <= n; k++) {
           const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n, y = w.heightAt(x, z), c = w.cellAt(x, z);
-          const top = new THREE.Vector3(x, y + 7.4, z);
-          if (!(c >= 0 && w.water[c] && k && k < n)) pylons.push([x, y, z, yaw]);
+          const top = new THREE.Vector3(x, y + (l.tier === 1 ? 11 : 7.4), z);
+          if (!(c >= 0 && w.water[c] && k && k < n)) pylons.push([x, y, z, yaw, l.tier === 1 ? 1.48 : 1]);
           if (prev) for (const off of [-1.3, 1.3]) {   // two wires, sagging between pylons
             const dx = Math.cos(yaw) * off, dz = -Math.sin(yaw) * off, a = prev.clone().add(new THREE.Vector3(dx, 0, dz)), b = top.clone().add(new THREE.Vector3(dx, 0, dz));
             for (let q = 0; q < 4; q++) { const t0 = q / 4, t1 = (q + 1) / 4, s0 = 1.1 * 4 * t0 * (1 - t0), s1 = 1.1 * 4 * t1 * (1 - t1); wires.push(a.clone().lerp(b, t0).setY(a.y + (b.y - a.y) * t0 - s0), a.clone().lerp(b, t1).setY(a.y + (b.y - a.y) * t1 - s1)); }
           }
           prev = top;
         }
-      } else if (under) pipes[l.kind].push([ax, az, bx, bz, len, yaw, (this.sim.lineLoad?.get(l.id) || 0) > 0.97]);
+      } else if (under) pipes[l.kind].push([ax, az, bx, bz, len, yaw, (this.sim.lineLoad?.get(l.id) || 0) > 0.97, l.tier || 0]);
       if (l.kind === 'power' && (this.sim.lineLoad?.get(l.id) || 0) > 0.97) hotWires.push(l.id);
     }
     if (pylons.length) {
       const geo = mergeGeometries([coloredBox(0.5, 7.6, 0.5, 0, 3.8, 0, 0x8a8e94), coloredBox(3.4, 0.3, 0.3, 0, 7.2, 0, 0x8a8e94), coloredBox(1.6, 0.25, 0.25, 0, 5.6, 0, 0x8a8e94)]);
       const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), pylons.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
-      pylons.forEach(([x, y, z, yaw], i) => m.setMatrixAt(i, M.compose(new THREE.Vector3(x, y, z), q.setFromAxisAngle(Y, yaw), one)));
+      pylons.forEach(([x, y, z, yaw, scale], i) => m.setMatrixAt(i, M.compose(new THREE.Vector3(x, y, z), q.setFromAxisAngle(Y, yaw), new THREE.Vector3(1,scale,1))));
       m.castShadow = true; g.add(m);
       g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(wires), new THREE.LineBasicMaterial({ color: hotWires.length && under ? 0xd8402a : 0x2a2c30 })));   // overloaded lines show red underground
     }
     // pipes and drains lie on one flat level below the lowest ground, whatever the terrain above
     const uy = undergroundY(w);
-    for (const kind of ['water', 'sewer']) for (const [ax, az, bx, bz, len, yaw, full] of pipes[kind]) {
+    for (const kind of ['water', 'sewer']) for (const [ax, az, bx, bz, len, yaw, full, tier] of pipes[kind]) {
       const mat = new THREE.MeshBasicMaterial({ color: full ? 0xd8402a : ULINES[kind].color, depthTest: false, transparent: true, opacity: 0.92 });   // a run at capacity turns red
-      const m = new THREE.Mesh(new THREE.BoxGeometry(kind === 'sewer' ? 1.8 : 1.2, 0.8, len + 1), mat);
+      const m = new THREE.Mesh(new THREE.BoxGeometry((kind === 'sewer' ? 1.8 : 1.2)*(tier ? 1.8 : 1), 0.8, len + 1), mat);
       m.position.set((ax + bx) / 2, uy + (kind === 'sewer' ? -1.4 : 0), (az + bz) / 2); m.rotation.y = yaw; m.renderOrder = 9; g.add(m);
       for (const [x, z] of [[ax, az], [bx, bz]]) { const j = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 2.2), mat); j.position.set(x, m.position.y, z); j.renderOrder = 9; g.add(j); }   // joints
     }
@@ -1716,19 +1795,22 @@ export class Renderer {
     if (this.terrainVer !== w.terrainVersion) this.refreshTerrain();
     this.gradeT = (this.gradeT || 0) + dt;
     if (w.dirty.grade && this.gradeT > 0.2) { const g = w.dirty.grade; w.dirty.grade = null; this.gradeT = 0; this.refreshGround(g[0], g[1], g[2], g[3]); }
+    const liftState = [...w.net.edges.values()].filter(e=>bridgeOpen(e,this.hour())).map(e=>e.id).join(',');
+    if(this.liftState !== liftState) { this.liftState=liftState; this.roadVer=-1; }
     if (this.roadVer !== w.net.version || this.roadEra !== this.sim.tech.style) this.buildRoads();
     if (this.flowVer !== this.sim.flowVersion && (this.overlay === 'traffic' || this.flowVer === -1)) this.colorTraffic();
     this.syncBuildings(); this.updateLod();
     this.updateBuildingTints(); this.updateRoute();
     if (this.treeSeason && this.treeSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) w.dirty.trees = true;
-    if (this.fullTiles && this.regionArgs && this.regionSeason && this.regionSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) this.setRegion(...this.regionArgs);   // woods next door change with the seasons
+    if (this.regionArgs && this.regionSeason && this.regionSeason !== `${this.sim.weather.season}:${(this.w.hazards?.snow || 0) > 0.05}`) this.setRegion(...this.regionArgs);   // woods next door change with the seasons
+    if (this.groundSeason !== this.season()) { this.groundSeason = this.season(); w.markGround(0, 0, N, N); }   // the season repaints the ground
     if (w.dirty.trees) { this.treeT = (this.treeT || 0) + dt; if (this.treeT > 0.3 || !this.treeMesh) { this.rebuildTrees(); w.dirty.trees = false; this.treeT = 0; } }
     const ov = this.overlay !== 'none' && this.overlay !== 'districts' && this.overlay !== 'traffic';
     if (ov) { const v = (this.sim.fieldVersion || 0) + ':' + this.sim.flowVersion; if (v !== this.overlayVer) { this.overlayVer = v; w.markGround(0, 0, N, N); } }
     if (w.dirty.ground) { const g = w.dirty.ground; w.dirty.ground = null; this.paintGround(g[0], g[1], g[2], g[3]); }
     this.syncExtras();
     for (const o of this.rotors.values()) o.userData.spin.rotation.z -= dt * (this.sim.paused ? 0 : 2.2 * this.sim.wind);
-    this.waterTex.offset.x = (this.time * 0.004) % 1; this.waterTex.offset.y = (this.time * 0.002) % 1;
+    this.waterU.uTime.value = this.time; this.updateBoats(dt);
     if (this.vehicleStyle !== this.sim.tech.style) { this.disposeVehicles(); this.initVehicles(); }
     this.updateVehicles(dt); this.updateFuture(dt); this.updateLines(); this.updateULines(); this.updateBridges(dt);
     this.updateParticles(dt);
@@ -1736,8 +1818,9 @@ export class Renderer {
     this.updateBooths(); this.updatePeople(dt); this.updateNeighbourTraffic(dt);
     // the underground view clears the surface clutter
     { const under = this.overlay === 'pipes'; for (const m of this.treeMeshes || []) m.visible = !under; if (this.people) this.people.visible = !under; }
-    this.updateFollow(dt); this.updateCamera(); this.updateEvents(dt); this.updateWeather(dt); this.updateDayNight(dt);
-    this.draw();
+    if (!this.photoTour?.playing) this.updateFollow(dt);
+    this.photoTour?.beforeFrame(); this.updateCamera(); this.updateEvents(dt); this.updateWeather(dt); this.updateDayNight(dt);
+    this.draw(); this.photoTour?.afterFrame();
   }
   draw() {
     if (!this.fx) { this.camera.layers.enableAll(); this.r.render(this.scene, this.camera); return; }
