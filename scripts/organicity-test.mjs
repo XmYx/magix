@@ -2011,7 +2011,7 @@ test('AG3: desktop builds sign, notarise and update from GitHub releases', () =>
   const main = readFileSync(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
   assert(main.includes('backgroundThrottling: false') && main.includes('checkForUpdatesAndNotify') && main.includes('ORGANICITY_SMOKE'), 'main process');
   const wf = readFileSync(new URL('../.github/workflows/organicity-desktop.yml', import.meta.url), 'utf8');
-  assert(wf.includes("desktop-v*") && wf.includes('contents: write') && wf.includes('action-gh-release') && wf.includes('playwright install') && wf.includes('APPLE_ID'), 'workflow');
+  assert(wf.includes("tags: ['desktop-v']") && wf.includes('contents: write') && wf.includes('action-gh-release') && wf.includes('playwright install') && wf.includes('APPLE_ID'), 'workflow');
 });
 
 test('AG4: gallery server queues, moderates, lists, serves and hides reported cities', async () => {
@@ -2044,6 +2044,31 @@ test('AG4: gallery server queues, moderates, lists, serves and hides reported ci
     assert((await req(`/api/admin/${id}`, { method: 'DELETE', headers: { authorization: 'Bearer sekrit' } })).status === 200 && g.entries().length === 0, 'delete');
     assert(clean('a\u0000b<c>  d', 10) === 'abc d', 'clean');
   } finally { g.server.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('aviation: regional camera bounds follow the active tile and map size', async () => {
+  const {cameraBounds,maxCameraDistance}=await import('../organicity/js/aviation.js');
+  const b=cameraBounds({active:'1,1',tiles:{'0,0':{x:0,z:0},'1,1':{x:1,z:1},'4,4':{x:4,z:4}}});
+  assert(b.minX===-N && b.minZ===-N && b.maxX===N*4 && maxCameraDistance()===N*12,'regional bounds or zoom');
+  assert(cameraBounds(null).maxX===N,'single-city bounds');
+});
+
+test('aviation: airplanes taxi, depart and land on their airport runway; inactive airports have no flights', async () => {
+  const {flightPose,operationalAirports}=await import('../organicity/js/aviation.js');
+  const b={id:7,svc:'airport',cx:200,cz:200,fx:0,fz:1,pad:4,edge:1,power:true,water:true};
+  const world={buildings:new Map([[7,b]])};assert(operationalAirports(world,10).length===1,'working airport');
+  for(const key of ['abandoned','flood','constructionUntil']) { const original=b[key];b[key]=key==='abandoned'?true:20;assert(!operationalAirports(world,10).length,'closed airport still flies');b[key]=original; }
+  b.power=false;assert(!operationalAirports(world,10).length,'unpowered airport still flies');b.power=true;
+  const taxi=flightPose(b,0),depart=flightPose(b,40),land=flightPose(b,82);assert(taxi.y<6 && depart.y>50 && land.y<6,'flight altitudes');assert(!flightPose(b,54).visible,'off-map return shown');
+  for(let t=0;t<100;t+=0.5){const p=flightPose(b,t);assert([p.x,p.y,p.z,p.heading,p.pitch].every(Number.isFinite),'bad pose');}
+  const rotated=flightPose({...b,fx:1,fz:0},40);assert(Math.abs(rotated.z-b.cz)>100,'runway rotation ignored');
+});
+
+test('release: exact desktop-v tag and Linux homepage metadata', () => {
+  const workflow=readFileSync(new URL('../.github/workflows/organicity-desktop.yml',import.meta.url),'utf8');
+  const pkg=JSON.parse(readFileSync(new URL('../desktop/package.json',import.meta.url),'utf8'));
+  assert(workflow.includes("tags: ['desktop-v']") && workflow.includes("github.ref == 'refs/tags/desktop-v'"),'release tag must be literal');
+  assert(pkg.homepage==='https://github.com/XmYx/magix','Debian package homepage missing');
 });
 
 // ------------------------------------------------------------------ runner

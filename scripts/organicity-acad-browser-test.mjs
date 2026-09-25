@@ -35,6 +35,17 @@ try {
   return {residents:s.residentTrips.length,walkers:r.people.count,following:r.follow.work,invalid,utilityMeshes:r.ulGroup.children.length};
  });
  assert.equal(visuals.invalid,0);assert(visuals.following && visuals.utilityMeshes);
+ const aerial=await page.evaluate(async()=>{
+  const {world:w,sim:s,rend:r,tools:t}=city;const {N}=await import('/organicity/js/config.js');const {maxCameraDistance}=await import('/organicity/js/aviation.js');
+  w.buildRoad(w.net.snap(60,90,3),null,w.net.snap(250,90,3),'avenue');
+  let airport=null;for(let x=90;x<240 && !airport;x+=3)for(let z=104;z<130 && !airport;z+=3){const p=w.planService('airfield',x,z);if(p.ok)airport=w.placeService('airfield',p);}
+  if(!airport)throw Error('Airfield placement');airport.power=airport.water=true;airport.constructionUntil=0;
+  r.flightClock=36;r.updateAviation(0);
+  const bounds=r.cameraRegionBounds;r.cam.x=bounds.minX+N/2;r.cam.z=bounds.minZ+N/2;t.wheel({preventDefault(){},clientX:500,clientY:300,deltaY:100000});r.updateCamera();r.updateRegionalClouds(0);
+  const before=w.net.edges.size,ground=t.ground;t.ground=()=>({x:-100,z:50});t.setTool('road');t.act(true);t.ground=ground;
+  r.frame(0);return {x:r.cam.x,z:r.cam.z,zoom:r.cam.dist,max:maxCameraDistance(),planes:r.airplanes.count,clouds:r.regionalClouds.count,visible:r.regionalClouds.visible,unchanged:w.net.edges.size===before};
+ });
+ assert(aerial.zoom===aerial.max && aerial.planes>0 && aerial.clouds>0 && aerial.visible && aerial.unchanged);assert(aerial.x<0 || aerial.z<0);
  await page.screenshot({path:'/tmp/organicity-acad.png'});
- assert.deepEqual(errors,[]);console.log(JSON.stringify({state,visuals,errors}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({state,visuals,aerial,errors}));
 } finally {await browser.close();}

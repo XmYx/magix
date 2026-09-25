@@ -1,3 +1,4 @@
+import { cameraBounds, maxCameraDistance, operationalAirports, flightPose } from './aviation.js';
 import { lineSegments, bridgeOpen } from './infrastructure.js';
 import { residentLeg, routePosition } from './citizens.js';
 // Organicity — rendering. Low-resolution WebGL with nearest-neighbour upscale
@@ -162,7 +163,7 @@ export class Renderer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(SKY);
     this.scene.fog = new THREE.Fog(SKY, 400, 1200);
-    this.camera = new THREE.PerspectiveCamera(30, 1, 2, 3000);
+    this.camera = new THREE.PerspectiveCamera(30, 1, 2, N*40);
     this.cam = { x: 150 * N / 512, z: N / 2 + 6, yaw: 0.75, pitch: 0.9, dist: 210 };
     this.hemi = new THREE.HemisphereLight(0xe8f2ff, 0x6a7a4a, 1.35);
     this.sun = new THREE.DirectionalLight(0xfff0d8, 2.3);
@@ -207,7 +208,8 @@ export class Renderer {
   // ---------------------------------------------------------------- camera
   updateCamera() {
     const c = this.cam, cp = Math.cos(c.pitch);
-    c.x = clamp(c.x, 0, N); c.z = clamp(c.z, 0, N);
+    const bounds=this.cameraRegionBounds || cameraBounds(null);
+    c.x=clamp(c.x,bounds.minX,bounds.maxX);c.z=clamp(c.z,bounds.minZ,bounds.maxZ);c.dist=clamp(c.dist,22,maxCameraDistance());
     this.camera.position.set(c.x + Math.sin(c.yaw) * cp * c.dist, (c.targetY || 0) + Math.sin(c.pitch) * c.dist, c.z + Math.cos(c.yaw) * cp * c.dist);
     this.camera.lookAt(c.x, c.targetY || 0, c.z);
     this.sun.position.set(c.x - 140, (c.targetY || 0)+260, c.z + 90);
@@ -1282,6 +1284,35 @@ export class Renderer {
     this.nbCars.count = n; this.nbCars.instanceMatrix.needsUpdate = true; if (this.nbCars.instanceColor) this.nbCars.instanceColor.needsUpdate = true;
   }
 
+  updateAviation(dt) {
+    if(!this.airplanes) {
+      const geo=mergeGeometries([coloredBox(1.1,1,8,0,0,0,0xe9eef4),coloredBox(9,0.22,1.7,0,0,0.3,0xd5e4ef),coloredBox(3.5,0.2,1,0,0,-3,0x397fc2),coloredBox(0.3,1.6,1.5,0,0.65,-3,0x397fc2),coloredBox(0.7,0.35,1,0,0.4,2.4,0x30566e)]);
+      this.airplanes=new THREE.InstancedMesh(geo,new THREE.MeshLambertMaterial({vertexColors:true}),64);this.airplanes.frustumCulled=false;this.airplanes.castShadow=true;this.scene.add(this.airplanes);
+    }
+    this.flightClock=(this.flightClock || 0)+(this.sim.paused || this.reducedMotion ? 0 : dt*Math.min(this.sim.speed,4));
+    const M=new THREE.Matrix4(),q=new THREE.Quaternion(),pitch=new THREE.Quaternion(),Y=new THREE.Vector3(0,1,0),X=new THREE.Vector3(1,0,0);let n=0;
+    for(const airport of operationalAirports(this.w,this.sim.day)) for(let slot=0;slot<(airport.svc==='airport'?2:1);slot++) {
+      if(n>=64)break;const p=flightPose(airport,this.flightClock,slot);if(!p.visible)continue;
+      q.setFromAxisAngle(Y,p.heading).multiply(pitch.setFromAxisAngle(X,p.pitch));M.compose(new THREE.Vector3(p.x,p.y,p.z),q,new THREE.Vector3(1,1,1));this.airplanes.setMatrixAt(n++,M);
+    }
+    this.airplanes.count=n;this.airplanes.instanceMatrix.needsUpdate=true;
+  }
+  updateRegionalClouds(dt) {
+    const fade=clamp((this.cam.dist-N*2.5)/(N*3),0,1);
+    if(!fade) { if(this.regionalClouds)this.regionalClouds.visible=false;return; }
+    if(!this.regionalClouds) {
+      this.regionalClouds=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshLambertMaterial({color:0xe8eff4,transparent:true,opacity:0.5,depthWrite:false}),144);this.regionalClouds.frustumCulled=false;this.scene.add(this.regionalClouds);
+    }
+    const clouds=this.regionalClouds,b=this.cameraRegionBounds || cameraBounds(null),width=b.maxX-b.minX,depth=b.maxZ-b.minZ,M=new THREE.Matrix4();
+    this.cloudClock=(this.cloudClock || 0)+(this.sim.paused || this.reducedMotion ? 0 : dt*Math.min(this.sim.speed,4));
+    clouds.visible=true;clouds.material.opacity=fade*0.55;clouds.material.color.setHex(['rain','storm'].includes(this.sim.weather.type)?0x9ca9b5:0xe8eff4);
+    const scale=N/512;let n=0;
+    for(let i=0;i<36;i++) { const x=b.minX+((hash2(i,this.w.seed,201)*width+this.cloudClock*2)%width),z=b.minZ+hash2(i,this.w.seed,202)*depth,y=(160+hash2(i,this.w.seed,203)*100)*scale;
+      for(let k=0;k<4;k++) { M.makeScale((65+hash2(i,k,204)*70)*scale,(12+hash2(i,k,205)*16)*scale,(38+hash2(i,k,206)*50)*scale).setPosition(x+(k-1.5)*38*scale,y+(k%2)*10*scale,z+(k%2)*20*scale);clouds.setMatrixAt(n++,M); }
+    }
+    clouds.count=n;clouds.instanceMatrix.needsUpdate=true;
+  }
+
   // ---------------------------------------------------------------- boats
   // River boats drift downstream on the current, harbour ships sail out to sea and back,
   // and ferries shuttle between pairs of ferry piers.
@@ -1364,7 +1395,7 @@ export class Renderer {
   // Neighbouring cities of the region stand on the horizon beyond the map edge,
   // sized by their population (AI neighbours and your own other cities alike).
   setRegion(region, views = {}) {
-    this.regionArgs = [region, views];
+    this.regionArgs = [region, views]; this.cameraRegionBounds=cameraBounds(region);
     if (this.regionGroup) { this.regionGroup.traverse((o) => { if (o.isInstancedMesh) o.dispose(); else o.geometry?.dispose(); if (!o.userData.shared) { o.material?.map?.dispose(); o.material?.dispose?.(); } }); this.scene.remove(this.regionGroup); }
     this.nbRoads = []; this.nbTiles = []; this.nbStats = { tiles: 0, detailed: 0, parts: 0 };
     const g = this.regionGroup = new THREE.Group(), here = region?.tiles[region.active]; this.scene.add(g);
@@ -1860,7 +1891,7 @@ export class Renderer {
     if (w.dirty.ground) { const g = w.dirty.ground; w.dirty.ground = null; this.paintGround(g[0], g[1], g[2], g[3]); }
     this.syncExtras();
     for (const o of this.rotors.values()) o.userData.spin.rotation.z -= dt * (this.sim.paused ? 0 : 2.2 * this.sim.wind);
-    this.waterU.uTime.value = this.time; this.updateBoats(dt);
+    this.waterU.uTime.value = this.time; this.updateBoats(dt); this.updateAviation(dt); this.updateRegionalClouds(dt);
     if (this.vehicleStyle !== this.sim.tech.style) { this.disposeVehicles(); this.initVehicles(); }
     this.updateVehicles(dt); this.updateFuture(dt); this.updateLines(); this.updateULines(); this.updateBridges(dt);
     this.updateParticles(dt);

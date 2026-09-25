@@ -776,7 +776,7 @@ export class Sim {
       R: 25 + (70 * (jobCap + outJobs - W)) / (W + jobCap + 120) - 45 * Math.max(0, unemp - 0.06) - pen('R') + 30 * (avgHappyR - 0.55),
       C: (80 * (pop * 0.22 - cap.C)) / (pop * 0.22 + cap.C + 40) + 12 - pen('C'),
       I: (80 * (W * 0.4 + 60 - cap.I)) / (W * 0.4 + 60 + cap.I + 40) - pen('I') - (hasOut ? 0 : 40) + (has('harbour') ? 10 : this.shared('harbour') ? 5 : 0) + (has('cargorail') ? 5 : 0),
-      O: (80 * (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 - cap.O)) / (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 + cap.O + 30) - pen('O') - 5 + (has('airport') ? 10 : this.shared('airport') ? 5 : 0),
+      O: (80 * (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 - cap.O)) / (W * (eduRate * 0.6 + hiEdu * 0.5) + 10 + cap.O + 30) - pen('O') - 5 + (has('airport') ? 10 : has('airfield') ? 5 : this.shared('airport') ? 5 : 0),
     };
     if (this.devPriority && target[this.devPriority] != null) target[this.devPriority] += 10;   // the president's development priority
     { let hj = 0; for (const b of w.buildings.values()) if (SERVICES[b.svc]?.chain && b.jobs) hj += b.jobs; target.R += Math.min(15, hj / 40); }   // mines and mills need workers' housing

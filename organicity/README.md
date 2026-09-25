@@ -13,13 +13,19 @@ in its own window, fully offline (three.js is bundled). `npm run dist:linux` (Ap
 deb, tar.gz), `npm run dist:mac` (dmg, zip; x64 and arm64) and `npm run dist:win`
 (installer, portable) build packages. macOS packages must be built on a Mac. The workflow
 `.github/workflows/organicity-desktop.yml` builds all three on GitHub (manually or on a
-`desktop-v*` tag), after the headless tests and the Playwright browser tests pass, and
-smoke-tests the Linux app. A `desktop-v*` tag also publishes a GitHub release, which
+`desktop-v` tag), after the headless tests and the Playwright browser tests pass, and
+smoke-tests the Linux app. A `desktop-v` tag also publishes a GitHub release, which
 installed apps update themselves from (`electron-updater`). Builds are signed and, on
 macOS, notarised when the repository has the signing secrets (see the workflow header);
 otherwise they are unsigned. The app keeps simulating while minimised.
 `ORGANICITY_SMOKE=1` makes the app found a city, report errors and quit. The icon comes from
 `scripts/organicity-icon.py`.
+
+To publish with the release tag, use its exact name (no asterisk):
+```bash
+git tag desktop-v
+git push origin desktop-v
+```
 
 ## What's in the game
 
@@ -31,6 +37,7 @@ otherwise they are unsigned. The app keeps simulating while minimised.
 | Eras | Start in 1800, 1900 or 2000. Height limits rise to cyberpunk skylines with annexes, cantilevers, skybridges, sky hubs and air traffic. Terraces attach at any floor |
 | Traffic | Deterministic assignment with congestion and junction delays. Visible vehicles run in their own worker |
 | Transit | Bus, tram, rail and metro lines with stations, mode choice, peak and off-peak timetables, journeys with several transfers; rush hours on the streets |
+| Aviation | Municipal airfields (2,500 residents) and airports (8,000), animated taxiing, take-offs and landings; operating flights need road access, power and water |
 | Freight | A goods chain from industry to shops; cargo rail, harbour and airport terminals; visible trucks carry commodities between plants and out of town |
 | Resources & industry | Seeded forest, coal, stone, iron and ore deposits (resources overlay). Lumber camps, mines and quarries work them out; a sawmill, paper mill, furniture works, cement works, steelworks, smelter and machinery plant process them; a commodity exchange and warehouses run the market, priced by a regional market with contracts from AI governors. Districts can be industrial parks or mining districts, and plants can fit scrubbers. Plants need road, power, water, workers and a way out. Local coal, goods, building materials and machinery lower costs and raise output |
 | Utilities | Roads carry power, water and sewage. Power lines (on pylons), water pipes and drains join separate networks, up to their capacity (substations raise it). Water pressure needs towers uphill. Drains clear rain ponds, and an optional strict grid makes every building need all three nearby. Runs can be straight, curved or routed along streets; high-voltage lines with transformer stations and trunk mains carry far more; water treatment and two levels of sewage treatment cut pollution. An underground editor shows pipes on one flat level with their coverage, and has a bulldozer that leaves the city untouched |
@@ -46,11 +53,11 @@ otherwise they are unsigned. The app keeps simulating while minimised.
 | Building | Every buildable has an icon rendered from its real model; hovering it shows a card with the model turning in 3D and all its numbers |
 | Saved games | Save, load, overwrite, rename, delete, export and import whole regions in the game (IndexedDB); Ctrl+S quick-saves, and an autosave is kept every five minutes; single-city files and share links remain |
 | Multiplayer | Peer-to-peer (WebRTC): a host opens their region; friends join from the start screen, each gets land and builds their city at the same time. Everyone sees each other's cities next door; there's chat, money and monthly commodity or utility contracts (either party can end one), land claims, AI cities bought at their value, standings, and the host can remove players. The host gets a short access code (ABCD-EFGH) to give friends, who type it on the start screen. The browsers find each other through a signalling relay (the public PeerJS relay by default, or a self-hosted `scripts/organicity-signal.mjs`) and then play directly. STUN and TURN servers (with logins) are settable for strict networks, and codes can still be swapped by hand with no relay |
-| Presentation | Pedestrians on the pavements, optional ordered dithering and light glow (bloom), advisors and news, overlays, day and night, positional industry, train and crowd sounds, flowing rivers and boats, mountain snow lines and rock textures, photo mode with PNG export, camera tours and silent WebM video export, touch controls, colour-blind palette, UI scale, reduced motion, share links and files |
+| Presentation | Region-wide camera panning, zoom out to see the whole region with a cloud layer, pedestrians on the pavements, optional ordered dithering and light glow (bloom), advisors and news, overlays, day and night, positional industry, train and crowd sounds, flowing rivers and boats, mountain snow lines and rock textures, photo mode with PNG export, camera tours and silent WebM video export, touch controls, colour-blind palette, UI scale, reduced motion, share links and files |
 
 Keys: `1`–`7` tools · `8` overlays · `9` budget · `L` transit lines · `T` terrain ·
 `I` industry · `J` multiplayer · `Y` society · `N` advisors · `R` region · `K` president · `M` world map · `P` photo mode ·
-`Space` pause · `Ctrl+Z` undo · `Ctrl+S` quick save · `PgUp`/`PgDn` road level. Right-drag rotates, middle-drag pans, the wheel zooms.
+`Space` pause · `Ctrl+Z` undo · `Ctrl+S` quick save · `PgUp`/`PgDn` road level. Right-drag rotates, middle-drag pans across neighbouring tiles, and the wheel zooms out to the full region. Touch uses two-finger pan and pinch. `Home` returns to the active city; building still happens only on that tile.
 
 Photo tours: press **P**, move the camera and choose **Add viewpoint** at each stop
 (at least two, up to 16). Choose a duration, then **Preview path** or **Export WebM**.
@@ -85,6 +92,7 @@ and is also available in the desktop app.
 | `saves.js` | Saved games (whole regions) in IndexedDB, with export and import |
 | `mp.js` / `mpgame.js` | Multiplayer: the protocol, links and WebRTC codes; hosting and joining a region in the game |
 | `grid.js` / `resources.js` | Utility grids joined by power lines, pipes and drains; resource deposits and the industry chain and market |
+| `aviation.js` | Airport flight paths and region camera bounds |
 | `photo.js` / `water.js` | Camera tours and WebM recording; river flow fields and boat routes |
 | `packs.js` / `i18n.js` / `phrases.js` | Content packs (validated); interface languages, the live phrase layer and right-to-left layout |
 | `gallery.js` | The opt-in gallery client: browse, submit and report cities |
@@ -101,7 +109,7 @@ migrate step by step (see `save.js`).
 ## Tests
 
 ```bash
-node scripts/organicity-test.mjs            # 122 headless tests
+node scripts/organicity-test.mjs            # 126 headless tests
 node scripts/organicity-test.mjs grading    # run tests whose name matches
 ```
 

@@ -1,3 +1,4 @@
+import { maxCameraDistance } from './aviation.js';
 import { utilityPath } from './infrastructure.js';
 import { TRANSIT, transitMode } from './transit.js';
 import { routeLines } from './assign.js';
@@ -46,7 +47,7 @@ export class Tools {
   wheel(e) {
     e.preventDefault();
     const c = this.r.cam, g0 = this.r.groundAt(e.clientX, e.clientY);
-    const nd = clamp(c.dist * Math.pow(1.0015, e.deltaY), 22, 1000);
+    const nd = clamp(c.dist * Math.pow(1.0015, e.deltaY), 22, maxCameraDistance());
     if (g0 && nd < c.dist) { const k = 1 - nd / c.dist; c.x += (g0.x - c.x) * k * 0.6; c.z += (g0.z - c.z) * k * 0.6; }
     c.dist = nd;
   }
@@ -73,6 +74,7 @@ export class Tools {
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.undo(); return; }
     if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); this.ui.actions.quickSave?.(); return; }
     this.keys.add(k);
+    if (k === 'home') { e.preventDefault(); Object.assign(this.r.cam,{x:N/2,z:N/2,dist:Math.min(N,420),targetY:0}); this.r.updateCamera(); return; }
     if (k === 'p') { this.ui.togglePhoto(); return; }
     if (k === 'm') { this.ui.toggleWorldMap(); return; }
     if (k === 'escape' && !document.getElementById('worldmap').hidden) { this.ui.toggleWorldMap(false); return; }
@@ -102,7 +104,7 @@ export class Tools {
   }
   pinch() {
     const g = this.gestureState(), o = this.gesture, c = this.r.cam;
-    c.dist = clamp(c.dist * o.dist / Math.max(1, g.dist), 22, 1000);
+    c.dist = clamp(c.dist * o.dist / Math.max(1, g.dist), 22, maxCameraDistance());
     let da = g.angle - o.angle; da -= Math.round(da / (2 * Math.PI)) * 2 * Math.PI; c.yaw -= da;
     const p0 = this.r.groundAt(o.mx, o.my), p1 = this.r.groundAt(g.mx, g.my);
     if (p0 && p1) { c.x += p0.x - p1.x; c.z += p0.z - p1.z; }
@@ -244,6 +246,7 @@ export class Tools {
     this.mouse.g = g;
     r.clearPreview();
     if (!g) { this.ui.tip(null); return; }
+    if (g.x<0 || g.z<0 || g.x>=N || g.z>=N) { this.hover=null; this.ui.tip('Neighbouring tile · explore freely; use the world map (M) to switch cities'); return; }
     let tip = null;
     switch (s.tool) {
       case 'road': {
@@ -344,7 +347,7 @@ export class Tools {
 
   // ---------------------------------------------------------------- actions
   act(first) {
-    const g = this.ground(); if (!g) return;
+    const g = this.ground(); if (!g || g.x<0 || g.z<0 || g.x>=N || g.z>=N) return;
     const s = this.s, w = this.w, sim = this.sim;
     switch (s.tool) {
       case 'road': {

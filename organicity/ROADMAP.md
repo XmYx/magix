@@ -17,7 +17,7 @@ peer-to-peer multiplayer.
   (`save.js`), and fields added since v10 are optional. Saved games (whole regions)
   live in IndexedDB and export to `.organicity-game` files.
 - **Tests:**
-  - `node scripts/organicity-test.mjs`: 122 headless tests covering simulation,
+  - `node scripts/organicity-test.mjs`: 126 headless tests covering simulation,
     saves, map sizes, region, economy, residents and elections, infrastructure, the
     tile worker pool, translations, the release setup, multiplayer protocol,
     signalling and the gallery server.
@@ -171,6 +171,9 @@ peer-to-peer multiplayer.
 - **Transit:** bus, tram, rail (elevated track) and metro (underground).
   - Stations, peak and off-peak headways, fares and capacity.
   - Journeys with any number of transfers, and mode choice.
+- **Aviation:** municipal airfields unlock at 2,500 residents, airports at 8,000.
+  - Visible airplanes taxi, take off, climb, approach and land along their runway.
+  - Flights stop at abandoned, flooded, unfinished or unpowered/unwatered airports.
 - **Freight:**
   - A goods chain from industry to shops.
   - Cargo rail, harbour and airport terminals.
@@ -286,6 +289,9 @@ peer-to-peer multiplayer.
   - Ctrl+S quick-saves; an autosave runs every five minutes.
   - Single cities also share as links (`#city=…`) or `.organicity` files.
 - **Presentation:**
+  - Pan across the full region and zoom out to twelve tile widths, with a cloud layer
+    at wide zoom. Mouse, keyboard and touch share the range; Home returns to your city.
+  - Building tools stay inside the active tile while viewing neighbours.
   - Day and night, and a procedural soundscape with positional industry, train and crowd audio.
   - Flowing river shaders, harbour boats and ferries; mountain rock textures, snow lines and seasonal neighbour ground colours.
   - Photo mode with PNG export, scripted camera paths and silent WebM video export (including desktop).
@@ -320,7 +326,7 @@ peer-to-peer multiplayer.
   - Desktop packages built with Electron: AppImage, deb and tar.gz for Linux; dmg
     and zip for macOS (x64 and arm64); installer and portable for Windows. They
     bundle three.js and run fully offline.
-  - GitHub workflow: `.github/workflows/organicity-desktop.yml`. A `desktop-v*` tag
+  - GitHub workflow: `.github/workflows/organicity-desktop.yml`. A `desktop-v` tag
     publishes a GitHub release, and installed apps update themselves from it
     (`electron-updater`).
   - Builds are signed, and on macOS notarised, when the repository has the secrets:
@@ -365,6 +371,7 @@ peer-to-peer multiplayer.
   aggregate, cleared by coverage.
 - **Utilities:** capacity is per run and per tier; there is no hydraulic pressure
   network.
+- **Aviation:** airplanes are visual airport traffic, not individually simulated passenger trips.
 - **Roads:** lift bridges open on a fixed timetable rather than for each passing
   boat. Parking is a citywide balance, not per block.
 - **Multiplayer:**
@@ -437,7 +444,7 @@ migratable, and adds headless tests (and browser checks where it shows on screen
 1. **Delivered — Utility tiers.**
    - High-voltage lines carry 480 MW, and trunk mains and interceptor drains carry
      640 units.
-   - Transformer stations join high-voltage runs to the local grid and add 480 MW.
+   - Transformer stations connect the 480 MW high-voltage runs to the local grid.
    - Water treatment removes 80% of the contamination pumped into its grid.
    - Secondary and advanced sewage plants treat 500 and 900 units, with 75% and 95%
      less pollution in the discharge.
@@ -453,8 +460,9 @@ migratable, and adds headless tests (and browser checks where it shows on screen
    Lift bridges open for boats half an hour in every six, and road traffic waits.
 
 Also fixed in this phase: the Ubuntu desktop build failed at the `.deb` step for want
-of a project homepage. `desktop/package.json` now sets `homepage`, and all three
-platform builds complete.
+of a project homepage. `desktop/package.json` now sets `homepage`. Local Linux
+packaging verified AppImage, tar.gz and `.deb`; Windows and macOS builds were
+already reported working.
 
 ### AE — Scale and performance — delivered
 1. **Delivered — Bigger tiles:**
@@ -484,6 +492,8 @@ platform builds complete.
    neighbour tiles.
 3. **Delivered — Camera tours:** capture up to 16 viewpoints, preview eased camera paths, choose a 2–120 second duration, cancel and restore the camera, and export silent WebM video on desktop or supported browsers.
 4. **Delivered — Sound:** positional sound for industry, trains and crowds.
+5. **Delivered — Regional aerial view:** municipal airfields and airport airplanes,
+   wide-zoom clouds, increased mouse/touch zoom and panning across all region tiles.
 
 ### AG — Content, community and release — delivered
 1. **Delivered — Translations:**
@@ -496,7 +506,7 @@ platform builds complete.
    - Signing and notarisation driven by secrets, with the hardened runtime and
      entitlements.
    - `electron-updater` auto-update from GitHub releases.
-   - `desktop-v*` tags publish a release with the update manifests.
+   - `desktop-v` tags publish a release with the update manifests.
    - The Playwright scripts run in CI before the builds.
 4. **Delivered — Gallery:** an opt-in gallery of shared cities and screenshots, with a
    zero-dependency server, moderation queue, reports and an admin page.
@@ -539,3 +549,5 @@ platform builds complete.
 | AF / AG2 | Flowing water and boats, mountain and seasonal ground textures, positional audio, richer packs and modding guide; photo camera tours and WebM export | v10 · 108 |
 | AC / AD | Residents with schedules, family stories, approval and elections; utility tiers, transformers and treatment, curved and routed runs, maintenance crews, parking, bridge styles and lift bridges; Ubuntu `.deb` packaging fixed | v10 · 115 |
 | AE / AG | 768 and 1024 tiles, core pass profiled at 5,000 buildings, instanced neighbour details streamed up close, a tile worker pool and play while minimised; French, Spanish and Arabic with a live phrase layer and right-to-left layout, signed and auto-updating desktop releases with browser tests in CI, and an opt-in moderated gallery | v10 · 122 |
+| Multiplayer access codes | Players join with one code from the host through a signalling relay (public PeerJS or self-hosted), trickled ICE, TURN logins, clear failure messages | v10 · 123 |
+| Aviation / regional camera | Municipal airfields, animated airport flights, wide-zoom clouds, full-region camera exploration, active-tile editing bounds; exact `desktop-v` release tag | v10 · 126 |

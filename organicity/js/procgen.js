@@ -450,6 +450,7 @@ function genService(P, b, r) {
       for (let k = 0; k < 18; k++) B('plain', hw * 0.1 + (k % 6) * 2.3, -hd * 0.1 + Math.floor(k / 6) * 1.4, 0.3 + (k % 2) * 1.3, 1.05, 0.6, 1.3, [0xd84a3a, 0x3a6ac8, 0xe8c040, 0x3aa86a, 0xe07a30][k % 5]);
       for (const u of [-hw * 0.2, hw * 0.45]) { B('plain', u, hd * 0.7, 0.3, 0.4, 0.4, 14, 0xd84a3a); B('plain', u, hd * 0.9, 14, 0.35, hd * 0.45, 0.6, 0xd84a3a); }
       break;
+    case 'airfield':
     case 'airport':   // runway with markings, terminal, control tower and a parked plane
       B('plain', 0, -hd * 0.35, 0, hw * 0.98, hd * 0.3, 0.08, 0x4a4a4e);
       for (let u = -hw * 0.85; u < hw * 0.85; u += 5) B('plain', u, -hd * 0.35, 0.08, 1.4, 0.15, 0.02, 0xf0f0f0);
