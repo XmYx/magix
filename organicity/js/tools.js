@@ -1,3 +1,4 @@
+import { waterPorts } from './waterports.js';
 import { maxCameraDistance } from './aviation.js';
 import { utilityPath } from './infrastructure.js';
 import { TRANSIT, transitMode } from './transit.js';
@@ -146,9 +147,9 @@ export class Tools {
       if (g && d.g) { c.x += d.g.x - g.x; c.z += d.g.z - g.z; this.r.updateCamera(); d.g = this.r.groundAt(e.clientX, e.clientY); }
       return;
     }
-    if (e.target !== this.r.r.domElement && !d) { this.ui.tip(null); return; }
+    if (e.target !== this.r.r.domElement && !d) { this.r.clearPreview(); this.ui.tip(null); return; }
     this.refresh();
-    if (d && d.type === 'tool' && ((this.s.tool === 'zone' && !this.s.fill && !this.s.place) || this.s.tool === 'district' || this.s.tool === 'terrain' || (this.s.tool === 'road' && this.s.upgrade))) this.act(false);
+    if (d && d.type === 'tool' && ((this.s.tool === 'zone' && !this.s.fill && !this.s.place) || (this.s.tool === 'util' && this.s.svc === 'landfillzone' && !this.s.uline) || this.s.tool === 'district' || this.s.tool === 'terrain' || (this.s.tool === 'road' && this.s.upgrade))) this.act(false);
   }
 
   up(e) {
@@ -186,6 +187,8 @@ export class Tools {
     if (!hit || hit.e.type === type || hit.e.type === 'highway' || type === 'highway') return;
     const cost = Math.round(ROADS[type].cost * hit.e.len * 0.7);
     if (!this.sim.canAfford(cost)) { this.ui.toast('Not enough money', 'warn'); return; }
+    const blocked=this.w.roadCost(this.w.net.nodes.get(hit.e.a),hit.e.c,this.w.net.nodes.get(hit.e.b),type,hit.e.layer||0,hit.e.bridgeStyle).err;
+    if(blocked){this.ui.toast(blocked,'warn');return;}
     this.w.retypeRoad(hit.e.id, type); this.sim.spend(cost); this.strokeCost = (this.strokeCost || 0) + cost;
   }
 
@@ -272,8 +275,8 @@ export class Tools {
       case 'zone': {
         const col = s.zone ? (ZONES[s.zone].color[0] << 16) | (ZONES[s.zone].color[1] << 8) | ZONES[s.zone].color[2] : 0xff6a5a;
         if (s.place) { r.setBrush(g.x, g.z, 1.5, 0xffffff); tip = `Place a level-${s.place} building on this lot`; }
-        else if (s.fill) { r.setBrush(g.x, g.z, 1.5, col); tip = s.zone ? `Fill the block with ${ZONES[s.zone].name.toLowerCase()}` : 'Clear zoning in this block'; }
-        else r.setBrush(g.x, g.z, s.brush, col);
+        else if (s.fill) { r.setZonePreview(this.w.zonePreview(g.x,g.z,s.brush,s.zone,true,this.keys.has('shift')),col); r.setBrush(g.x, g.z, 1.5, col); tip = s.zone ? `Fill the block with ${ZONES[s.zone].name.toLowerCase()}` : 'Clear zoning in this block'; }
+        else { r.setZonePreview(this.w.zonePreview(g.x,g.z,s.brush,s.zone,false,this.keys.has('shift')),col); r.setBrush(g.x, g.z, s.brush, col); }
         break;
       }
       case 'district':
@@ -284,6 +287,7 @@ export class Tools {
         tip = ['raise', 'lower', 'level', 'smooth'].includes(s.terrainMode) ? `${s.terrainMode[0].toUpperCase() + s.terrainMode.slice(1)} ground · ₵3 per unit of earth · height ${this.w.heightAt(g.x, g.z).toFixed(1)}` : s.terrainMode==='levee'?'Build flood levees · ₵12/cell':s.terrainMode==='removeLevee'?'Remove levees':s.water?'Paint water':'Paint land';
         break;
       case 'util': case 'svc': case 'ind': {
+        if(s.svc==='landfillzone'&&!s.uline) { r.setBrush(g.x,g.z,s.brush,0xa58a50); tip='Paint landfill · ₵20/cell · Shift: shrink unused capacity · [ / ]: brush size'; break; }
         if (s.tool === 'util' && s.uline) {
           const L = ULINES[s.uline], h = this.ulineSnap(g);
           r.setBrush(h.x, h.z, 1.2, L.color);
@@ -338,6 +342,7 @@ export class Tools {
     return this.w.planULine(this.s.uline, a.x,a.z,h.x,h.z,{ points, tier:this.s.lineTier });
   }
   ulineSnap(g) {
+    for(const b of this.w.buildings.values())for(const p of waterPorts(b))if(p.kind===this.s.uline&&Math.hypot(p.x-g.x,p.z-g.z)<4)return {x:p.x,z:p.z};
     const u = this.w.nearestULine(g.x, g.z, 3, this.s.uline); if (u) return { x: u.t < 0.08 ? u.l.a[0] : u.t > 0.92 ? u.l.b[0] : u.x, z: u.t < 0.08 ? u.l.a[1] : u.t > 0.92 ? u.l.b[1] : u.z };
     const n = this.w.net.nearestNode(g.x, g.z, 3); if (n) return { x: n.x, z: n.z };
     return { x: g.x, z: g.z };
@@ -404,6 +409,11 @@ export class Tools {
         break;
       }
       case 'util': case 'svc': case 'ind': {
+        if(s.svc==='landfillzone'&&!s.uline) {
+          const erase=this.keys.has('shift');
+          if(!erase&&!sim.canAfford(Math.ceil(Math.PI*(s.brush+2)**2)*20)) {this.ui.toast('Use a smaller brush or earn more money.','warn');break;}
+          w.beginTx('Landfill zone'); const n=w.paintLandfill(g.x,g.z,s.brush,erase); w.commitTx(n*20);sim.spend(n*20);break;
+        }
         if (!first) return;
         if (s.tool === 'util' && s.uline) {
           const h = this.ulineSnap(g);
@@ -431,6 +441,7 @@ export class Tools {
         if (!first || !this.hover) return;
         if (s.under && !this.hover.u) return;
         if (this.hover.b) {
+          if (SERVICES[this.hover.b.svc]?.storage && this.hover.b.garb > 0.01) { this.ui.toast('Empty this landfill with an incinerator before demolition.', 'warn'); break; }
           const b = this.hover.b, refund = b.svc ? SERVICES[b.svc].cost * 0.4 : 0;
           w.beginTx('Demolish'); w.removeBuilding(b.id); w.commitTx(-refund); sim.spend(-refund);
         } else if (this.hover.e) { w.beginTx('Remove road', { net: true }); w.removeRoad(this.hover.e.id); w.commitTx(); }

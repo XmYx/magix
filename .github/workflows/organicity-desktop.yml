@@ -36,7 +36,7 @@ jobs:
         run: |
           python3 -m http.server 8777 >/dev/null 2>&1 &
           for i in $(seq 1 30); do curl -sf http://localhost:8777/organicity/ >/dev/null && break; sleep 1; done
-          for t in browser features-browser acad-browser photo-browser gallery-browser; do
+          for t in browser features-browser acad-browser photo-browser gallery-browser waste-browser; do
             echo "::group::$t"; node scripts/organicity-$t-test.mjs; echo "::endgroup::"
           done
 

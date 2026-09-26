@@ -154,7 +154,7 @@ export class Core {
       if (b.svc) {
         const S = SERVICES[b.svc];
         if (S.pollution && b.svc !== 'outlet') { const v = S.pollution * (b.scrub ? 0.35 : 1) * (b.mining && S.dep ? 1.3 : 1); plume(b.cx, b.cz, 50 * S.pollution, v * 0.8); }   // scrubbers; mining districts
-        if (SERVICES[b.svc]?.sewage) { const discharge = 1-(SERVICES[b.svc].treatmentLevel || 0); splat(pol, b.cx, b.cz, 30, 0.4*discharge); splat(wpol, b.cx, b.cz, 90, 1.1*discharge); }   // sewage fouls the water
+        if (b.pipeConnected !== false && SERVICES[b.svc]?.sewage) { const discharge = 1-(SERVICES[b.svc].treatmentLevel || 0); splat(pol, b.cx, b.cz, 30, 0.4*discharge); splat(wpol, b.cx, b.cz, 90, 1.1*discharge); }   // sewage fouls the water
         if (b.svc === 'coal' && nearWater(b.cx, b.cz, 20)) splat(wpol, b.cx, b.cz, 50, 0.4);
         if (S.noise) splat(noi, b.cx, b.cz, 36, S.noise);
         continue;

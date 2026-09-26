@@ -1,3 +1,6 @@
+import { lineTier } from './infrastructure.js';
+import { waterConnected, waterPorts, portLine } from './waterports.js';
+import { wasteTick } from './waste.js';
 import { maintenanceTick } from './infrastructure.js';
 import { approvalOf, holdElection } from './citizens.js';
 // Organicity — simulation. The main thread owns the world and runs the systems
@@ -336,7 +339,7 @@ export class Sim {
     for (const b of w.buildings.values()) {
       const Z = b.svc ? null : ZONES[b.zone], pol = b.svc ? null : w.policyAt(b);
       blds.push({
-        id: b.id, cx: b.cx, cz: b.cz, edge: b.edge, s: b.s, comp: b.comp ?? -1, svc: b.svc, scrub: !!b.scrub, mining: w.districts[b.district]?.policy?.industry === 'mining', platformId: b.platformId, zk: Z ? Z.key : '', kind: Z ? Z.kind : '',
+        id: b.id, cx: b.cx, cz: b.cz, edge: b.edge, s: b.s, comp: b.comp ?? -1, svc: b.svc, pipeConnected: b.pipeConnected, scrub: !!b.scrub, mining: w.districts[b.district]?.policy?.industry === 'mining', platformId: b.platformId, zk: Z ? Z.key : '', kind: Z ? Z.kind : '',
         level: b.level, occ: b.occ || 0, workers: b.workers || 0, ab: !!b.abandoned || (b.flood||0)>1, construction: b.constructionUntil > this.day || b.rubble > 0, spill: b.spill > 0, power: !!b.power, water: !!b.water, sewage: !!b.sewage,
         green: !!(pol && pol.green), carFree: !!(this.ordinances.carFree && pol?.carFree), bus: this.bcov('busstop', b) > 0.1, sky: skyHubs.has(b.id), spec: b.spec || null,
       });
@@ -913,7 +916,8 @@ export class Sim {
     const all = [...w.buildings.values()];
     for (const b of all) { const e = net.edges.get(b.edge); b.comp = e ? net.compOf(e) : -1; }
     const grid = utilityGrid(w), treatment = new Map(), quality = new Map();
-    for (const b of all) if (SERVICES[b.svc]?.treatment && b.comp >= 0 && !b.abandoned && !(b.constructionUntil > this.day)) { const root = grid.root('water', 'c'+b.comp); treatment.set(root, Math.max(treatment.get(root) || 0, SERVICES[b.svc].treatment * Math.min(1,this.budgetFor(b.svc)))); }
+    for(const b of all){b.pipeConnected=waterConnected(w,b,grid);b.pipeCapacity=b.pipeConnected?Math.min(Infinity,...waterPorts(b).map(p=>lineTier(w.ulines.find(l=>l.id===portLine(w,p,grid,b.comp))).cap)):0;}
+    for (const b of all) if (b.pipeConnected && SERVICES[b.svc]?.treatment && b.comp >= 0 && !b.abandoned && !(b.constructionUntil > this.day)) { const root = grid.root('water', 'c'+b.comp); treatment.set(root, Math.max(treatment.get(root) || 0, SERVICES[b.svc].treatment * Math.min(1,this.budgetFor(b.svc)))); }
     for (const b of all) {
       const e = b.edge >= 0 && net.edges.get(b.edge);
       const k = e ? g.idx.get(e.a) : undefined;
@@ -922,12 +926,12 @@ export class Sim {
       if (!b.svc || b.comp < 0 || b.abandoned || b.constructionUntil > this.day || (b.flood||0)>1) continue;
       const S = SERVICES[b.svc], c = get(b.comp);
       if (S.power) c.p += S.power * this.budgetFor(b.svc) * (b.svc === 'wind' ? this.wind : 1);
-      if (S.water) {
+      if (S.water && b.pipeConnected) {
         const root = grid.root('water', 'c'+b.comp), dirty = b.svc === 'pump' ? clamp(this.at(this.f.waterPol || this.f.pollution,b.cx,b.cz),0,1) * (1-(treatment.get(root)||0)) : 0;
-        const supply = S.water*this.budgetFor(b.svc)*(1-0.6*dirty); c.w += supply;
+        const supply = Math.min(b.pipeCapacity,S.water*this.budgetFor(b.svc))*(1-0.6*dirty); c.w += supply;
         const q = quality.get(root) || [0,0]; q[0] += dirty*supply; q[1] += supply; quality.set(root,q);
       }
-      if (S.sewage) c.s += S.sewage * this.budgetFor(b.svc);
+      if (S.sewage && b.pipeConnected) c.s += Math.min(b.pipeCapacity,S.sewage * this.budgetFor(b.svc));
       if (b.svc === 'busdepot') c.bus = true;
     }
     this.busComps = new Set([...comps].filter(([, c]) => c.bus).map(([k]) => k));
@@ -1004,7 +1008,7 @@ export class Sim {
     const draw = (f, b, n) => { const k = nodeOf.get(f + b.id), v = k == null ? 0 : avail[f].get(k) || 0; if (v < n) return false; avail[f].set(k, v - n); return true; };
     // water pressure: pumps lift water 18 units above themselves, water towers 30; homes higher up run dry
     const head = new Map();
-    for (const b of all) if (SERVICES[b.svc]?.water && !b.abandoned && b.comp >= 0) { const r = grid.root('water', 'c' + b.comp), h = w.heightAt(b.cx, b.cz) + (b.svc === 'tower' ? 30 : 18); if (h > (head.get(r) ?? -1e9)) head.set(r, h); }
+    for (const b of all) if (b.pipeConnected && SERVICES[b.svc]?.water && !b.abandoned && b.comp >= 0) { const r = grid.root('water', 'c' + b.comp), h = w.heightAt(b.cx, b.cz) + (b.svc === 'tower' ? 30 : 18); if (h > (head.get(r) ?? -1e9)) head.set(r, h); }
     let lowPressure = 0;
     for (const b of order) {
       const [np, nw] = need.get(b.id);
@@ -1016,22 +1020,7 @@ export class Sim {
     }
     this.stats.power = [sp, dp]; this.stats.water = [sw, dw]; this.stats.sewage = [ss, dw]; this.stats.lowPressure = lowPressure; this.stats.waterQuality = all.length ? all.reduce((n,b)=>n+(b.waterQuality ?? 1),0)/all.length : 1;
     yield;
-    const LS = SERVICES.landfill;
-    const fills = all.filter((b) => b.svc === 'landfill' && !b.abandoned && b.comp >= 0);
-    let capDay = 0, stored = 0, storage = 0;
-    for (const l of fills) { storage += LS.storage; stored += l.garb; if (l.garb < LS.storage) capDay += LS.garbage * this.budgetFor('landfill'); }
-    let capLeft = capDay * dt, produced = 0, taken = 0;
-    for (const b of all) {
-      if (b.svc) continue;
-      const i = ZONES[b.zone].kind === 'I';
-      const prod = ((b.abandoned ? 0 : b.occ || 0) * 0.25 + (b.workers || 0) * (i ? 0.35 : 0.15)) * dt;
-      b.garb = (b.garb || 0) + prod; produced += prod;
-      if (capLeft > 0 && this.at(this.cov.landfill, b.cx, b.cz) > 0.02) { const tk = Math.min(b.garb, capLeft); b.garb -= tk; capLeft -= tk; taken += tk; }
-      b.garbOk = b.garb < 40 + ((b.hh || 0) + (b.jobs || 0)) * 3;
-    }
-    if (fills.length) { const per = taken / fills.length; for (const l of fills) l.garb = Math.min(LS.storage, l.garb + per); }
-    if (fills.length && stored >= storage * 0.98) this.msg('Landfills are full — build another.', 'warn');
-    this.stats.garbage = [capDay, produced / (dt || 1), storage ? stored / storage : 0];
+    wasteTick(this, all, dt);
   }
 
   // Specializations: waterside / park-side leisure shops, forestry industry in

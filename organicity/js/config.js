@@ -87,6 +87,8 @@ export const SERVICES = {
   tower:    { cat: 'util', name: 'Water tower',       w: 5,  d: 5,  cost: 3000,  upkeep: 120, water: 35, desc: 'Small supply, place anywhere.' },
   substation: { cat: 'util', name: 'Substation', w: 6, d: 6, cost: 6000, upkeep: 120, capBoost: 240, desc: 'Transformers where power lines meet a road network: it can take 240 MW more from the grid than its lines alone.' },
   outlet:   { cat: 'util', name: 'Sewage outlet',     w: 6,  d: 6,  cost: 3500,  upkeep: 150, sewage: 160, nearWater: true, pollution: 0.9, desc: 'Must be by water. Pollutes the shore.' },
+  landfillzone: { cat: 'util', name: 'Landfill zone', w: 1, d: 1, cost: 20, upkeep: 40, garbage: 200, radius: 200, storage: 300, pollution: 0.6, covers: 'landfill', desc: 'Paint a low-cost dump (₵20/cell). Shift erases unused capacity. Incinerators empty it later.' },
+  incinerator: { cat: 'util', name: 'Waste incinerator', w: 22, d: 18, cost: 45000, upkeep: 1800, burn: 2400, garbage: 2400, radius: 650, covers: 'landfill', pollution: 0.7, desc: 'Burns 2,400 waste/day, then empties road-connected landfills. Needs power and water.' },
   landfill: { cat: 'util', name: 'Landfill',          w: 18, d: 16, cost: 6000,  upkeep: 350, garbage: 700, radius: 380, storage: 160000, pollution: 0.5, desc: 'Garbage trucks cover a road-network radius.' },
   fire:     { cat: 'svc',  name: 'Fire station',      w: 10, d: 9,  cost: 7000,  upkeep: 450, radius: 170, desc: 'Prevents buildings burning down.' },
   police:   { cat: 'svc',  name: 'Police station',    w: 9,  d: 9,  cost: 7000,  upkeep: 450, radius: 170, desc: 'Lowers crime.' },

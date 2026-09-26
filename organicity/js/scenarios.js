@@ -1,3 +1,4 @@
+import { connectWaterPorts } from './waterports.js';
 // Organicity — guided tutorial and authored scenarios. The authored scenarios are
 // built from a fixed seed, so every player starts from the same city.
 import { N, ZONES, SERVICES } from './config.js';
@@ -39,7 +40,7 @@ function builder(w) {
   const road = (a, b, t = 'street', c = null) => w.buildRoad(S(...a), c && { x: c[0], z: c[1] }, S(...b), t, 0);
   const svc = (k, x, z) => {
     for (let r = 0; r <= 30; r += 2) for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
-      const p = w.planService(k, x + dx, z + dz); if (p.ok) { w.placeService(k, p); return true; }
+      const p = w.planService(k, x + dx, z + dz); if (p.ok) { connectWaterPorts(w,w.placeService(k, p)); return true; }
     }
     return false;
   };

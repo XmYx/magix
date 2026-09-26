@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waterPorts, waterConnected, connectWaterPorts } from '../organicity/js/waterports.js';
 import { cameraPose, samplePath } from '../organicity/js/photo.js';
 import { hazardTick } from '../organicity/js/terrain.js';
 import { TRANSIT } from '../organicity/js/transit.js';
@@ -68,7 +69,7 @@ function town(seed = 4242) {
   // try a few spots around (x, z) — shorelines differ per seed
   const place = (k, x, z) => {
     for (const [dx, dz] of [[0, 0], [2, 0], [-2, 0], [4, 0], [0, -4], [0, 4], [-4, 0], [6, 0]]) {
-      const p = w.planService(k, x + dx, z + dz); if (p.ok) { w.placeService(k, p); return true; }
+      const p = w.planService(k, x + dx, z + dz); if (p.ok) { connectWaterPorts(w,w.placeService(k, p)); return true; }
     }
     return false;
   };
@@ -850,7 +851,8 @@ test('H: continuous levees block floodwater, gaps flood and drains reduce depth'
   for(let z=0;z<N;z++)w.levees[z*N+5]=1;
   hazardTick(sim,false);assert(w.flood[ci]===0,'levee did not block water');
   w.levees[100*N+5]=0;hazardTick(sim,false);assert(w.flood[ci]>0,'levee gap did not leak');
-  const before=w.flood[ci];w.buildings.set(1,{id:1,svc:'stormdrain',cx:10,cz:100,edge:0,power:true,water:true});
+  const before=w.flood[ci];const re=w.net.build({x:10,z:95},null,{x:10,z:110},'street').edges[0];const drain={id:1,svc:'stormdrain',cx:10,cz:100,edge:re,s:5,power:true,water:true};w.buildings.set(1,drain);
+  hazardTick(sim,false);assert(w.flood[ci]===before,'disconnected drain operated');connectWaterPorts(w,drain);drain.flood=0;
   hazardTick(sim,false);assert(w.flood[ci]<before,'drain did not reduce flood');
 });
 test('H: snowplow coverage restores road speed and levees undo and save', () => {
@@ -1431,6 +1433,7 @@ test('utility lines: power lines join road networks, the strict grid needs lines
   assert(fire.power, 'services should still draw from their road network');
   // drains take ponded rainwater away
   w.addULine('sewer', 60, A + 40, 200, A + 40);
+  const out=w.createBuilding({svc:'outlet',cells:[(A+8)*N+80],cx:80,cz:A+8,fx:0,fz:-1});connectWaterPorts(w,out);w.addULine('sewer',80,A,80,A+40);
   const near = (A + 42) * N + 150, far = (A + 90) * N + 150;
   w.pond = new Float32Array(N * N); w.pond[near] = 1; w.pond[far] = 1; s.weather = { type: 'clear' }; pond(w, s);
   assert(w.pond[near] < w.pond[far] * 0.6 || w.pond[near] < 0.3, `drain did not clear the pond (${w.pond[near]} vs ${w.pond[far]})`);
@@ -1528,11 +1531,12 @@ test('Z4: lines carry a limited load, substations raise it, water pressure needs
   assert(homes.every((b) => b.power), 'the substation did not raise the import limit');
   // pressure: a pump at the shore can't lift water to a hilltop home
   for (const b of homes) w.buildings.delete(b.id);
-  const pump = { id: ++id, svc: 'pump', edge: eB.id, s: 2, cx: 175, cz: A + 8, cells: [] }; w.buildings.set(pump.id, pump);
+  const pump = { id: ++id, svc: 'pump', edge: eB.id, s: 2, cx: 175, cz: A + 8, cells: [] }; w.buildings.set(pump.id, pump);connectWaterPorts(w,pump);
   const hill = { id: ++id, zone: 1, edge: eB.id, s: 40, cx: 240, cz: A + 8, occ: 2, workers: 0, cells: [] }; w.buildings.set(hill.id, hill);
   for (let z = A; z < A + 16; z++) for (let x = 232; x < 248; x++) w.elevation[z * N + x] = w.heightAt(175, A + 8) + 25;
   finish(s.utilitiesJob()); assert(!hill.water && hill.lowPressure && s.stats.lowPressure >= 1, 'a hilltop home got water at low pressure');
   w.buildings.set(++id, { id, svc: 'tower', edge: eB.id, s: 30, cx: 238, cz: A + 8, cells: [] });
+  connectWaterPorts(w,w.buildings.get(id));
   finish(s.utilitiesJob()); assert(hill.water, 'a water tower uphill did not restore pressure');
   // the underground layer is flat and below all ground; coverage follows the pipes
   const uy = undergroundY(w); let lo = Infinity; for (let i = 0; i < w.elevation.length; i++) lo = Math.min(lo, w.elevation[i]);
@@ -1963,10 +1967,10 @@ test('AD: high voltage requires transformers; mains increase network capacity', 
 
 test('AD: treatment cleans polluted pump water and sewage plant geometry is finite', async () => {
   const w=new World(33);w.water.fill(0); const a=w.net.addNode(30,100),b=w.net.addNode(200,100),e=w.net.addEdge(a,b,{x:115,z:100},'street');
-  const pump={id:1,svc:'pump',cx:60,cz:105,edge:e.id,s:30},home={id:2,zone:1,cx:100,cz:105,edge:e.id,s:70,occ:10,workers:0};w.buildings.set(1,pump);w.buildings.set(2,home);
+  const pump={id:1,svc:'pump',cx:60,cz:105,edge:e.id,s:30},home={id:2,zone:1,cx:100,cz:105,edge:e.id,s:70,occ:10,workers:0};w.buildings.set(1,pump);w.buildings.set(2,home);connectWaterPorts(w,pump);
   const s=new Sim(w,{worker:false});s.f.waterPol=new Float32Array(s.f.pollution.length).fill(1);const run=()=>{for(const _ of s.utilitiesJob()){}};
   run();const dirty=home.waterQuality,supply=s.stats.water[0];
-  w.buildings.set(3,{id:3,svc:'treatment',cx:130,cz:105,edge:e.id,s:100});w.bldVersion++;run();
+  w.buildings.set(3,{id:3,svc:'treatment',cx:130,cz:105,edge:e.id,s:100});w.bldVersion++;connectWaterPorts(w,w.buildings.get(3));run();
   assert(home.waterQuality>dirty+0.7 && s.stats.water[0]>supply,'treatment had no pump effect');
   if(hasThree){const {genBuilding}=await import('../organicity/js/procgen.js');for(const svc of ['transformer','treatment','sewageplant','advancedsewage','parking']){const g=genBuilding({id:5,svc,seed:7,cx:100,cz:100,fx:0,fz:1,cells:[],level:1,zone:0},w);assert(Object.values(g.g).every(x=>x.p.every(Number.isFinite)),svc+' invalid model');}}
 });
@@ -2136,6 +2140,59 @@ test('AH gallery: filters, likes, restart persistence and entry links', async ()
     assert(!(await listCities(base,{q:'Alpine'})).length, 'hidden entry in search');
     assert((await fetch(base+`/api/gallery/${a.id}/like`,{method:'POST'})).status===404,'hidden like');
   } finally { await new Promise(ok => g.server.close(ok)); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('shoreline facilities: dry setbacks and partial-water footprints', () => {
+  const w=new World(77);w.water.fill(0);w.wdist.fill(12);
+  const e={hw:2},p={x:100,z:100};
+  const plan=w.footprint(SERVICES.pump,e,p,1,0,0,1);assert(plan.ok,'dry setback within 18 m rejected');
+  for(const i of plan.cells)if(i%N>=109)w.water[i]=1;
+  assert(w.footprint(SERVICES.pump,e,p,1,0,0,1).ok,'bank overlap rejected');
+  const pump=w.placeService('pump',plan);w.beginTx('Demolish');w.removeBuilding(pump.id);w.commitTx();w.undo();assert(w.buildings.has(pump.id),'shoreline service undo lost the pump');
+  for(const i of plan.cells)w.water[i]=1;
+  assert(!w.footprint(SERVICES.pump,e,p,1,0,0,1).ok,'fully submerged pump allowed');
+});
+
+test('water terminals: required lines, wrong kinds, disconnection and capacity', () => {
+  const w=new World(42);w.newGame();const s=new Sim(w,{worker:false,sandbox:{}});
+  road(w,[50,100],[250,100]);const edge=w.net.nearestEdge(100,100,3).e;
+  const pump=w.createBuilding({svc:'pump',cells:[108*N+100],cx:100,cz:108,fx:0,fz:-1});
+  const run=()=>{for(const _ of s.utilitiesJob()){};};run();assert(!pump.pipeConnected&&s.stats.water[0]===0,'unconnected pump supplies water');
+  const p=waterPorts(pump)[0];w.addULine('sewer',p.x,p.z,110,100);run();assert(!pump.pipeConnected,'wrong pipe accepted');
+  connectWaterPorts(w,pump);run();assert(pump.pipeConnected&&s.stats.water[0]>0,'connected pump inactive');
+  const line=w.ulines.find(l=>l.kind==='water');w.removeULine(line.id);run();assert(!pump.pipeConnected&&s.stats.water[0]===0,'removed pipe kept supplying');
+  const plant=w.createBuilding({svc:'advancedsewage',cells:[112*N+170],cx:170,cz:112,fx:0,fz:-1});connectWaterPorts(w,plant);run();assert(plant.pipeConnected&&s.stats.sewage[0]===160,'pipe capacity ignored');
+  w.ulines.find(l=>l.kind==='sewer'&&l.id!==w.ulines[0].id).tier=1;w.ulineVersion++;run();assert(s.stats.sewage[0]===640,'trunk capacity ignored');
+  const loaded=World.load(w.serialize());assert(waterConnected(loaded,loaded.buildings.get(plant.id),utilityGrid(loaded)),'terminal lost on save');
+});
+
+test('waste: storage conservation, incineration and disconnected sites', async () => {
+  const { wasteTick } = await import('../organicity/js/waste.js');
+  const dump={svc:'landfill',garb:159990,comp:0,edge:1,cells:[1]}, home={zone:1,garb:100,occ:0,comp:0,cx:0,cz:0}, plant={svc:'incinerator',comp:0,edge:1,power:true,water:true};
+  const sim={day:1,w:{touchBuilding(){}},stats:{},cov:{landfill:[]},at:()=>1,budgetFor:()=>1};
+  wasteTick(sim,[dump,home],1);assert(dump.garb===160000&&home.garb===90,'overflow destroyed refuse');
+  dump.emptying=true;wasteTick(sim,[dump,home,plant],1);assert(home.garb===0&&dump.garb===157690&&sim.stats.waste.burned===2400,'incinerator priority/capacity');
+  plant.comp=1;const held=dump.garb;wasteTick(sim,[dump,plant],1);assert(dump.garb===held,'crossed disconnected roads');
+  plant.comp=0;plant.power=false;wasteTick(sim,[dump,plant],1);assert(dump.garb===held,'unpowered plant burned');
+});
+
+test('building tools: services block roads; zone previews match edits; landfill edits persist', async () => {
+  const {wasteCapacity}=await import('../organicity/js/waste.js');
+  const w=new World(48);w.water.fill(0);
+  w.buildRoad({x:50,z:100},null,{x:220,z:100},'street');
+  const service=w.createBuilding({svc:'clinic',cells:[110*N+110],cx:110.5,cz:110.5,fx:0,fz:1});
+  const before=w.net.edges.size;
+  const blocked=w.buildRoad({x:90,z:110.5},null,{x:140,z:110.5},'street');
+  assert(blocked.err&&w.net.edges.size===before&&w.buildings.has(service.id),'service demolished by road');
+  const cells=w.zonePreview(145,110,5,1),n=w.paintZone(145,110,5,1);assert(n===cells.length&&n>0,'brush preview mismatch');
+  const fill=w.zonePreview(180,110,5,2,true),nf=w.fillZone(180,110,2);assert(nf===fill.length,'fill preview mismatch');
+  w.beginTx('dump');const added=w.paintLandfill(190,110,3);w.commitTx(added*20);
+  let dump=[...w.buildings.values()].find(b=>b.svc==='landfillzone');assert(dump&&wasteCapacity(dump)===added*300,'painted capacity');
+  dump.garb=123.25;dump.emptying=true;
+  w.paintLandfill(191,110,4);dump=w.buildings.get(dump.id);assert(dump.garb===123.25&&dump.emptying,'edit lost waste or mode');
+  w.paintLandfill(191,110,10,true);assert(w.buildings.has(dump.id),'erased stored waste');
+  const loaded=World.load(w.serialize()),restored=loaded.buildings.get(dump.id);assert(restored.emptying&&restored.cells.length===dump.cells.length,'landfill save');
+  dump.garb=0;w.paintLandfill(191,110,10,true);assert(!w.buildings.has(dump.id),'empty zone could not erase');
 });
 
 test('aviation: regional camera bounds follow the active tile and map size', async () => {

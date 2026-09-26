@@ -1,3 +1,4 @@
+import { wasteCapacity } from './waste.js';
 // Organicity — procedural buildings. Every growable building is generated from
 // the exact cells of its lot: the mask is traced into polygons (with holes for
 // courtyards), simplified so staircase edges become true diagonals/curves, and
@@ -413,10 +414,19 @@ function genService(P, b, r) {
     case 'outlet':
       B('plain', 0, hd * 0.2, 0, 2, 1.5, 1.6, 0x9a9a92, 0x7a7a72); B('plain', 0, -hd * 0.45, 0, 0.5, hd * 0.55, 0.9, 0x4a4a46);
       break;
-    case 'landfill':
-      B('plain', 0, -1, 0, hw * 0.8, hd * 0.6, 1.2, 0x7a6448); B('plain', -1, -1.5, 1.2, hw * 0.55, hd * 0.45, 1.2, 0x8a7050); B('plain', -1.5, -2, 2.4, hw * 0.3, hd * 0.25, 1, 0x6a7a48);
-      B('plain', hw * 0.7, hd * 0.6, 0, 1.6, 1.2, 2.2, 0xb8b0a0, 0x8a6a4a); B('plain', hw * 0.2, hd * 0.55, 0, 0.8, 1.3, 1.1, 0xe8b830);
+    case 'landfillzone': {
+      const fill=Math.min(1,(b.garb||0)/(wasteCapacity(b)||1));
+      if(!b.cells.length) B('plain',0,0,0,2,2,1,0x8a7050);
+      for(let j=0;j<b.cells.length;j+=4){const i=b.cells[j],x=i%N+0.5,z=Math.floor(i/N)+0.5;box(P,'plain',{cx:x,cz:z,tx:1,tz:0,fx:0,fz:1},0,0,0,0.48,0.48,0.15+fill*(1.5+r()*2.5),hex(fill>0?0x8a7050:0x6a5a40));}
       break;
+    }
+    case 'incinerator':
+      B('ind',0,0,0,hw*0.8,hd*0.7,8,0x7a858b);C(-hw*0.6,-hd*0.6,0,1.2,20,8,0xb8ada0);B('plain',hw*0.5,hd*0.6,0,2,1,3,0xd89135);break;
+    case 'landfill': {
+      const fill=Math.min(1,(b.garb||0)/wasteCapacity(b));
+      B('plain', 0, -1, 0, hw * 0.8, hd * 0.6, 0.15+fill*3.4, 0x7a6448);
+      B('plain', hw * 0.7, hd * 0.6, 0, 1.6, 1.2, 2.2, 0xb8b0a0, 0x8a6a4a); B('plain', hw * 0.2, hd * 0.55, 0, 0.8, 1.3, 1.1, 0xe8b830);
+      break; }
     case 'fire':
       B('res', 0, -0.5, 0, hw * 0.8, hd * 0.65, 4.4, 0xc83a32, 0x8a8a86);
       for (const u of [-hw * 0.5, 0, hw * 0.5]) B('plain', u, -0.5 + hd * 0.65 + 0.05, 0, 1.1, 0.08, 2.6, 0x3a3a3a);

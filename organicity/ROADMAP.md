@@ -17,15 +17,15 @@ peer-to-peer multiplayer.
   (`save.js`), and fields added since v10 are optional. Saved games (whole regions)
   live in IndexedDB and export to `.organicity-game` files.
 - **Tests:**
-  - `node scripts/organicity-test.mjs`: 130 headless tests covering simulation,
+  - `node scripts/organicity-test.mjs`: 134 headless tests covering simulation,
     saves, map sizes, region, economy, residents and elections, infrastructure, the
     tile worker pool, translations, the release setup, multiplayer protocol,
     signalling and the gallery server.
   - Playwright browser scripts: `scripts/organicity-browser-test.mjs` and
-    `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` and `scripts/organicity-gallery-browser-test.mjs`. They need a server on port 8777;
+    `scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` `scripts/organicity-gallery-browser-test.mjs` and `scripts/organicity-waste-browser-test.mjs`. They need a server on port 8777;
     `CITY_URL` overrides the address.
   - CI (`.github/workflows/organicity-desktop.yml`) runs the headless tests and all
-    five Playwright scripts, then builds the three platforms and smoke-tests the Linux
+    six Playwright scripts, then builds the three platforms and smoke-tests the Linux
     app (`ORGANICITY_SMOKE=1`).
 
 ---
@@ -49,7 +49,8 @@ peer-to-peer multiplayer.
     valley, a viaduct.
 - **Weather:**
   - Seeded 30-day regimes and four seasons.
-  - Rain and snow bands and storm cells move with the wind. Only roads under them
+  - Rain and snow use a single world-space particle layer, independent of camera
+    movement or zoom. Bands and storm cells move with the wind. Only roads under them
     slow down, and lightning strikes inside storm cells.
   - Storms are forecast three days ahead, with a count of buildings at risk.
 - **Hazards:**
@@ -70,6 +71,7 @@ peer-to-peer multiplayer.
   - Road types: alley, street, avenue, boulevard, highway and ramp.
   - One-ways, parallel twins (dual carriageways), bus lanes, and an upgrade brush.
   - Shift snaps to 15°.
+  - Road placement and widening protect service-building footprints; tunnels may pass beneath them.
 - **Levels:** ground; three elevated levels at 6, 12 and 18 m (PgUp/PgDn); and tunnels.
   - Roads join only roads on their own level.
   - Chained elevated roads hold their height through joints and ramp only where
@@ -90,6 +92,8 @@ peer-to-peer multiplayer.
   - Visible vehicles run in a worker. They queue at signals, spill back, and tilt
     on slopes.
   - Rush hours (07:00–09:30 and 16:00–19:00) and quiet nights.
+  - Optional yellow front lamps and red rear lamps with instanced light glows cover
+    all visible vehicles, including neighbouring traffic (Settings, off by default).
   - Service vehicles: fire engines, ambulances, police, garbage trucks, snowplows,
     removal vans and freight trucks coloured by commodity.
 - **Pedestrians:** residents walk from real homes along real routes: to stops at
@@ -101,7 +105,7 @@ peer-to-peer multiplayer.
   - Six zones: low- and high-density housing, commercial, industrial, office and
     mixed-use.
   - The zoning brush paints only empty land (Shift repaints); a fill mode zones a
-    whole block.
+    whole block. Both tools preview the actual affected cells before clicking.
 - **Buildings:** procedural buildings at levels 1–5.
   - Lots merge and split.
   - Leisure, tech and forestry specializations.
@@ -122,6 +126,20 @@ peer-to-peer multiplayer.
 ### Utilities
 - **Supply:** coal and wind power, water pumps and towers, sewage outlets,
   landfills, storm drains and substations. Plants and pumps have funding levels.
+- **Waste tiers:** paint editable landfill zones (₵20/cell, 300 storage/cell,
+  200/day collection); fixed landfills collect 700/day; incinerators burn 2,400/day.
+  Incinerators require power, water and a road connection. They process city refuse
+  first, then empty connected landfill storage. Emptying mode stops new landfill
+  deliveries. Waste piles fill and recede visually; filled sites cannot be bulldozed
+  and shrinking a zone cannot discard stored refuse.
+- **Facility terminals:** water pipes must reach pumps, towers and water-treatment
+  terminals; drains must reach sewage outlets, sewage-treatment and storm-drain
+  terminals. Red/green markers in underground view show the connection, and drawing
+  snaps to them. Disconnected facilities produce no water/sewage service; pipe tiers
+  bound throughput. Drain runs remove ponding only when joined to an outfall.
+  Existing player cities require connections; AI governors and scenarios build them.
+- **Shoreline placement:** pumps/outlets accept water within 18 m of the footprint
+  and up to 45% wet footprint, while retaining road/building/boundary exclusions.
 - **Networks:** roads carry power, water and sewage along them.
   - Power lines (on pylons), water pipes and drains join separate road networks into
     one grid per utility.
@@ -560,3 +578,7 @@ already reported working.
 | Aviation / regional camera | Municipal airfields, animated airport flights, wide-zoom clouds, full-region camera exploration, active-tile editing bounds; exact `desktop-v` release tag | v10 · 126 |
 
 | AH gallery / roadmap reconciliation | Gallery search, filters, sorting, likes persistent across restarts, direct entry links and browser CI; larger-map founding stubs corrected; existing AB reconnect, lobby and rules documented | v10 · 130 |
+
+| Waste / building feedback | Editable landfill zones, incinerators and conservative storage/emptying; visible fill levels; anchored precipitation; optional car lights; service-safe road placement and widening; zoning hover previews | v10 · 132 |
+
+| Water connections / fleet lights | Pipe terminals required by water facilities, network-bound drainage, permissive shoreline placement, uncapped instanced vehicle lamps and light glows | v10 · 134 |

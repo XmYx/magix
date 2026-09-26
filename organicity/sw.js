@@ -1,9 +1,9 @@
 // Organicity service worker: plays offline once visited. Game files are fetched fresh
 // when online (network first, so updates show up immediately) and served from the
 // cache when offline; three.js and fonts from CDNs are cached on first use.
-const CACHE = 'organicity-v9';
+const CACHE = 'organicity-v11';
 const SHELL = ['./', 'index.html', 'city.css', 'manifest.webmanifest', 'icon.svg', 'packs/index.json', 'packs/sample-pack.json',
-  ...['aviation', 'citizens', 'infrastructure', 'photo', 'water', 'main', 'world', 'sim', 'render', 'tools', 'ui', 'save', 'audio', 'scenarios', 'share', 'region', 'disasters', 'terrain', 'transit', 'config', 'eras',
+  ...['waterports', 'waste', 'aviation', 'citizens', 'infrastructure', 'photo', 'water', 'main', 'world', 'sim', 'render', 'tools', 'ui', 'save', 'audio', 'scenarios', 'share', 'region', 'disasters', 'terrain', 'transit', 'config', 'eras',
     'core', 'worker', 'assign', 'agents', 'agent-worker', 'procgen', 'roads', 'routes', 'util', 'weather', 'i18n', 'packs',
     'builder', 'tile-worker', 'tilehost', 'tileview', 'regionsim', 'families', 'presidents', 'grid', 'resources', 'preview', 'saves', 'mp', 'mpgame', 'phrases', 'gallery'].map((f) => `js/${f}.js`)];
 

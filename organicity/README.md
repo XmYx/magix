@@ -109,12 +109,12 @@ migrate step by step (see `save.js`).
 ## Tests
 
 ```bash
-node scripts/organicity-test.mjs            # 130 headless tests
+node scripts/organicity-test.mjs            # 134 headless tests
 node scripts/organicity-test.mjs grading    # run tests whose name matches
 ```
 
 The browser regression scripts are `scripts/organicity-browser-test.mjs` and
-`scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` and `scripts/organicity-gallery-browser-test.mjs`. They need Playwright and a server
+`scripts/organicity-features-browser-test.mjs`, `scripts/organicity-photo-browser-test.mjs` `scripts/organicity-acad-browser-test.mjs` `scripts/organicity-gallery-browser-test.mjs` and `scripts/organicity-waste-browser-test.mjs`. They need Playwright and a server
 on port 8777; `CITY_URL` overrides the address. Run the photo test with
 `PHOTO_DESKTOP=1` to check the Electron app and its native video download instead
 (requires the desktop dependencies).
@@ -128,3 +128,35 @@ a connection also share one vote. Hosting and individual moderator accounts
 remain future work.
 Only set `GALLERY_TRUST_PROXY=1` behind a trusted reverse proxy that replaces
 forwarded address headers; by default the server uses the connection address.
+
+## Waste and building tools
+
+Utilities includes **Landfill zone**: paint low-cost early-game sites at ₵20 per
+cell, with 300 units of storage per cell and collection up to 200 units/day.
+Use `[` / `]` to resize the brush and Shift to erase unused space. Existing fixed
+landfills collect 700/day. The **Waste incinerator** burns up to 2,400/day when it
+has road access, electricity and water. It processes city refuse first, then uses
+spare capacity to empty landfills on its road network. In a landfill's inspection
+panel, select **Emptying** to stop new deliveries. Stored waste grows and shrinks
+visibly; a site must be empty before bulldozing, and shrinking cannot discard waste.
+
+Zoning brushes and block fill highlight the cells they will change before clicking.
+Road placement and widening reject service-building footprints (underground roads
+can pass below them). Rain and snow now use one world-space layer, without a
+second camera-following layer. Settings offers **Vehicle headlights and red rear lights**, off by default. All
+visible vehicles get lamps and instanced light glows, including neighbouring
+traffic, service vehicles, trains, boats and aircraft; there is no twelve-car cap.
+
+Water infrastructure now requires a physical pipe connection at its terminal.
+Open the underground view, then draw a **Water pipe** to pumps, towers and water
+treatment, or a **Drain** to sewage outlets, sewage treatment and storm drains.
+Pipes snap to the markers: red means disconnected, green means joined to the
+road-carried utility network. A loose or wrong-kind pipe does not activate the
+facility. Removing the connection stops its output, and basic/trunk pipe capacity
+limits facility throughput. Drain runs need a connected sewage outlet or plant
+to remove ponded water. Existing player cities need these connections added;
+AI governors and authored scenarios build their own connections.
+
+Pumps and shoreline outlets accept water within 18 metres of the footprint and
+up to 45% overlap with water. Roads, existing services and map boundaries still
+block placement.

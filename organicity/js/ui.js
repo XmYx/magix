@@ -1,3 +1,5 @@
+import { waterPorts } from './waterports.js';
+import { wasteCapacity } from './waste.js';
 import { BRIDGE_STYLES, LINE_TIERS } from './infrastructure.js';
 import { PhotoTour, videoType } from './photo.js';
 import { TRANSIT, transitMode } from './transit.js';
@@ -445,6 +447,7 @@ export class UI {
     el.querySelector('[data-follow-cam]')?.addEventListener('click', () => { if (this.r.follow) { this.r.follow.camera = !this.r.follow.camera; this.renderPanel(true); } });
     el.querySelector('[data-follow-stop]')?.addEventListener('click', () => { this.r.follow = null; this.closePanel(); });
     el.querySelector('[data-skyline]')?.addEventListener('click',()=>{const b=this.inspected;this.r.cam.x=b.cx;this.r.cam.z=b.cz;this.r.cam.targetY=(b.top || buildingFloors(b,this.w)*1.6)/2;this.r.cam.dist=Math.max(100,this.r.cam.targetY*3);});
+    el.querySelector('[data-empty-landfill]')?.addEventListener('change',e=>{if(this.inspected)this.inspected.emptying=e.target.checked;});
     el.querySelector('[data-tints]')?.addEventListener('change', e => { this.r.buildingTints = e.target.checked; });
     el.querySelectorAll('[data-route]').forEach(b => { b.onclick = () => { this.r.routeKind = b.dataset.route; this.renderPanel(true); }; });
     el.querySelectorAll('[data-budget]').forEach(inp => { inp.oninput = () => { this.sim.setBudget(inp.dataset.budget, +inp.value / 100); inp.nextElementSibling.textContent = inp.value + '%'; }; });
@@ -784,6 +787,7 @@ export class UI {
       <p class="dim">A generated soundscape: city hum, nearby traffic, rain, sirens, birds in quiet older towns and a synth pad after 2050. Starts after your first click.</p>
       <h3>Accessibility</h3>
       <label class="chk"><input type="checkbox" data-set="palette" value="cb" ${S.palette === 'cb' ? 'checked' : ''}> Colour-blind friendly overlays (purple → teal → yellow)</label>
+      <label class="chk"><input type="checkbox" data-set="carLights" ${S.carLights ? 'checked' : ''}> Vehicle headlights and red rear lights (all visible traffic)</label>
       <label class="chk"><input type="checkbox" data-set="reducedMotion" ${S.reducedMotion ? 'checked' : ''}> Reduced motion: no rain, smoke or vehicle easing</label>
       <label>Interface size <select data-set="uiScale">${[0.85, 1, 1.15, 1.3, 1.5].map((v) => `<option value="${v}" ${+S.uiScale === v ? 'selected' : ''}>${Math.round(v * 100)}%</option>`).join('')}</select></label>
       <h3>${t('set.language')}</h3><select data-lang>${Object.entries(LANGS).map(([k, n]) => `<option value="${k}" ${k === getLang() ? 'selected' : ''}>${n}</option>`).join('')}</select>
@@ -868,7 +872,9 @@ export class UI {
           ${S.power ? `<tr><td>Output</td><td>${Math.round(S.power * s.budgetFor(b.svc) * (b.svc === 'wind' ? s.wind : 1))} MW</td></tr>` : ''}
           ${S.water ? `<tr><td>Pumps</td><td>${Math.round(S.water * s.budgetFor(b.svc))} water units</td></tr>` : ''}${S.sewage ? `<tr><td>Treats</td><td>${Math.round(S.sewage * s.budgetFor(b.svc))} sewage units</td></tr>` : ''}
           ${S.radius ? `<tr><td>Coverage</td><td>${Math.round(S.radius * Math.sqrt(s.budgetFor(b.svc)) * 1.5)} m by road</td></tr>` : ''}${S.park ? `<tr><td>Appeal radius</td><td>${Math.round(S.park * Math.sqrt(s.budgetFor(b.svc)) * 1.5)} m</td></tr>` : ''}
-          ${b.svc === 'landfill' ? `<tr><td>Fill level</td><td>${bar(1 - b.garb / S.storage)} ${Math.round((b.garb / S.storage) * 100)}%</td></tr>` : ''}
+          ${waterPorts(b).length ? `<tr><td>${waterPorts(b).map(p=>p.kind==='water'?'Water pipe':'Drain').join(' / ')} terminal</td><td>${b.pipeConnected?'Connected':'Disconnected — connect the terminal in the underground view'}</td></tr>` : ''}
+          ${S.burn ? `<tr><td>Waste burned / day</td><td>${S.burn}</td></tr>` : ''}
+          ${S.storage ? `<tr><td>Fill level</td><td>${bar(1 - b.garb / wasteCapacity(b))} ${Math.round((b.garb / wasteCapacity(b)) * 100)}% · ${Math.round(b.garb)} / ${wasteCapacity(b)}<br><label><input type="checkbox" data-empty-landfill ${b.emptying?'checked':''}> Emptying: stop accepting new waste</label></td></tr>` : ''}
           ${S.chain ? this.industryRows(b, S) : ''}
           ${S.chain && S.chain !== 'market' || b.svc === 'coal' ? `<tr><td>Scrubbers</td><td><label class="chk"><input type="checkbox" ${b.scrub ? 'checked' : ''} data-scrub> −65% pollution, +40% upkeep</label></td></tr>` : ''}
           ${S.dep ? `<tr><td colspan="2"><button data-reclaim title="${S.dep === 'timber' ? 'Close the camp and replant its clearing' : 'Close the site and let the pit flood into a lake'}">Reclaim the site · ${fmtMoney(2000)}</button></td></tr>` : ''}

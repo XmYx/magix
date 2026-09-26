@@ -1,3 +1,4 @@
+import { waterPorts, waterConnected } from './waterports.js';
 import { cameraBounds, maxCameraDistance, operationalAirports, flightPose } from './aviation.js';
 import { lineSegments, bridgeOpen } from './infrastructure.js';
 import { residentLeg, routePosition } from './citizens.js';
@@ -15,7 +16,7 @@ import { technology, buildingFloors } from './eras.js';
 import { frontAt, WEATHER } from './weather.js';
 import { unb64, archetypes } from './tileview.js';
 import { deposits, DEPOSITS, DEP_BY_ID } from './resources.js';
-import { coverageMask, undergroundY } from './grid.js';
+import { coverageMask, undergroundY, utilityGrid } from './grid.js';
 import { flowField, flowAt, flowTexture, waterRoute, routeLen, routeAt, ferryPairs } from './water.js';
 import { Traffic, AgentSim, TYPE_IDS, POSE_STRIDE, deckHeight, AGENT_TYPES } from './agents.js';
 import { netSnapshot } from './core.js';
@@ -901,8 +902,8 @@ export class Renderer {
     if (this.serviceT > 3) {
       this.serviceT = 0;
       const blds = [...this.w.buildings.values()];
-      for (const [svc, kind, want, col] of [['snowdepot','snowplow',b=>!b.svc&&this.w.hazards.snow>.05,0xf2a126],['landfill', 'garbage', (b) => !b.svc && (b.garb || 0) > 20, 0xd8d8c8], ['police', 'police', (b) => !b.svc && b.edge >= 0, 0xf2f4f8]]) {
-        const depots = blds.filter((b) => b.svc === svc && !b.abandoned && b.edge >= 0);
+      for (const [svc, kind, want, col] of [['snowdepot','snowplow',b=>!b.svc&&this.w.hazards.snow>.05,0xf2a126],['landfill', 'garbage', (b) => !b.svc && (b.garb || 0) > 20, 0xd8d8c8], ['landfillzone', 'garbage', (b) => !b.svc && (b.garb || 0) > 20, 0xc8b080], ['incinerator', 'garbage', (b) => (b.garb || 0) > 20 && (!b.svc || SERVICES[b.svc]?.storage), 0xe8a038], ['police', 'police', (b) => !b.svc && b.edge >= 0, 0xf2f4f8]]) {
+        const depots = blds.filter((b) => b.svc === svc && !b.abandoned && b.edge >= 0 && !(b.constructionUntil > sim.day) && (svc !== 'incinerator' || (b.power && b.water)) && (!SERVICES[svc]?.storage || !b.emptying));
         if (!depots.length || (this.poseCounts?.[kind] || 0) >= Math.min(8, depots.length * 3)) continue;
         const from = depots[(Math.random() * depots.length) | 0], cands = blds.filter((b) => want(b) && b.comp === from.comp);
         if (!cands.length) continue;
@@ -978,6 +979,33 @@ export class Renderer {
       const e = net.edges.get(h.edge); if (!e || !h.mesh) continue;
       h.mesh.material = this.sigMats[this.sigClock.phase(h.node) === this.sigClock.axis(net, h.node, e) ? 1 : 0];
     }
+  }
+
+  drawCarLights() {
+    if(!this.carLightsEnabled&&!this.vehicleLights)return;
+    const poses=[];
+    if(this.carLightsEnabled&&this.drawnPoses)for(let i=0;i<this.drawnPoses.n;i++){
+      const o=i*POSE_STRIDE,p=this.lastDrawn?.get(this.drawnPoses.buf[o+7]);
+      if(p)poses.push({p,len:AGENT_TYPES[TYPE_IDS[this.drawnPoses.buf[o+4]]]?.len||2.5});
+    }
+    if(this.carLightsEnabled)for(const train of this.trains||[])if(train.mesh.visible){const m=train.mesh;poses.push({p:[m.position.x,m.position.y,m.position.z,m.rotation.y],len:8});}
+    if(this.carLightsEnabled){
+      const matrix=new THREE.Matrix4();
+      for(const [mesh,len] of [[this.maintenanceMesh,3.4],[this.nbCars,2.5],[this.airCars,3],[this.airplanes,8],...Object.values(this.boatMesh||{}).map(m=>[m,5])])if(mesh?.visible)for(let i=0;i<mesh.count;i++){
+        mesh.getMatrixAt(i,matrix);const e=matrix.elements;poses.push({p:[e[12],e[13],e[14],Math.atan2(e[8],e[10])],len});
+      }
+    }
+    const capacity=Math.max(64,2**Math.ceil(Math.log2(poses.length||1)));
+    if(!this.vehicleLights||this.vehicleLights.capacity<capacity){
+      if(this.vehicleLights)for(const m of this.vehicleLights.meshes){this.scene.remove(m);m.geometry.dispose();m.material.map?.dispose();m.material.dispose();m.dispose();}
+      const data=new Uint8Array(32*32*4);for(let y=0;y<32;y++)for(let x=0;x<32;x++){const i=(y*32+x)*4,d=Math.hypot((x-15.5)/16,(y-15.5)/16);data.set([255,255,255,Math.round(Math.max(0,1-d)**2*150)],i);}
+      const texture=new THREE.DataTexture(data,32,32);texture.needsUpdate=true;
+      const make=(color,glow)=>{const geo=glow?new THREE.PlaneGeometry(1,1).rotateX(-Math.PI/2):new THREE.SphereGeometry(.16,6,4);const mat=new THREE.MeshBasicMaterial({color,map:glow?texture:null,transparent:glow,depthWrite:!glow,blending:glow?THREE.AdditiveBlending:THREE.NormalBlending});const m=new THREE.InstancedMesh(geo,mat,capacity);m.frustumCulled=false;this.scene.add(m);return m;};
+      this.vehicleLights={capacity,meshes:[make(0xffdf72,false),make(0xff2211,false),make(0xffdf72,true),make(0xff2211,true)]};
+    }
+    const M=new THREE.Matrix4(),q=new THREE.Quaternion(),Y=new THREE.Vector3(0,1,0),pos=new THREE.Vector3(),scale=new THREE.Vector3();
+    poses.forEach(({p,len},i)=>{const [x,y,z,h]=p;this.vehicleLights.meshes.forEach((m,k)=>{const front=k%2===0,glow=k>=2,offset=(front?1:-1)*(len/2+(glow?1.6:0));pos.set(x+Math.sin(h)*offset,y+(glow ? 0.18 : 0.8),z+Math.cos(h)*offset);q.setFromAxisAngle(Y,h);scale.set(glow?front?3:2:1,1,glow?front?6:3:1);if(glow&&y-this.w.heightAt(x,z)>6)scale.set(0,0,0);M.compose(pos,q,scale);m.setMatrixAt(i,M);});});
+    for(const m of this.vehicleLights.meshes){m.count=poses.length;m.visible=poses.length>0;m.instanceMatrix.needsUpdate=true;}
   }
 
   drawMaintenance() {
@@ -1080,7 +1108,14 @@ export class Renderer {
     this.hlBox = new THREE.Box3Helper(new THREE.Box3(), 0xffe25a);
     for (const o of [this.prevRoad, this.ghost, this.brush, this.snapDot, this.hlBox]) { o.visible = false; this.scene.add(o); }
   }
-  clearPreview() { for (const o of [this.prevRoad, this.ghost, this.brush, this.snapDot, this.hlBox]) o.visible = false; }
+  setZonePreview(cells,color) {
+    if(this.zoneGhost && this.zonePreviewCells===cells && this.zonePreviewColor===color){this.zoneGhost.visible=!!cells.length;return;}
+    this.zonePreviewCells=cells;this.zonePreviewColor=color;
+    if(!this.zoneGhost) { this.zoneGhost=new THREE.InstancedMesh(new THREE.BoxGeometry(1,0.08,1),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.45,depthWrite:false}),30000);this.zoneGhost.frustumCulled=false;this.zoneGhost.renderOrder=4;this.scene.add(this.zoneGhost); }
+    this.zoneGhost.material.color.setHex(color);this.zoneGhost.count=Math.min(30000,cells.length);this.zoneGhost.visible=!!cells.length;
+    const M=new THREE.Matrix4();for(let j=0;j<this.zoneGhost.count;j++){const i=cells[j],x=i%N+0.5,z=Math.floor(i/N)+0.5;M.makeTranslation(x,this.w.heightAt(x,z)+0.18,z);this.zoneGhost.setMatrixAt(j,M);}this.zoneGhost.instanceMatrix.needsUpdate=true;
+  }
+  clearPreview() { if(this.zoneGhost)this.zoneGhost.visible=false; for (const o of [this.prevRoad, this.ghost, this.brush, this.snapDot, this.hlBox]) o.visible = false; }
 
   setRoadPreview(pts, hw, ok, lift = 0) {
     if (!pts || pts.length < 2) { this.prevRoad.visible = false; return; }
@@ -1190,6 +1225,7 @@ export class Renderer {
   applySettings(o) {
     const pal = o.palette === 'cb' ? 'cb' : 'default';
     if (pal !== this.palette) { this.palette = pal; this.w.markGround(0, 0, N, N); this.tintKey = null; }
+    this.carLightsEnabled = !!o.carLights;
     this.reducedMotion = !!o.reducedMotion; this.lod = o.lod !== false;
     if (!!o.fullTiles !== !!this.fullTiles) { this.fullTiles = !!o.fullTiles; if (this.regionArgs) this.setRegion(...this.regionArgs); }
     // performance profile: 'auto' picks the light one on phones and small, low-memory devices
@@ -1658,8 +1694,7 @@ export class Renderer {
     if (w.type==='fog') { this.scene.fog.near=this.cam.dist*0.35;this.scene.fog.far=this.cam.dist*2+100; }
     this.ground.material.color.setHex(this.w.hazards.snow>.05 ? 0xe1e9ef : wet ? 0xa4b5bd : 0xffffff);
     this.regionGroup?.traverse((o) => { if (o.userData.ground) o.material.color.copy(this.ground.material.color); });   // the weather reaches the other tiles too
-    // Rain and snow fall over the whole tile: three in five drops are spread over the
-    // entire map (following the terrain), the rest crowd around the camera for close-ups.
+    // One world-space precipitation field, independent of camera position and zoom.
     const COUNT = 6000;
     if (!this.precipitation) {
       const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(COUNT*6),3));
@@ -1674,17 +1709,15 @@ export class Renderer {
     const heavy = (w.type === 'storm' ? 1 : w.type === 'rain' ? 0.75 : 0.85) * (this.perfLow ? 0.35 : 1), n = Math.round(COUNT * heavy);
     this.precipitation.geometry.setDrawRange(0, n * 2);
     this.precipitation.material.color.setHex(snow?0xffffff:0xb8dfff);
-    this.precipitation.material.opacity = clamp(0.35 + c.dist / 900, 0.45, 0.8);
+    this.precipitation.material.opacity = 0.6;
     const gv = `${this.w.terrainVersion}:${this.w.net.version}`;
     if (this.dropVer !== gv) { this.dropVer = gv; for (let i = 0; i < COUNT; i++) this.dropBase[i] = this.w.heightAt(hash2(i, 2, 71) * N, hash2(i, 3, 71) * N); }
     const clock = this.sim.day + this.sim.acc;
-    const near = clamp(c.dist * 0.9, 60, 260), streak = snow ? 0.3 : clamp(c.dist / 70, 2.5, 9), H = 90;
+    const streak = snow ? 0.3 : 4, H = 90;
     const sx = Math.sin(w.direction) * (snow ? 0.35 : 0.2), sz = Math.cos(w.direction) * (snow ? 0.35 : 0.2);
     for(let i=0;i<n;i++) {
       const fall=snow?5:35, drop=H-((hash2(i,1,71)*H+this.weatherClock*fall*(0.85+hash2(i,4,71)*0.3))%H);
-      let x, z, base;
-      if (i % 5 < 3) { x = hash2(i,2,71)*N; z = hash2(i,3,71)*N; base = this.dropBase[i]; }
-      else { x = c.x+(hash2(i,2,71)-0.5)*near*2; z = c.z+(hash2(i,3,71)-0.5)*near*2; base = (c.targetY || 0) + this.w.heightAt(c.x, c.z); }
+      let x=hash2(i,2,71)*N, z=hash2(i,3,71)*N; const base=this.dropBase[i];
       x += sx * drop; z += sz * drop;
       if (hash2(i, 5, 71) > frontAt(w, x, z, clock)) { a.setXYZ(i * 2, 0, -500, 0); a.setXYZ(i * 2 + 1, 0, -500, 0); continue; }   // dry outside the band
       const y = base + drop;
@@ -1781,7 +1814,21 @@ export class Renderer {
   }
 
   // utility lines: pylons and wires always; water pipes and drains only in the underground view
+  updateWaterPorts() {
+    const show=this.overlay==='pipes';
+    if(!show){if(this.waterPortGroup)this.waterPortGroup.visible=false;return;}
+    const key=`${this.w.bldVersion}:${this.w.ulineVersion}:${this.w.net.version}`;
+    if(this.waterPortGroup&&this.waterPortKey===key){this.waterPortGroup.visible=true;return;}
+    if(this.waterPortGroup){this.scene.remove(this.waterPortGroup);this.waterPortGroup.traverse(o=>{o.geometry?.dispose();o.material?.dispose();});}
+    this.waterPortKey=key;const group=this.waterPortGroup=new THREE.Group(),grid=utilityGrid(this.w);
+    for(const b of this.w.buildings.values())for(const p of waterPorts(b)){
+      const marker=new THREE.Mesh(new THREE.CylinderGeometry(0.9,0.9,0.3,12),new THREE.MeshBasicMaterial({color:waterConnected(this.w,b,grid)?0x65ed93:0xff7050,depthTest:false}));
+      marker.position.set(p.x,undergroundY(this.w)+0.5,p.z);marker.renderOrder=12;group.add(marker);
+    }
+    this.scene.add(group);
+  }
   updateULines() {
+    this.updateWaterPorts();
     const w = this.w, under = this.overlay === 'pipes', hot = [...(this.sim.lineLoad || new Map())].filter(([, v]) => v > 0.97).map(([k]) => k).join(','), key = `${w.ulineVersion || 0}:${under}:${w.ulines?.length || 0}:${undergroundY(w)}:${hot}`;
     if (key === this.ulKey) return; this.ulKey = key;
     if (this.ulGroup) { this.ulGroup.traverse((o) => { o.geometry?.dispose(); }); this.scene.remove(this.ulGroup); this.ulGroup = null; }
@@ -1871,6 +1918,7 @@ export class Renderer {
   setDistricts(on) { if (this.showDistricts === on) return; this.showDistricts = on; this.w.markGround(0, 0, N, N); }
 
   frame(dt) {
+    this.drawCarLights();
     this.time += dt; this.lastTrainDt=dt*Math.min(this.sim.speed,3);
     const w = this.w;
     if (this.terrainVer !== w.terrainVersion) this.refreshTerrain();

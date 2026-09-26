@@ -1,3 +1,4 @@
+import { waterConnected, connectWaterPorts } from './waterports.js';
 // Organicity — the AI governor's city builder. AI governors build real cities with the same
 // actions a player has (roads, zoning, utilities, services), paid from their own treasury:
 //  1. keep power, water, sewage and garbage ahead of demand;
@@ -18,7 +19,7 @@ function tryService(w, sim, key, x, z, R = 40) {
   if (!SERVICES[key] || !sim.canAfford(SERVICES[key].cost + reserve(key))) return false;
   for (let r = 0; r <= R; r += 4) for (let a = 0; a < (r ? 8 : 1); a++) {
     const p = w.planService(key, x + Math.cos(a * Math.PI / 4) * r, z + Math.sin(a * Math.PI / 4) * r);
-    if (p.ok) { w.placeService(key, p); sim.spend(SERVICES[key].cost); return true; }
+    if (p.ok) { connectWaterPorts(w,w.placeService(key, p),sim); sim.spend(SERVICES[key].cost); return true; }
   }
   return false;
 }
@@ -45,6 +46,7 @@ function pickZone(sim, rng, dev, farFromCentre) {
 }
 
 export function aiBuild(w, sim, opts = {}) {
+  for(const b of w.buildings.values())if(!waterConnected(w,b,utilityGrid(w)))connectWaterPorts(w,b,sim);
   const rng = mulberry32((w.seed * 31 + sim.day * 2654435761) >>> 0), st = sim.stats, done = [];
   const all = [...w.buildings.values()], homes = all.filter((b) => !b.svc && b.hh > 0), has = (k) => all.some((b) => b.svc === k && !b.abandoned);
   const inner = [...w.net.nodes.values()].filter((n) => !n.outside);
@@ -85,7 +87,7 @@ export function aiBuild(w, sim, opts = {}) {
       cands.push([x, z, Math.hypot(x - cx, z - cz)]);
     }
     cands.sort((a, b) => a[2] - b[2]);
-    for (const [x, z] of cands.slice(0, 80)) { const p = w.planService(key, x, z); if (p.ok) { w.placeService(key, p); sim.spend(SERVICES[key].cost); works.push({ cx: x, cz: z }); return true; } }
+    for (const [x, z] of cands.slice(0, 80)) { const p = w.planService(key, x, z); if (p.ok) { connectWaterPorts(w,w.placeService(key, p),sim); sim.spend(SERVICES[key].cost); works.push({ cx: x, cz: z }); return true; } }
     // no reachable shoreline: run a spur road from the nearest junction to just short of the nearest candidate
     const tgt = cands[0]; if (!tgt) return false;
     const from = inner.reduce((b, q) => (!b || Math.hypot(q.x - tgt[0], q.z - tgt[1]) < Math.hypot(b.x - tgt[0], b.z - tgt[1]) ? q : b), null); if (!from) return false;

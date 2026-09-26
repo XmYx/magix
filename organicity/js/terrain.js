@@ -1,3 +1,6 @@
+import { lineSegments } from './infrastructure.js';
+import { waterConnected } from './waterports.js';
+import { utilityGrid } from './grid.js';
 // Deterministic heightfields and a daily, bounded flood propagation model.
 import { N, SERVICES, RAMP_LEN, BRIDGE_DECK } from './config.js';
 import { fbm, clamp, hash2 } from './util.js';
@@ -125,15 +128,18 @@ export function flattenLot(w, b) {
 }
 // cells within 6 units of a drain (cached per line version)
 function drainMask(w) {
-  const drains = (w.ulines || []).filter((l) => l.kind === 'sewer'); if (!drains.length) return null;
-  if (w._drainMask?.v === w.ulineVersion) return w._drainMask.m;
+  const grid=utilityGrid(w), outlets=[...w.buildings.values()].filter(b=>SERVICES[b.svc]?.sewage&&!b.abandoned&&!(b.constructionUntil>w.day)&&waterConnected(w,b,grid));
+  const roots=new Set(outlets.map(b=>grid.root('sewer','c'+w.net.compOf(w.net.edges.get(b.edge)))));
+  const drains = (w.ulines || []).filter(l=>l.kind==='sewer'&&roots.has(grid.root('sewer','l'+l.id))).flatMap(lineSegments); if (!drains.length) return null;
+  const key=`${grid.key}:${outlets.map(b=>b.id).join(',')}`;
+  if (w._drainMask?.v === key) return w._drainMask.m;
   const m = new Uint8Array(N * N);
   for (const l of drains) {
     const len = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]);
     for (let s = 0; s <= len; s += 2) { const cx = l.a[0] + (l.b[0] - l.a[0]) * s / (len || 1), cz = l.a[1] + (l.b[1] - l.a[1]) * s / (len || 1);
       for (let z = Math.max(0, Math.floor(cz - 6)); z <= Math.min(N - 1, cz + 6); z++) for (let x = Math.max(0, Math.floor(cx - 6)); x <= Math.min(N - 1, cx + 6); x++) if (Math.hypot(x - cx, z - cz) <= 6) m[z * N + x] = 1; }
   }
-  w._drainMask = { v: w.ulineVersion, m }; return m;
+  w._drainMask = { v: key, m }; return m;
 }
 export function pond(w, sim) {
   const P = w.pond ||= new Float32Array(N * N), E = w.elevation, W = w.water, type = sim.weather.type;
@@ -179,7 +185,7 @@ export function hazardTick(sim, advance = true) {
   if (advance) pond(w, sim);
   if (w.pond) for (let i = 0; i < flood.length; i++) if (w.pond[i] > 0.25) flood[i] = Math.max(flood[i], w.pond[i] - 0.25);
   const active=[...w.buildings.values()].filter(b=>b.svc&&!b.abandoned&&b.edge>=0&&b.power&&b.water&&(b.flood||0)<1);
-  for(const b of active.filter(b=>b.svc==='stormdrain')) {
+  for(const b of active.filter(b=>b.svc==='stormdrain'&&waterConnected(w,b,utilityGrid(w)))) {
     const r=SERVICES.stormdrain.radius, budget=sim.budgetFor('stormdrain');
     for(let z=Math.max(0,Math.floor(b.cz-r));z<Math.min(N,b.cz+r);z++)for(let x=Math.max(0,Math.floor(b.cx-r));x<Math.min(N,b.cx+r);x++) {
       const i=z*N+x;if(!w.water[i])flood[i]=Math.max(0,flood[i]-1.8*budget*Math.max(0,1-Math.hypot(x-b.cx,z-b.cz)/r));

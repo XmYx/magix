@@ -1,3 +1,4 @@
+import { wasteCapacity } from './waste.js';
 import { BRIDGE_STYLES, lineTier, lineSegments, lineLength } from './infrastructure.js';
 // Organicity — the land model. A fine cell grid carries water, roads, zoning,
 // districts and building occupancy. Each cell also remembers its nearest road
@@ -291,17 +292,19 @@ export class World {
 
   roadCost(sA, c, sB, type, layer = 0, bridgeStyle = 'auto') {
     const len = this.net.curveLength(sA, c, sB);
+    let blocked = false;
     let wet = 0, wetRun = 0, maxRun = 0, climb = 0, previous = this.heightAt(sA.x,sA.z); const steps = Math.max(2, Math.ceil(len));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps, mt = 1 - t;
       const x = mt * mt * sA.x + 2 * mt * t * c.x + t * t * sB.x, z = mt * mt * sA.z + 2 * mt * t * c.z + t * t * sB.z;
+      if (layer >= 0) { const radius = ROADS[type].width / 2 + 0.75; for (let zz=Math.floor(z-radius);zz<=Math.ceil(z+radius);zz++) for(let xx=Math.floor(x-radius);xx<=Math.ceil(x+radius);xx++) { const ci=this.cellAt(xx+0.5,zz+0.5), building=ci>=0 && this.buildings.get(this.bld[ci]); if(building?.svc && Math.hypot(xx+0.5-x,zz+0.5-z)<=radius) blocked=true; } }
       const height=this.heightAt(x,z);climb+=Math.abs(height-previous);previous=height;
       const ci = this.cellAt(x, z); if (ci >= 0 && this.water[ci]) { wet++; wetRun++; maxRun = Math.max(maxRun, wetRun); } else wetRun = 0;
     }
     const wetLen = (wet / (steps + 1)) * len;
     const mult = LAYERS[layer]?.cost ?? 1;
     // elevated & tunnel roads already span water, so no extra bridge premium
-    return { cost: Math.round(ROADS[type].cost * (climb * 6 + (layer ? len * mult : len - wetLen + wetLen * (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).mult))), climb, len, wetLen: layer ? 0 : wetLen, err: !layer && maxRun * len / steps > (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).span ? 'Water span exceeds this bridge style limit' : null };
+    return { cost: Math.round(ROADS[type].cost * (climb * 6 + (layer ? len * mult : len - wetLen + wetLen * (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).mult))), climb, len, wetLen: layer ? 0 : wetLen, err: blocked ? 'Road crosses a service building' : !layer && maxRun * len / steps > (BRIDGE_STYLES[bridgeStyle] || BRIDGE_STYLES.auto).span ? 'Water span exceeds this bridge style limit' : null };
   }
 
   buildRoad(sA, c, sB, type, oneway = 0, layer = 0, bridgeStyle = 'auto') {
@@ -326,6 +329,7 @@ export class World {
 
   retypeRoad(id, type) {
     const e = this.net.edges.get(id); if (!e) return null;
+    if(this.roadCost(this.net.nodes.get(e.a),e.c,this.net.nodes.get(e.b),type,e.layer||0,e.bridgeStyle).err)return null;
     this.net.tbb = null;
     this.net.touch(e.bb);
     e.type = type; this.net.tess(e); this.net.touch(e.bb); this.net.version++;
@@ -432,6 +436,7 @@ export class World {
       this.bld[c] = b.id; this.tree[c] = 0;
       if (b.svc) { if (this.tx && this.zone[c] && !this.tx.zone.has(c)) this.tx.zone.set(c, this.zone[c]); this.zone[c] = 0; }
     }
+    b.emptying = !!p.emptying;
     b.locked = !!p.locked; b.constructionUntil = p.constructionUntil || 0; b.rubble = p.rubble || 0; b.spill = p.spill || 0;
     if (this.tx && !this.txMute) this.tx.created.add(b.id);
     if (p.cx !== undefined) { b.cx = p.cx; b.cz = p.cz; b.fx = p.fx; b.fz = p.fz; }
@@ -672,9 +677,9 @@ export class World {
       cells.push(i);
     }
     let err = null;
-    if (wet) err = 'Cannot build on water';
+    if (wet && (!S.nearWater || wet > cells.length * 0.45)) err = S.nearWater ? 'Needs at least 55% of its footprint on land' : 'Cannot build on water';
     else if (bad) err = 'Blocked by roads or buildings';
-    else if (S.nearWater && minW > 9) err = 'Must touch the shoreline';
+    else if (S.nearWater && minW > 18) err = 'Needs water within 18 m of its footprint';
     else if (S.dep && depositNear(this, S.dep, cx, cz, S.reach) < 0.08) err = `Needs ${DEPOSITS[S.dep].name.toLowerCase()} nearby (see the resources overlay)`;
     return { ok: !err, err, cells, cx, cz, fx, fz, tx, tz, cost: S.cost };
   }
@@ -718,8 +723,8 @@ export class World {
 
   // Paint-bucket: fill the closed, road-bounded block under the cursor. If the
   // land is open (not enclosed by roads), fill just that street frontage.
-  fillZone(x, z, zoneId) {
-    const s = this.cellAt(x, z); if (s < 0 || this.road[s] || this.water[s]) return 0;
+  blockZoneCells(x, z) {
+    const s = this.cellAt(x, z); if (s < 0 || this.road[s] || this.water[s]) return [];
     const LIM = 30000, flood = (pass) => {
       const q = [s], seen = new Set(q);
       for (let k = 0; k < q.length && q.length < LIM; k++) for (const nb of this.neighbors4(q[k])) if (!seen.has(nb) && pass(nb)) { seen.add(nb); q.push(nb); }
@@ -727,9 +732,14 @@ export class World {
     };
     let cells = flood((i) => !this.road[i] && !this.water[i]);
     if (cells.length >= LIM) {
-      const e = this.accEdge[s], side = this.accSide[s]; if (e < 0) return 0;
+      const e = this.accEdge[s], side = this.accSide[s]; if (e < 0) return [];
       cells = flood((i) => this.accEdge[i] === e && this.accSide[i] === side);
     }
+    return cells;
+  }
+
+  fillZone(x, z, zoneId) {
+    const cells = this.blockZoneCells(x,z);
     const kill = new Set();
     let x0 = N, z0 = N, x1 = 0, z1 = 0, n = 0;
     for (const i of cells) {
@@ -740,6 +750,40 @@ export class World {
     for (const id of kill) this.removeBuilding(id);
     if (n) { this.markGround(x0, z0, x1 + 1, z1 + 1); this.zoneVersion++; }
     return n;
+  }
+
+  zonePreview(x,z,r,zoneId,fill=false,overwrite=false) {
+    const key=[x,z,r,zoneId,fill,overwrite,this.zoneVersion,this.bldVersion,this.terrainVersion,this.net.version].join(':');
+    if(this.zonePreviewCache?.key===key)return this.zonePreviewCache.cells;
+    const cells=fill?this.blockZoneCells(x,z):[];
+    if(!fill) for(let zz=Math.floor(z-r);zz<=Math.ceil(z+r);zz++) for(let xx=Math.floor(x-r);xx<=Math.ceil(x+r);xx++) if(this.inside(xx,zz)&&Math.hypot(xx+0.5-x,zz+0.5-z)<=r) cells.push(zz*N+xx);
+    const result=cells.filter(i=>(!zoneId||this.canZone(i)) && !this.buildings.get(this.bld[i])?.svc && this.zone[i]!==zoneId && (fill||overwrite||!zoneId||!this.zone[i]));
+    this.zonePreviewCache={key,cells:result};return result;
+  }
+
+  paintLandfill(x,z,r,erase=false) {
+    const cells=[]; const sites=new Set();
+    for(let zz=Math.floor(z-r);zz<=Math.ceil(z+r);zz++) for(let xx=Math.floor(x-r);xx<=Math.ceil(x+r);xx++) {
+      if(!this.inside(xx,zz)||Math.hypot(xx+0.5-x,zz+0.5-z)>r)continue;
+      const i=zz*N+xx,b=this.buildings.get(this.bld[i]);
+      if(b?.svc==='landfillzone')sites.add(b);
+      if(erase ? b?.svc==='landfillzone' : !b&&!this.road[i]&&!this.water[i]&&this.accEdge[i]>=0) cells.push(i);
+    }
+    if(!cells.length)return 0;
+    if(erase) {
+      const remove=new Set(cells);
+      for(const b of sites) {
+        const keep=[...b.cells].filter(i=>!remove.has(i));
+        if(keep.length*300<(b.garb||0))continue;
+        const saved={...this.packBuilding(b,false),garb:b.garb};this.removeBuilding(b.id);
+        if(keep.length)this.createBuilding({...saved,cells:keep,cx:undefined},b.id);
+      }
+      return 0;
+    }
+    const b=sites.values().next().value;
+    if(b) { const saved={...this.packBuilding(b,false),garb:b.garb};this.removeBuilding(b.id);this.createBuilding({...saved,cells:[...b.cells,...cells],cx:undefined},b.id); }
+    else this.createBuilding({svc:'landfillzone',cells,fx:0,fz:1});
+    return cells.length;
   }
 
   // ------------------------------------------------------------------ districts
@@ -887,7 +931,8 @@ export class World {
     for (const id of bad) this.removeBuilding(id);
     for (const p of t.removed.values()) {
       if(p.platformId){this.createBuilding(p,p.id);continue;}
-      if (p.cells.some((c) => this.road[c] || this.water[c])) continue;
+      const wet=p.cells.filter(c=>this.water[c]).length;
+      if (p.cells.some(c=>this.road[c]) || (wet && (!SERVICES[p.svc]?.nearWater || wet>p.cells.length*0.45))) continue;
       const clash = new Set(); for (const c of p.cells) if (this.bld[c]) clash.add(this.bld[c]);
       for (const id of clash) { const o = this.buildings.get(id); if (o && !o.svc) this.removeBuilding(id); }
       if (p.cells.some((c) => this.bld[c])) continue;
@@ -905,7 +950,7 @@ export class World {
     const enc = (cells) => { const s = Array.from(cells).sort((a, b2) => a - b2), d = []; let p = 0; for (const c of s) { d.push(c - p); p = c; } return rleEncode(d); };
     return {
       id: b.id, platformId: b.platformId || 0, heightYear: b.heightYear, zone: b.zone, svc: b.svc, level: b.level, seed: b.seed, occ: Math.round(b.occ), built: b.built,
-      abandoned: b.abandoned, abDays: b.abDays, garb: Math.round(b.garb), locked: !!b.locked, constructionUntil: b.constructionUntil || 0, spec: b.spec || null, rubble: b.rubble || 0, spill: b.spill || 0, ...(b.scrub ? { scrub: 1 } : {}),
+      abandoned: b.abandoned, abDays: b.abDays, garb: Math.round(b.garb), emptying: !!b.emptying, locked: !!b.locked, constructionUntil: b.constructionUntil || 0, spec: b.spec || null, rubble: b.rubble || 0, spill: b.spill || 0, ...(b.scrub ? { scrub: 1 } : {}),
       cells: compact ? enc(b.cells) : Array.from(b.cells),
       ...(b.svc ? { cx: b.cx, cz: b.cz, fx: b.fx, fz: b.fz } : {}),
     };
